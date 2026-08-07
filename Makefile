@@ -17,3 +17,6 @@ typecheck:
 
 test:
 	pytest -q
+
+import-reference-data:
+	python manage.py import_reference_data
