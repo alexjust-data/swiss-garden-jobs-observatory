@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/swiss-garden-jobs/posting-observation-v1.schema.json",
+  "title": "PostingObservationV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_id",
+    "observed_at",
+    "observation_status",
+    "source_url",
+    "raw_title",
+    "raw_payload_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_native_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "observation_status": {
+      "enum": [
+        "ACTIVE",
+        "NOT_FOUND",
+        "EXPIRED_EXPLICIT",
+        "REDIRECTED",
+        "BLOCKED",
+        "ERROR",
+        "SOURCE_OUTAGE"
+      ]
+    },
+    "source_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "canonical_url": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uri"
+    },
+    "http_status": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 100,
+      "maximum": 599
+    },
+    "raw_title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "raw_location": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "raw_employer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "raw_text": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "raw_payload_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "published_at_raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "positions_count_raw": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "collector_run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_health_status": {
+      "enum": [
+        "HEALTHY",
+        "DEGRADED",
+        "OUTAGE",
+        "UNKNOWN"
+      ]
+    }
+  }
+}

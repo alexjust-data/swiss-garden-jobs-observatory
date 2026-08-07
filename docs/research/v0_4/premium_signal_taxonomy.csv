@@ -1,0 +1,27 @@
+signal_id,signal_group,search_term,evidence_scope,base_weight,default_segment,notes
+P001,EXPLICIT_PREMIUM,hochwertige Privatgärten,JOB_OR_EMPLOYER,0.45,PRIVATE_RESIDENTIAL_PREMIUM,Señal explícita fuerte.
+P002,EXPLICIT_PREMIUM,exklusive Gartenanlagen,JOB_OR_EMPLOYER,0.45,PRIVATE_RESIDENTIAL_PREMIUM,Señal explícita fuerte.
+P003,EXPLICIT_PREMIUM,exklusive Kundschaft,JOB,0.48,PRIVATE_RESIDENTIAL_PREMIUM,Señal explícita de clientela.
+P004,EXPLICIT_PREMIUM,anspruchsvolle Kundengärten,JOB,0.32,PRIVATE_RESIDENTIAL_PREMIUM,Privado exigente; combinar si no aparece exklusive.
+P005,EXPLICIT_PREMIUM,Premiumsegment,JOB_OR_EMPLOYER,0.55,PRIVATE_RESIDENTIAL_PREMIUM,Confirmación fuerte.
+P006,ESTATE_DIRECT,private villa,JOB,0.62,PRIVATE_ESTATE_DIRECT,Confirma entorno de villa; aplicar privacidad.
+P007,ESTATE_DIRECT,private estate,JOB,0.62,PRIVATE_ESTATE_DIRECT,Confirma estate; aplicar privacidad.
+P008,ESTATE_DIRECT,Privathaushalt,JOB,0.35,PRIVATE_ESTATE_DIRECT,"Prueba hogar privado, no siempre lujo."
+P009,ESTATE_DIRECT,HNW,JOB_OR_SOURCE,0.7,PRIVATE_ESTATE_DIRECT,High-net-worth explícito.
+P010,ESTATE_DIRECT,UHNW,JOB_OR_SOURCE,0.75,PRIVATE_ESTATE_DIRECT,Ultra-high-net-worth explícito.
+P011,ESTATE_DIRECT,family office,JOB_OR_SOURCE,0.55,PRIVATE_ESTATE_DIRECT,Canal de family office.
+P012,ESTATE_ROLE,Estate Manager,TITLE_OR_TEXT,0.42,PRIVATE_ESTATE_DIRECT,Requiere tareas verdes para inclusión en jardinería.
+P013,ESTATE_ROLE,Head Gardener,TITLE_OR_TEXT,0.55,PRIVATE_ESTATE_DIRECT,Rol directo de estate gardening.
+P014,ESTATE_ROLE,Domestic Couple,TITLE_OR_TEXT,0.28,PRIVATE_ESTATE_DIRECT,Incluir sólo si jardín/mantenimiento es material.
+P015,DESIGN_AUX,Gartendesign,JOB_OR_EMPLOYER,0.14,PRIVATE_RESIDENTIAL_PREMIUM,Señal auxiliar.
+P016,DESIGN_AUX,Gartenarchitektur,JOB_OR_EMPLOYER,0.16,PRIVATE_RESIDENTIAL_PREMIUM,Señal auxiliar.
+P017,DESIGN_AUX,Naturstein,JOB_OR_EMPLOYER,0.08,PRIVATE_RESIDENTIAL_PREMIUM,No suficiente por sí sola.
+P018,DESIGN_AUX,Pool,JOB_OR_EMPLOYER,0.11,PRIVATE_RESIDENTIAL_PREMIUM,No suficiente por sí sola.
+P019,DESIGN_AUX,Schwimmteich,JOB_OR_EMPLOYER,0.11,PRIVATE_RESIDENTIAL_PREMIUM,No suficiente por sí sola.
+P020,DESIGN_AUX,Dachterrasse,JOB_OR_EMPLOYER,0.1,PRIVATE_RESIDENTIAL_PREMIUM,No suficiente por sí sola.
+P021,HOUSEHOLD_REQUIREMENT,Diskretion,JOB,0.14,PRIVATE_ESTATE_DIRECT,Señal auxiliar de entorno doméstico.
+P022,HOUSEHOLD_REQUIREMENT,background check,JOB_OR_SOURCE,0.14,PRIVATE_ESTATE_DIRECT,Señal auxiliar.
+P023,HOUSEHOLD_REQUIREMENT,live-in,JOB,0.1,PRIVATE_ESTATE_DIRECT,Señal auxiliar.
+P024,WEAK_PRIVATE,Privatgarten,JOB_OR_EMPLOYER,0.05,PRIVATE_RESIDENTIAL_STANDARD,"Prueba residencial privada, no lujo."
+N001,PROHIBITED_INFERENCE,municipio rico,INFERENCE,0.0,UNKNOWN,Nunca clasificar premium sólo por geografía.
+N002,PROHIBITED_INFERENCE,precio inmobiliario local,INFERENCE,0.0,UNKNOWN,Nunca usar como evidencia primaria.

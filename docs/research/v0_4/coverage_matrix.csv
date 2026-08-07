@@ -1,0 +1,15 @@
+component,scope_total,completed,status,evidence,remaining_work
+Official municipality geography,1374,1374,COMPLETE,BFS levels snapshot filtered SPRGEB2020=1,None for v0.1; refresh on municipal mergers/new BFS snapshot.
+Federal public portal,1,1,COMPLETE,jobs.admin.ch,Collector/access review.
+Cantons with German-language municipalities,22,22,COMPLETE_DIRECTORY,Official canton portal URLs verified,Implement and test platform-specific collectors.
+German-language municipalities enumerated,1374,1374,COMPLETE_UNIVERSE,public_employer_universe_1397.csv,Canonical portal discovery per municipality.
+BFS statistical cities priority queue,127,127,COMPLETE_QUEUE,city_portal_audit_queue_127.csv,Audit each pending city endpoint.
+Municipal direct portals verified in v0.1,1374,7,PARTIAL_BY_DESIGN,Known major city portals seeded,1367 municipality records remain endpoint-discovery candidates; many share portals.
+Source family registry,61,61,COMPLETE_V0_1,source_registry.csv,Terms/API/feed review before automation.
+Role/search taxonomy,53,53,COMPLETE_V0_1,role_search_taxonomy.csv,Validate precision/recall against collected corpus.
+Current public-green seed snapshot,20,20,SEED_NOT_EXHAUSTIVE,current_public_green_seed_snapshot_2026-08-07.csv,Full Day-0 collection and cross-source dedup.
+Observation contract,1,1,COMPLETE_V0_1,04_OBSERVATION_CONTRACT.md + JSON Schema,Implement contract tests.
+Dedup/repost contract,1,1,COMPLETE_V0_1,05_DEDUPLICATION_REPOST_CONTRACT.md,Calibrate thresholds with labeled pairs.
+Salary/total compensation contract,1,1,COMPLETE_V0_3,11_SALARY_AND_TOTAL_COMPENSATION_CONTRACT.md,Implement collector extraction and normalization tests.
+2026 salary reference rows,12,12,REFERENCE_SEED,salary_reference_2026.csv,Add regional GAV/public pay scales and version refresh process.
+Observed posting salary evidence seed,6,6,SEED_NOT_EXHAUSTIVE,salary_evidence_seed_2026-08-07.csv,Run full market collection; measure disclosure coverage rather than assuming missing values.
