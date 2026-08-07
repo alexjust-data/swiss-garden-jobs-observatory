@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
+
+
+class ImmutablePostingObservationError(RuntimeError):
+    pass
 
 
 class CollectionRun(models.Model):
@@ -61,16 +66,17 @@ class PostingObservation(models.Model):
     responsibilities_html = models.TextField(blank=True)
     qualifications_html = models.TextField(blank=True)
     benefits_html = models.TextField(blank=True)
-    location_street = models.CharField(max_length=200, blank=True)
-    location_locality = models.CharField(max_length=100, blank=True)
-    location_region = models.CharField(max_length=100, blank=True)
-    location_postal_code = models.CharField(max_length=20, blank=True)
-    location_country = models.CharField(max_length=2, blank=True)
+    location_street = models.CharField(max_length=500, blank=True)
+    location_locality = models.CharField(max_length=200, blank=True)
+    location_region = models.CharField(max_length=200, blank=True)
+    location_postal_code = models.CharField(max_length=100, blank=True)
+    location_country = models.CharField(max_length=100, blank=True)
     municipality = models.ForeignKey("reference_data.Municipality", on_delete=models.PROTECT)
     raw_artifact = models.OneToOneField(
         "core.RawArtifact", on_delete=models.PROTECT, related_name="posting_observation"
     )
     structured_payload = models.JSONField()
+    contract_payload = models.JSONField()
 
     class Meta:
         db_table = "posting_observation"
@@ -92,6 +98,14 @@ class PostingObservation(models.Model):
                 name="posting_observation_dates_ordered",
             ),
         ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ImmutablePostingObservationError("PostingObservation is append-only")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ImmutablePostingObservationError("PostingObservation cannot be deleted")
 
     def __str__(self) -> str:
         return f"{self.source.pk}:{self.source_posting_id}"
