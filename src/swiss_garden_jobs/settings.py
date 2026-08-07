@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     "core",
     "sources",
     "reference_data",
+    "observations",
 ]
 
 MIDDLEWARE = [
