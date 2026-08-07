@@ -91,3 +91,29 @@ Expected response:
 
 No collectors, scraping, vacancy ingestion, deduplication, salary observations, geocoding,
 dashboard, scheduler or AI classification are implemented.
+
+## GATE-003: manual Winterthur point-in-time collector
+
+Winterthur is configured as `AUTOMATION_REVIEW_REQUIRED` in the frozen source registry. The collector is therefore manual, has no scheduler, identifies itself with a project User-Agent, stays on the `jobs.winterthur.ch` HTTPS origin, fetches sequentially, and requires explicit acknowledgement:
+
+```bash
+python manage.py collect_winterthur --acknowledge-automation-review
+```
+
+For a controlled acceptance run, select an active source posting ID or limit the run:
+
+```bash
+python manage.py collect_winterthur \
+  --posting-id 8280 \
+  --delay-seconds 1 \
+  --acknowledge-automation-review
+```
+
+Each run stores the exact listing and detail response bytes under `CORE_RAW_OBJECT_STORE_PATH`, verifies SHA-256 after writing, records `RawArtifact` metadata, and creates immutable `PostingObservation` rows with the original URL, publication dates, JSON-LD payload, and BFS municipality 230 (Winterthur).
+
+This gate does not provide scheduling, vacancy deduplication, classification, geocoding, maps, dashboards, alerts, or multi-source collection.
+### Observation contract and immutability
+
+Before promotion, every Winterthur detail is transformed into a separate `contract_payload` and validated with JSON Schema Draft 2020-12 against the frozen `posting_observation_v1_2.schema.json`. The original source JSON-LD remains in `structured_payload`. A contract failure retains RAW evidence, fails the collection run, and creates no `PostingObservation`.
+
+`PostingObservation` is append-only through the model and read-only in Django Admin. Repeated runs create distinct historical observations. Governance is fail-closed: only `APPROVED`, or `AUTOMATION_REVIEW_REQUIRED` with explicit manual acknowledgement, can run; incompatible source metadata and all other legal states are blocked before network access.

@@ -1,4 +1,4 @@
-name: gate-001-ci
+name: ci
 
 on:
   push:

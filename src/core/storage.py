@@ -5,6 +5,10 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
+class RawObjectAlreadyExistsError(FileExistsError):
+    pass
+
+
 class RawObjectStore:
     def __init__(self, base_path: str | Path) -> None:
         self.base_path = Path(base_path).resolve()
@@ -28,7 +32,13 @@ class RawObjectStore:
     def write_bytes(self, object_key: str, content: bytes) -> Path:
         path = self.object_path(object_key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content)
+        try:
+            with path.open("xb") as handle:
+                handle.write(content)
+        except FileExistsError as exc:
+            raise RawObjectAlreadyExistsError(
+                f"RAW object already exists and cannot be overwritten: {object_key}"
+            ) from exc
         return path
 
     def read_bytes(self, object_key: str) -> bytes:
