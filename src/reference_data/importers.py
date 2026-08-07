@@ -19,6 +19,7 @@ from reference_data.models import (
 from sources.models import Source
 
 SNAPSHOT_DATE = date(2026, 1, 1)
+MUNICIPALITY_EMPLOYER_PREFIX = "Gemeinde/Stadt "
 
 EMPLOYER_HEADERS = (
     "universe_id",
@@ -224,6 +225,40 @@ def _required_bool(value: str, *, field: str) -> bool:
     raise ReferenceDataError(f"{field}: expected YES or NO, found {value!r}")
 
 
+def _canonical_municipality_name(employer_name: str) -> str:
+    if not employer_name.startswith(MUNICIPALITY_EMPLOYER_PREFIX):
+        raise ReferenceDataError(
+            "municipality employer_name must start with "
+            f"{MUNICIPALITY_EMPLOYER_PREFIX!r}: {employer_name!r}"
+        )
+    municipality_name = employer_name.removeprefix(MUNICIPALITY_EMPLOYER_PREFIX)
+    if not municipality_name:
+        raise ReferenceDataError("municipality employer_name has an empty canonical name")
+    return municipality_name
+
+
+def _premium_weight(value: str) -> Decimal:
+    parsed = _required_decimal(value, field="base_weight")
+    if not Decimal("0") <= parsed <= Decimal("1"):
+        raise ReferenceDataError(f"base_weight: expected value between 0 and 1, found {value!r}")
+    return parsed
+
+
+def _positive_optional_int(value: str, *, field: str) -> int | None:
+    parsed = _optional_int(value, field=field)
+    if parsed is not None and parsed <= 0:
+        raise ReferenceDataError(f"{field}: expected a positive integer, found {value!r}")
+    return parsed
+
+
+def _validated_date_range(start: str, end: str) -> tuple[date | None, date | None]:
+    valid_from = _optional_date(start, field="valid_from")
+    valid_to = _optional_date(end, field="valid_to")
+    if valid_from is not None and valid_to is not None and valid_to < valid_from:
+        raise ReferenceDataError("valid_to must be greater than or equal to valid_from")
+    return valid_from, valid_to
+
+
 class ReferenceDataImporter:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir.resolve()
@@ -293,6 +328,11 @@ class ReferenceDataImporter:
         if len(municipality_bfs) != 1374 or "" in municipality_bfs:
             raise ReferenceDataError("municipality BFS codes must be present and unique")
 
+        municipalities_by_bfs = {row["bfs_code"]: row for row in municipalities}
+        canonical_names_by_bfs = {
+            bfs_code: _canonical_municipality_name(row["employer_name"])
+            for bfs_code, row in municipalities_by_bfs.items()
+        }
         statistical_city_bfs = {
             row["bfs_code"] for row in municipalities if row["statistical_city"] == "YES"
         }
@@ -301,6 +341,29 @@ class ReferenceDataImporter:
             raise ReferenceDataError(
                 "city audit queue must match the 127 BFS statistical cities exactly"
             )
+
+        for city in datasets["cities"]:
+            bfs_code = city["bfs_code"]
+            municipality = municipalities_by_bfs.get(bfs_code)
+            if municipality is None:
+                raise ReferenceDataError(f"city audit BFS {bfs_code} is not a municipality")
+            expected = {
+                "canton_code": municipality["canton_code"],
+                "municipality": canonical_names_by_bfs[bfs_code],
+                "degurb2021": municipality["degurb2021"],
+                "statistical_city": "YES",
+            }
+            actual = {
+                "canton_code": city["canton_code"],
+                "municipality": city["municipality"],
+                "degurb2021": city["degurb2021"],
+                "statistical_city": municipality["statistical_city"],
+            }
+            if actual != expected:
+                raise ReferenceDataError(
+                    f"city audit contract mismatch for BFS {bfs_code}: "
+                    f"expected {expected}, found {actual}"
+                )
 
         salary_sources = [
             row for row in datasets["sources"] if row["source_family"] == "SALARY_REFERENCE"
@@ -382,7 +445,7 @@ class ReferenceDataImporter:
             Municipality(
                 bfs_code=_required_int(row["bfs_code"], field="bfs_code"),
                 snapshot_date=SNAPSHOT_DATE,
-                municipality_name=row["employer_name"],
+                municipality_name=_canonical_municipality_name(row["employer_name"]),
                 canton_code=row["canton_code"],
                 canton_name=row["canton_name"],
                 district=row["district"],
@@ -538,7 +601,7 @@ class ReferenceDataImporter:
                 signal_group=row["signal_group"],
                 search_term=row["search_term"],
                 evidence_scope=row["evidence_scope"],
-                base_weight=_required_decimal(row["base_weight"], field="base_weight"),
+                base_weight=_premium_weight(row["base_weight"]),
                 default_segment=row["default_segment"],
                 notes=row["notes"],
             )
@@ -561,6 +624,10 @@ class ReferenceDataImporter:
     def _import_salary_references(self, rows: list[dict[str, str]]) -> None:
         objects: list[SalaryReference] = []
         for row in rows:
+            payments_per_year = _positive_optional_int(
+                row["payments_per_year"], field="payments_per_year"
+            )
+            valid_from, valid_to = _validated_date_range(row["valid_from"], row["valid_to"])
             monthly_raw, monthly_min, monthly_max = _decimal_range(
                 row["amount_monthly"], field="amount_monthly"
             )
@@ -581,17 +648,15 @@ class ReferenceDataImporter:
                     amount_monthly_raw=monthly_raw,
                     amount_monthly_min=monthly_min,
                     amount_monthly_max=monthly_max,
-                    payments_per_year=_optional_int(
-                        row["payments_per_year"], field="payments_per_year"
-                    ),
+                    payments_per_year=payments_per_year,
                     amount_annual_raw=annual_raw,
                     amount_annual_min=annual_min,
                     amount_annual_max=annual_max,
                     amount_hourly_base_raw=hourly_raw,
                     amount_hourly_base_min=hourly_min,
                     amount_hourly_base_max=hourly_max,
-                    valid_from=_optional_date(row["valid_from"], field="valid_from"),
-                    valid_to=_optional_date(row["valid_to"], field="valid_to"),
+                    valid_from=valid_from,
+                    valid_to=valid_to,
                     applicability=row["applicability"],
                     source_tier=row["source_tier"],
                     source_url=row["source_url"],

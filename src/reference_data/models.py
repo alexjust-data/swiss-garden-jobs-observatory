@@ -144,6 +144,12 @@ class PremiumSignal(models.Model):
             models.Index(fields=["signal_group"]),
             models.Index(fields=["default_segment"]),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(base_weight__gte=0) & models.Q(base_weight__lte=1),
+                name="reference_premium_signal_weight_between_0_and_1",
+            )
+        ]
 
     def __str__(self) -> str:
         return self.search_term
@@ -214,6 +220,17 @@ class SalaryReference(models.Model):
                 condition=models.Q(amount_hourly_base_max__gte=models.F("amount_hourly_base_min"))
                 | models.Q(amount_hourly_base_max__isnull=True),
                 name="reference_salary_hourly_range_valid",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(payments_per_year__gt=0)
+                | models.Q(payments_per_year__isnull=True),
+                name="reference_salary_payments_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(valid_to__gte=models.F("valid_from"))
+                | models.Q(valid_from__isnull=True)
+                | models.Q(valid_to__isnull=True),
+                name="reference_salary_valid_period_ordered",
             ),
         ]
 
