@@ -1,0 +1,28 @@
+﻿# Python artifacts
+*.pyc
+__pycache__/
+*.pyo
+.Python
+
+# Virtual environments
+env/
+.venv/
+venv/
+
+# Build / tooling
+*.egg-info/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.pycov
+.coverage
+
+# Runtime artifacts
+*.sqlite3
+data/raw/
+staticfiles/
+
+# Environment
+.env

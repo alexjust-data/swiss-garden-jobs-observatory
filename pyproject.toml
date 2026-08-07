@@ -1,0 +1,21 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+no_implicit_optional = true
+warn_unused_ignores = true
+warn_return_any = false
+strict_optional = true
+exclude = ["^docs/research/v0_4/", "src/.*/migrations/"]
+
+
+disable_error_code = ['var-annotated']
