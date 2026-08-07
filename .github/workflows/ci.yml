@@ -2,7 +2,7 @@ name: gate-001-ci
 
 on:
   push:
-    branches: [ main, gate-001-repository-baseline ]
+    branches: [ main, "gate-*" ]
   pull_request:
     branches: [ main ]
 
@@ -43,6 +43,8 @@ jobs:
           python -m pip install -r requirements-dev.txt
       - name: Migrate clean PostgreSQL database
         run: python manage.py migrate --noinput
+      - name: Import frozen reference data
+        run: python manage.py import_reference_data
       - name: Verify PostgreSQL backend
         run: >-
           python manage.py shell -c

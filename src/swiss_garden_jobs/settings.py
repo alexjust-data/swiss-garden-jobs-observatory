@@ -1,4 +1,4 @@
-"""Django settings for the Gate-001 baseline project."""
+"""Django settings for the Swiss Garden Jobs Observatory."""
 
 from __future__ import annotations
 
@@ -31,9 +31,7 @@ def _required_env(name: str) -> str:
 SECRET_KEY = _required_env("DJANGO_SECRET_KEY")
 DEBUG = _bool("DJANGO_DEBUG", True)
 ALLOWED_HOSTS = [
-    h.strip()
-    for h in _env("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
-    if h.strip()
+    h.strip() for h in _env("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if h.strip()
 ]
 
 DATABASES = {
@@ -56,6 +54,8 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "core",
+    "sources",
+    "reference_data",
 ]
 
 MIDDLEWARE = [
@@ -99,6 +99,4 @@ USE_TZ = True
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-CORE_RAW_OBJECT_STORE_PATH = _env(
-    "JOB_OBSERVATORY_RAW_STORE_PATH", str(BASE_DIR / "data" / "raw")
-)
+CORE_RAW_OBJECT_STORE_PATH = _env("JOB_OBSERVATORY_RAW_STORE_PATH", str(BASE_DIR / "data" / "raw"))
