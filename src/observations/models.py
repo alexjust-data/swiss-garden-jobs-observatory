@@ -12,6 +12,35 @@ class ImmutablePostingObservationError(RuntimeError):
     pass
 
 
+class PostingObservationQuerySet(models.QuerySet["PostingObservation"]):
+    def update(self, **kwargs: Any) -> int:
+        raise ImmutablePostingObservationError("PostingObservation queryset updates are forbidden")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise ImmutablePostingObservationError("PostingObservation queryset deletion is forbidden")
+
+    def bulk_update(
+        self,
+        objs: Any,
+        fields: Any,
+        batch_size: int | None = None,
+    ) -> int:
+        raise ImmutablePostingObservationError("PostingObservation bulk updates are forbidden")
+
+
+class PostingObservationManager(models.Manager["PostingObservation"]):
+    def get_queryset(self) -> PostingObservationQuerySet:
+        return PostingObservationQuerySet(self.model, using=self._db)
+
+    def bulk_update(
+        self,
+        objs: Any,
+        fields: Any,
+        batch_size: int | None = None,
+    ) -> int:
+        raise ImmutablePostingObservationError("PostingObservation bulk updates are forbidden")
+
+
 class CollectionRun(models.Model):
     class Status(models.TextChoices):
         RUNNING = "RUNNING", "Running"
@@ -49,6 +78,7 @@ class CollectionRun(models.Model):
 
 
 class PostingObservation(models.Model):
+    objects = PostingObservationManager()
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     collection_run = models.ForeignKey(
         CollectionRun, on_delete=models.PROTECT, related_name="observations"

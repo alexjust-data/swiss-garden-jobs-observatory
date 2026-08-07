@@ -252,6 +252,33 @@ class WinterthurCollectorTests(TestCase):
             with pytest.raises(ImmutablePostingObservationError, match="cannot be deleted"):
                 observation.delete()
 
+    def test_queryset_and_manager_mutations_are_forbidden(self) -> None:
+        with TemporaryDirectory() as raw_dir:
+            self.collect_once(raw_dir)
+            observation = PostingObservation.objects.get()
+            original_title = observation.title
+            original_contract = deepcopy(observation.contract_payload)
+
+            with pytest.raises(ImmutablePostingObservationError, match="updates"):
+                PostingObservation.objects.filter(pk=observation.pk).update(title="changed")
+            observation.refresh_from_db()
+            assert observation.title == original_title
+            assert observation.contract_payload == original_contract
+
+            with pytest.raises(ImmutablePostingObservationError, match="deletion"):
+                PostingObservation.objects.filter(pk=observation.pk).delete()
+            observation.refresh_from_db()
+            assert PostingObservation.objects.count() == 1
+            assert observation.title == original_title
+            assert observation.contract_payload == original_contract
+
+            observation.title = "changed"
+            with pytest.raises(ImmutablePostingObservationError, match="bulk updates"):
+                PostingObservation.objects.bulk_update([observation], ["title"])
+            observation.refresh_from_db()
+            assert observation.title == original_title
+            assert observation.contract_payload == original_contract
+
     def test_requested_posting_must_be_active(self) -> None:
         with TemporaryDirectory() as raw_dir:
             collector = WinterthurCollector(
