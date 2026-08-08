@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     "sources",
     "reference_data",
     "observations",
+    "vacancies.apps.VacanciesConfig",
 ]
 
 MIDDLEWARE = [
