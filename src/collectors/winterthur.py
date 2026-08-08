@@ -2,35 +2,19 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from html.parser import HTMLParser
-from pathlib import Path
 from typing import Any, Protocol, cast
 from urllib.parse import parse_qs, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from django.conf import settings
-from django.db import transaction
 from django.utils import timezone
 
-from core.hashing import sha256_file, sha256_hex
-from core.models import RawArtifact
 from core.storage import RawObjectStore
-from observations.contracts import validate_posting_observation_contract
-from observations.green_relevance import (
-    CLASSIFIER_VERSION,
-    TAXONOMY_VERSION,
-    GreenRelevanceClassifier,
-)
-from observations.lifecycle import (
-    get_or_create_posting,
-    record_active,
-    record_healthy_absences,
-)
-from observations.models import CollectionRun, GreenRelevanceAssessment, PostingObservation
+from observations.contracts import PostingObservationContractError
+from observations.models import CollectionRun
 from reference_data.models import Municipality
 from sources.models import Source
 
@@ -411,46 +395,6 @@ def parse_detail(body: bytes, *, requested_url: str, expected_posting_id: str) -
     )
 
 
-def build_contract_payload(
-    *,
-    parsed: ParsedPosting,
-    page: FetchedPage,
-    raw_artifact: RawArtifact,
-    source: Source,
-    municipality: Municipality,
-    run: CollectionRun,
-    observed_at: datetime,
-) -> dict[str, object]:
-    return {
-        "schema_version": "1.2",
-        "source_id": str(source.pk),
-        "source_native_id": parsed.source_posting_id,
-        "observed_at": observed_at.isoformat(),
-        "observation_status": "ACTIVE",
-        "source_url": page.requested_url,
-        "canonical_url": parsed.canonical_url,
-        "http_status": page.status_code,
-        "raw_title": parsed.title,
-        "raw_location": parsed.raw_location,
-        "raw_employer": parsed.hiring_organization,
-        "raw_text": parsed.description_html,
-        "raw_payload_sha256": raw_artifact.sha256_digest,
-        "published_at_raw": parsed.published_at_raw,
-        "source_published_at": None,
-        "published_at_precision": "EXACT_DATE" if parsed.published_at_raw else "UNKNOWN",
-        "published_at_parse_method": ("STRUCTURED_DATA" if parsed.published_at_raw else "MISSING"),
-        "published_at_confidence": 1.0 if parsed.published_at_raw else None,
-        "collector_run_id": str(run.pk),
-        "source_health_status": "HEALTHY",
-        "normalized_location": {
-            "bfs_code": municipality.pk,
-            "municipality": municipality.municipality_name,
-            "canton_code": municipality.canton_code,
-            "location_precision": "MUNICIPALITY",
-        },
-    }
-
-
 class WinterthurCollector:
     def __init__(
         self,
@@ -460,12 +404,9 @@ class WinterthurCollector:
         delay_seconds: float = 1.0,
         clock: Callable[[], datetime] = timezone.now,
     ) -> None:
-        if delay_seconds < 0:
-            raise ValueError("delay_seconds must be nonnegative")
-        self.fetcher = fetcher or UrlLibPageFetcher()
-        self.raw_store = raw_store or RawObjectStore(settings.CORE_RAW_OBJECT_STORE_PATH)
+        self.fetcher = fetcher
+        self.raw_store = raw_store
         self.delay_seconds = delay_seconds
-        self.classifier = GreenRelevanceClassifier()
         self.clock = clock
 
     def collect(
@@ -476,14 +417,9 @@ class WinterthurCollector:
         full_snapshot: bool = False,
         acknowledge_automation_review: bool = False,
     ) -> CollectionRun:
-        if limit is not None and limit <= 0:
-            raise ValueError("limit must be positive")
-        if full_snapshot and posting_ids:
-            raise ValueError("full_snapshot is incompatible with posting_ids")
-        if full_snapshot and limit is not None:
-            raise ValueError("full_snapshot is incompatible with limit")
-        if not full_snapshot and not posting_ids:
-            raise ValueError("TARGETED collection requires at least one posting_id")
+        from collectors.adapters import RexxAdapter
+        from collectors.pipeline import SharedCollectionPipeline
+
         source = Source.objects.get(source_id=WINTERTHUR_SOURCE_ID)
         enforce_winterthur_source_policy(
             source, acknowledge_automation_review=acknowledge_automation_review
@@ -491,188 +427,21 @@ class WinterthurCollector:
         municipality = Municipality.objects.get(bfs_code=WINTERTHUR_BFS_CODE)
         if municipality.municipality_name != "Winterthur" or municipality.canton_code != "ZH":
             raise WinterthurGovernanceError("BFS 230 must resolve to Winterthur in canton ZH")
-        started_at = self.clock()
-        scope = (
-            CollectionRun.RunScope.FULL_SOURCE if full_snapshot else CollectionRun.RunScope.TARGETED
-        )
-        run = CollectionRun.objects.create(
-            source=source,
-            listing_url=WINTERTHUR_LISTING_URL,
-            run_scope=scope,
-            started_at=started_at,
-        )
-        current_id, stage = "listing", "listing"
-        discovered_ids: set[str] = set()
-        observed_ids: set[str] = set()
-        assessed_ids: set[str] = set()
         try:
-            listing_page = self.fetcher.fetch(WINTERTHUR_LISTING_URL)
-            run.listing_final_url = listing_page.final_url
-            run.listing_http_status = listing_page.status_code
-            run.listing_raw_artifact = self._persist_raw(
-                run=run,
-                kind="listing",
-                identifier="current",
-                page=listing_page,
-                observed_at=started_at,
+            return SharedCollectionPipeline(
+                source_id=WINTERTHUR_SOURCE_ID,
+                adapter=RexxAdapter(),
+                fetcher=cast(Any, self.fetcher),
+                raw_store=self.raw_store,
+                delay_seconds=self.delay_seconds,
+                clock=self.clock,
+            ).collect(
+                posting_ids=posting_ids,
+                limit=limit,
+                full_snapshot=full_snapshot,
+                acknowledge_automation_review=acknowledge_automation_review,
             )
-            all_entries = parse_listing(listing_page.body)
-            all_ids = {entry.source_posting_id for entry in all_entries}
-            run.listings_discovered = len(all_ids)
-            run.listing_total_discovered = len(all_ids)
-            entries = all_entries
-            if posting_ids is not None:
-                missing = posting_ids - all_ids
-                if missing:
-                    raise WinterthurCollectorError(
-                        f"requested postings are not active in the listing: {sorted(missing)}"
-                    )
-                entries = [entry for entry in entries if entry.source_posting_id in posting_ids]
-            if limit is not None:
-                entries = entries[:limit]
-            discovered_ids = {entry.source_posting_id for entry in entries}
-            run.postings_in_scope = len(discovered_ids)
-            stage = "details"
-            for index, entry in enumerate(entries):
-                current_id = entry.source_posting_id
-                if index and self.delay_seconds:
-                    time.sleep(self.delay_seconds)
-                observed_at = self.clock()
-                page = self.fetcher.fetch(entry.url)
-                artifact = self._persist_raw(
-                    run=run,
-                    kind="detail",
-                    identifier=current_id,
-                    page=page,
-                    observed_at=observed_at,
-                )
-                run.details_fetched += 1
-                parsed = parse_detail(
-                    page.body, requested_url=page.final_url, expected_posting_id=current_id
-                )
-                contract = build_contract_payload(
-                    parsed=parsed,
-                    page=page,
-                    raw_artifact=artifact,
-                    source=source,
-                    municipality=municipality,
-                    run=run,
-                    observed_at=observed_at,
-                )
-                validate_posting_observation_contract(contract)
-                with transaction.atomic():
-                    posting, posting_created = get_or_create_posting(
-                        source=source,
-                        source_posting_id=parsed.source_posting_id,
-                        observed_at=observed_at,
-                        canonical_url=parsed.canonical_url,
-                    )
-                    observation = PostingObservation.objects.create(
-                        collection_run=run,
-                        posting=posting,
-                        source=source,
-                        observation_status="ACTIVE",
-                        source_posting_id=parsed.source_posting_id,
-                        observed_at=observed_at,
-                        canonical_url=parsed.canonical_url,
-                        title=parsed.title,
-                        date_posted=parsed.date_posted,
-                        valid_through=parsed.valid_through,
-                        employment_type=parsed.employment_type,
-                        hiring_organization=parsed.hiring_organization,
-                        description_html=parsed.description_html,
-                        responsibilities_html=parsed.responsibilities_html,
-                        qualifications_html=parsed.qualifications_html,
-                        benefits_html=parsed.benefits_html,
-                        location_street=parsed.location_street,
-                        location_locality=parsed.location_locality,
-                        location_region=parsed.location_region,
-                        location_postal_code=parsed.location_postal_code,
-                        location_country=parsed.location_country,
-                        municipality=municipality,
-                        raw_artifact=artifact,
-                        structured_payload=parsed.structured_payload,
-                        contract_payload=contract,
-                    )
-                    decision = self.classifier.classify_observation(observation)
-                    GreenRelevanceAssessment.objects.create(
-                        posting_observation=observation,
-                        classifier_version=CLASSIFIER_VERSION,
-                        taxonomy_version=TAXONOMY_VERSION,
-                        taxonomy_sha256=self.classifier.taxonomy_sha256,
-                        result=decision.result,
-                        matched_positive_terms=decision.matched_positive_terms,
-                        matched_conditional_terms=decision.matched_conditional_terms,
-                        matched_exclusion_terms=decision.matched_exclusion_terms,
-                        evidence=decision.evidence,
-                    )
-                    record_active(
-                        posting=posting,
-                        observation=observation,
-                        run=run,
-                        observed_at=observed_at,
-                        created=posting_created,
-                    )
-                observed_ids.add(current_id)
-                assessed_ids.add(current_id)
-                run.observations_created += 1
-                run.green_assessments_created += 1
-            counts_equal = (
-                run.postings_in_scope
-                == run.details_fetched
-                == run.observations_created
-                == run.green_assessments_created
-            )
-            sets_equal = discovered_ids == observed_ids == assessed_ids
-            if full_snapshot and not (counts_equal and sets_equal):
-                raise WinterthurCollectorError("FULL_SOURCE count or posting-ID set mismatch")
-            run.source_health_status = CollectionRun.SourceHealthStatus.HEALTHY
-            run.source_health_reason = "COMPLETE_VALIDATED_SCOPE"
-            if full_snapshot:
-                stage = "lifecycle"
-                with transaction.atomic():
-                    run.save()
-                    run.negative_observations_created = record_healthy_absences(
-                        run=run, active_ids=discovered_ids, observed_at=self.clock()
-                    )
-            run.status = CollectionRun.Status.SUCCEEDED
-            run.snapshot_complete = full_snapshot and counts_equal and sets_equal
-            run.finished_at = self.clock()
-            run.save()
-            return run
-        except Exception as exc:
-            run.status = CollectionRun.Status.FAILED
-            run.snapshot_complete = False
-            run.source_health_status = (
-                CollectionRun.SourceHealthStatus.OUTAGE
-                if stage == "listing"
-                else CollectionRun.SourceHealthStatus.DEGRADED
-            )
-            run.source_health_reason = f"{stage.upper()}_FAILURE"
-            run.finished_at = self.clock()
-            run.error_message = f"posting {current_id}: {exc}"
-            run.save()
+        except (WinterthurCollectorError, PostingObservationContractError):
             raise
-
-    def _persist_raw(
-        self,
-        *,
-        run: CollectionRun,
-        kind: str,
-        identifier: str,
-        page: FetchedPage,
-        observed_at: datetime,
-    ) -> RawArtifact:
-        digest = sha256_hex(page.body)
-        object_key = (
-            f"winterthur/{observed_at:%Y/%m/%d}/{run.id}/{kind}-{identifier}-{digest[:16]}.html"
-        )
-        path: Path = self.raw_store.write_bytes(object_key, page.body)
-        if sha256_file(path) != digest:
-            raise WinterthurCollectorError(f"RAW SHA-256 verification failed for {object_key}")
-        return RawArtifact.objects.create(
-            object_key=object_key,
-            sha256_digest=digest,
-            byte_size=len(page.body),
-            content_type=page.content_type,
-        )
+        except Exception as exc:
+            raise WinterthurCollectorError(str(exc)) from exc

@@ -20,6 +20,29 @@ class ImmutablePostingLifecycleEventError(RuntimeError):
     pass
 
 
+class ImmutableCollectionRunFetchError(RuntimeError):
+    pass
+
+
+class CollectionRunFetchQuerySet(models.QuerySet["CollectionRunFetch"]):
+    def update(self, **kwargs: Any) -> int:
+        raise ImmutableCollectionRunFetchError("CollectionRunFetch is append-only")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise ImmutableCollectionRunFetchError("CollectionRunFetch cannot be deleted")
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutableCollectionRunFetchError("CollectionRunFetch is append-only")
+
+
+class CollectionRunFetchManager(models.Manager["CollectionRunFetch"]):
+    def get_queryset(self) -> CollectionRunFetchQuerySet:
+        return CollectionRunFetchQuerySet(self.model, using=self._db)
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutableCollectionRunFetchError("CollectionRunFetch is append-only")
+
+
 class PostingObservationQuerySet(models.QuerySet["PostingObservation"]):
     def update(self, **kwargs: Any) -> int:
         raise ImmutablePostingObservationError("PostingObservation queryset updates are forbidden")
@@ -157,6 +180,43 @@ class CollectionRun(models.Model):
         return f"{self.source.pk}:{self.started_at.isoformat()}"
 
 
+class CollectionRunFetch(models.Model):
+    objects = CollectionRunFetchManager()
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    collection_run = models.ForeignKey(
+        CollectionRun, on_delete=models.PROTECT, related_name="fetches"
+    )
+    fetch_role = models.CharField(max_length=20)
+    ordinal = models.PositiveIntegerField()
+    requested_url = models.URLField(max_length=1000)
+    final_url = models.URLField(max_length=1000)
+    http_status = models.PositiveSmallIntegerField()
+    content_type = models.CharField(max_length=255)
+    raw_artifact = models.ForeignKey(
+        "core.RawArtifact", on_delete=models.PROTECT, related_name="collection_run_fetches"
+    )
+    evidence = models.JSONField(default=dict)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "collection_run_fetch"
+        ordering = ["collection_run_id", "fetch_role", "ordinal"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["collection_run", "fetch_role", "ordinal"],
+                name="collection_run_fetch_role_ordinal_unique",
+            )
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ImmutableCollectionRunFetchError("CollectionRunFetch is append-only")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ImmutableCollectionRunFetchError("CollectionRunFetch cannot be deleted")
+
+
 class Posting(models.Model):
     class LifecycleStatus(models.TextChoices):
         NEW = "NEW", "New"
@@ -242,7 +302,9 @@ class PostingObservation(models.Model):
     location_region = models.CharField(max_length=200, blank=True)
     location_postal_code = models.CharField(max_length=100, blank=True)
     location_country = models.CharField(max_length=100, blank=True)
-    municipality = models.ForeignKey("reference_data.Municipality", on_delete=models.PROTECT)
+    municipality = models.ForeignKey(
+        "reference_data.Municipality", on_delete=models.PROTECT, null=True, blank=True
+    )
     raw_artifact = models.ForeignKey(
         "core.RawArtifact", on_delete=models.PROTECT, related_name="posting_observations"
     )

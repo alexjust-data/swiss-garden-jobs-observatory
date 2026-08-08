@@ -24,6 +24,7 @@ from observations.models import (
     PostingLocationResolution,
     PostingObservation,
 )
+from reference_data.models import Municipality
 
 RESOLVER_VERSION = "geospatial-v0.1"
 PROVIDER = "SWISSTOPO_SEARCHSERVER"
@@ -265,10 +266,15 @@ def normalized_request(
     observation: PostingObservation,
     privacy_context: LocationPrivacyContext,
 ) -> dict[str, object] | None:
-    locality = observation.location_locality.strip() or observation.municipality.municipality_name
+    municipality = observation.municipality
+    locality = observation.location_locality.strip() or (
+        municipality.municipality_name if municipality else ""
+    )
     postcode = observation.location_postal_code.strip()
     street = observation.location_street.strip()
-    region = observation.location_region.strip() or observation.municipality.canton_code
+    region = observation.location_region.strip() or (
+        municipality.canton_code if municipality else ""
+    )
     protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
     origins = None
     if protected and locality:
@@ -346,14 +352,18 @@ class GeospatialResolver:
             self.stats.already_resolved += 1
             return existing
         protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
+        municipality = observation.municipality
+        municipality_bfs = municipality.pk if municipality else None
+        municipality_name = municipality.municipality_name if municipality else ""
+        municipality_canton = municipality.canton_code if municipality else ""
         if protected:
             input_value = {
                 "resolver": self.resolver_version,
                 "privacy_context": privacy_context.value,
                 "source": str(observation.source.pk),
-                "bfs": observation.municipality.pk,
-                "municipality": observation.municipality.municipality_name,
-                "canton": observation.municipality.canton_code,
+                "bfs": municipality_bfs,
+                "municipality": municipality_name,
+                "canton": municipality_canton,
                 "country": observation.location_country,
             }
         else:
@@ -361,9 +371,9 @@ class GeospatialResolver:
                 "resolver": self.resolver_version,
                 "privacy_context": privacy_context.value,
                 "source": str(observation.source.pk),
-                "bfs": observation.municipality.pk,
-                "municipality": observation.municipality.municipality_name,
-                "canton": observation.municipality.canton_code,
+                "bfs": municipality_bfs,
+                "municipality": municipality_name,
+                "canton": municipality_canton,
                 "street": observation.location_street,
                 "locality": observation.location_locality,
                 "region": observation.location_region,
@@ -447,20 +457,23 @@ class GeospatialResolver:
             "raw_sha256": cache.raw_artifact.sha256_digest,
             "final_url": cache.final_url,
         }
-        name = normalize(observation.municipality.municipality_name)
-        canton = observation.municipality.canton_code.upper()
+        name = normalize(municipality_name or observation.location_locality)
+        canton = (municipality_canton or observation.location_region).upper()
         postcode = observation.location_postal_code.strip()
         matches = [
             item
             for item in found
-            if name in normalize(f"{item.municipality} {item.label}")
+            if name
+            and name in normalize(f"{item.municipality} {item.label}")
             and (not item.canton or item.canton == canton)
             and (not item.country or item.country == "CH")
             and not (postcode and item.postcode and postcode != item.postcode)
         ]
         if not matches:
             status, reason = (
-                ("REVIEW", "GEOCODER_CONTRADICTS_BFS") if found else ("UNRESOLVED", None)
+                ("REVIEW", "GEOCODER_CONTRADICTS_BFS")
+                if found and municipality is not None
+                else (("REVIEW", "NO_UNAMBIGUOUS_MUNICIPALITY") if found else ("UNRESOLVED", None))
             )
             return self.persist(
                 observation,
@@ -488,6 +501,29 @@ class GeospatialResolver:
                 review_candidate_evidence(matches, privacy_context),
             )
         selected = matches[0]
+        if municipality is None:
+            candidate_municipalities = Municipality.objects.filter(
+                municipality_name__iexact=selected.municipality
+            )
+            if selected.canton:
+                candidate_municipalities = candidate_municipalities.filter(
+                    canton_code=selected.canton
+                )
+            municipality_matches = list(candidate_municipalities[:2])
+            if len(municipality_matches) != 1:
+                return self.persist(
+                    observation,
+                    input_fingerprint,
+                    "REVIEW",
+                    "UNKNOWN",
+                    "SWISSTOPO_SEARCHSERVER",
+                    None,
+                    None,
+                    evidence,
+                    "NO_UNAMBIGUOUS_MUNICIPALITY",
+                    review_candidate_evidence(matches, privacy_context),
+                )
+            evidence["_resolved_bfs"] = municipality_matches[0].pk
         precision = (
             "REMOTE_OR_MULTIPLE"
             if multiple(observation)
@@ -579,6 +615,10 @@ class GeospatialResolver:
         if latitude is not None and longitude is not None:
             validate_coordinates(latitude, longitude)
         privacy_context = LocationPrivacyContext(evidence.pop("_privacy_context"))
+        resolved_bfs = evidence.pop("_resolved_bfs", None)
+        resolved_municipality = observation.municipality
+        if resolved_bfs is not None:
+            resolved_municipality = Municipality.objects.get(pk=resolved_bfs)
         protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
         hidden = protected
         privacy = "HIDDEN" if hidden else "EXACT_ALLOWED"
@@ -594,7 +634,7 @@ class GeospatialResolver:
                 resolver_version=self.resolver_version,
                 privacy_context=privacy_context.value,
                 resolution_status=status,
-                municipality=observation.municipality,
+                municipality=resolved_municipality,
                 latitude=latitude,
                 longitude=longitude,
                 location_precision=precision,

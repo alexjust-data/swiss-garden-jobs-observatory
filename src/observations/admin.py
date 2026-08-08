@@ -5,6 +5,7 @@ from django.http import HttpRequest
 
 from observations.models import (
     CollectionRun,
+    CollectionRunFetch,
     GeocoderCacheEntry,
     GeocodingReviewItem,
     GreenRelevanceAssessment,
@@ -207,4 +208,19 @@ class GeocodingReviewItemAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+
+@admin.register(CollectionRunFetch)
+class CollectionRunFetchAdmin(admin.ModelAdmin):
+    list_display = ("collection_run", "fetch_role", "ordinal", "http_status", "final_url")
+    readonly_fields = tuple(field.name for field in CollectionRunFetch._meta.fields)
+
+    def has_add_permission(self, request: Any) -> bool:
+        return False
+
+    def has_change_permission(self, request: Any, obj: Any = None) -> bool:
+        return False
+
+    def has_delete_permission(self, request: Any, obj: Any = None) -> bool:
         return False
