@@ -167,7 +167,7 @@ class WinterthurCollectorTests(TestCase):
             fetcher=fake_fetcher(detail),
             raw_store=RawObjectStore(raw_dir),
             delay_seconds=0,
-        ).collect(acknowledge_automation_review=True)
+        ).collect(posting_ids={"8280"}, acknowledge_automation_review=True)
 
     def test_valid_contract_and_exact_raw_are_persisted(self) -> None:
         detail = detail_payload()
@@ -210,7 +210,7 @@ class WinterthurCollectorTests(TestCase):
                 patch("collectors.winterthur.build_contract_payload", return_value={}),
                 pytest.raises(PostingObservationContractError, match="validation failed"),
             ):
-                collector.collect(acknowledge_automation_review=True)
+                collector.collect(posting_ids={"8280"}, acknowledge_automation_review=True)
 
             run = CollectionRun.objects.get()
             assert run.status == CollectionRun.Status.FAILED

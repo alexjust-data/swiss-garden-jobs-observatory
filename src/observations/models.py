@@ -12,6 +12,10 @@ class ImmutablePostingObservationError(RuntimeError):
     pass
 
 
+class ImmutableGreenRelevanceAssessmentError(RuntimeError):
+    pass
+
+
 class PostingObservationQuerySet(models.QuerySet["PostingObservation"]):
     def update(self, **kwargs: Any) -> int:
         raise ImmutablePostingObservationError("PostingObservation queryset updates are forbidden")
@@ -41,17 +45,50 @@ class PostingObservationManager(models.Manager["PostingObservation"]):
         raise ImmutablePostingObservationError("PostingObservation bulk updates are forbidden")
 
 
+class GreenRelevanceAssessmentQuerySet(models.QuerySet["GreenRelevanceAssessment"]):
+    def update(self, **kwargs: Any) -> int:
+        raise ImmutableGreenRelevanceAssessmentError(
+            "GreenRelevanceAssessment queryset updates are forbidden"
+        )
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise ImmutableGreenRelevanceAssessmentError(
+            "GreenRelevanceAssessment queryset deletion is forbidden"
+        )
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutableGreenRelevanceAssessmentError(
+            "GreenRelevanceAssessment bulk updates are forbidden"
+        )
+
+
+class GreenRelevanceAssessmentManager(models.Manager["GreenRelevanceAssessment"]):
+    def get_queryset(self) -> GreenRelevanceAssessmentQuerySet:
+        return GreenRelevanceAssessmentQuerySet(self.model, using=self._db)
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutableGreenRelevanceAssessmentError(
+            "GreenRelevanceAssessment bulk updates are forbidden"
+        )
+
+
 class CollectionRun(models.Model):
     class Status(models.TextChoices):
         RUNNING = "RUNNING", "Running"
         SUCCEEDED = "SUCCEEDED", "Succeeded"
         FAILED = "FAILED", "Failed"
 
+    class RunScope(models.TextChoices):
+        TARGETED = "TARGETED", "Targeted"
+        FULL_SOURCE = "FULL_SOURCE", "Full source"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     source = models.ForeignKey("sources.Source", on_delete=models.PROTECT)
     started_at = models.DateTimeField(default=timezone.now)
     finished_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=10, choices=Status, default=Status.RUNNING)
+    run_scope = models.CharField(max_length=11, choices=RunScope, default=RunScope.TARGETED)
+    snapshot_complete = models.BooleanField(default=False)
     listing_url = models.URLField(max_length=500)
     listing_raw_artifact = models.OneToOneField(
         "core.RawArtifact",
@@ -63,6 +100,7 @@ class CollectionRun(models.Model):
     listings_discovered = models.PositiveIntegerField(default=0)
     details_fetched = models.PositiveIntegerField(default=0)
     observations_created = models.PositiveIntegerField(default=0)
+    green_assessments_created = models.PositiveIntegerField(default=0)
     error_message = models.TextField(blank=True)
 
     class Meta:
@@ -139,3 +177,52 @@ class PostingObservation(models.Model):
 
     def __str__(self) -> str:
         return f"{self.source.pk}:{self.source_posting_id}"
+
+
+class GreenRelevanceAssessment(models.Model):
+    class Result(models.TextChoices):
+        GREEN_CONFIRMED = "GREEN_CONFIRMED", "Green confirmed"
+        REVIEW = "REVIEW", "Review"
+        NOT_GREEN = "NOT_GREEN", "Not green"
+
+    objects = GreenRelevanceAssessmentManager()
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    posting_observation = models.ForeignKey(
+        PostingObservation,
+        on_delete=models.PROTECT,
+        related_name="green_relevance_assessments",
+    )
+    classifier_version = models.CharField(max_length=80)
+    taxonomy_version = models.CharField(max_length=80)
+    taxonomy_sha256 = models.CharField(max_length=64)
+    result = models.CharField(max_length=20, choices=Result)
+    matched_positive_terms = models.JSONField(default=list)
+    matched_conditional_terms = models.JSONField(default=list)
+    matched_exclusion_terms = models.JSONField(default=list)
+    evidence = models.JSONField(default=dict)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "green_relevance_assessment"
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["posting_observation", "classifier_version"],
+                name="green_assessment_observation_classifier_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["classifier_version", "result"]),
+            models.Index(fields=["taxonomy_sha256"]),
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ImmutableGreenRelevanceAssessmentError("GreenRelevanceAssessment is append-only")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ImmutableGreenRelevanceAssessmentError("GreenRelevanceAssessment cannot be deleted")
+
+    def __str__(self) -> str:
+        return f"{self.posting_observation.pk}:{self.classifier_version}"

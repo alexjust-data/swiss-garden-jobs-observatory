@@ -19,7 +19,12 @@ from core.hashing import sha256_file, sha256_hex
 from core.models import RawArtifact
 from core.storage import RawObjectStore
 from observations.contracts import validate_posting_observation_contract
-from observations.models import CollectionRun, PostingObservation
+from observations.green_relevance import (
+    CLASSIFIER_VERSION,
+    TAXONOMY_VERSION,
+    GreenRelevanceClassifier,
+)
+from observations.models import CollectionRun, GreenRelevanceAssessment, PostingObservation
 from reference_data.models import Municipality
 from sources.models import Source
 
@@ -453,26 +458,41 @@ class WinterthurCollector:
         self.fetcher = fetcher or UrlLibPageFetcher()
         self.raw_store = raw_store or RawObjectStore(settings.CORE_RAW_OBJECT_STORE_PATH)
         self.delay_seconds = delay_seconds
+        self.classifier = GreenRelevanceClassifier()
 
     def collect(
         self,
         *,
         posting_ids: set[str] | None = None,
         limit: int | None = None,
+        full_snapshot: bool = False,
         acknowledge_automation_review: bool = False,
     ) -> CollectionRun:
         if limit is not None and limit <= 0:
             raise ValueError("limit must be positive")
+        if full_snapshot and posting_ids:
+            raise ValueError("full_snapshot is incompatible with posting_ids")
+        if full_snapshot and limit is not None:
+            raise ValueError("full_snapshot is incompatible with limit")
+        if not full_snapshot and not posting_ids:
+            raise ValueError("TARGETED collection requires at least one posting_id")
         source = Source.objects.get(source_id=WINTERTHUR_SOURCE_ID)
         enforce_winterthur_source_policy(
-            source,
-            acknowledge_automation_review=acknowledge_automation_review,
+            source, acknowledge_automation_review=acknowledge_automation_review
         )
         municipality = Municipality.objects.get(bfs_code=WINTERTHUR_BFS_CODE)
         if municipality.municipality_name != "Winterthur" or municipality.canton_code != "ZH":
             raise WinterthurGovernanceError("BFS 230 must resolve to Winterthur in canton ZH")
-
-        run = CollectionRun.objects.create(source=source, listing_url=WINTERTHUR_LISTING_URL)
+        scope = (
+            CollectionRun.RunScope.FULL_SOURCE if full_snapshot else CollectionRun.RunScope.TARGETED
+        )
+        run = CollectionRun.objects.create(
+            source=source, listing_url=WINTERTHUR_LISTING_URL, run_scope=scope
+        )
+        current_id = "listing"
+        discovered_ids: set[str] = set()
+        observed_ids: set[str] = set()
+        assessed_ids: set[str] = set()
         try:
             listing_page = self.fetcher.fetch(WINTERTHUR_LISTING_URL)
             run.listing_raw_artifact = self._persist_raw(
@@ -483,11 +503,9 @@ class WinterthurCollector:
                 observed_at=run.started_at,
             )
             entries = parse_listing(listing_page.body)
-            run.listings_discovered = len(entries)
-
             if posting_ids is not None:
-                discovered_ids = {entry.source_posting_id for entry in entries}
-                missing = posting_ids - discovered_ids
+                available = {entry.source_posting_id for entry in entries}
+                missing = posting_ids - available
                 if missing:
                     raise WinterthurCollectorError(
                         f"requested postings are not active in the listing: {sorted(missing)}"
@@ -495,37 +513,37 @@ class WinterthurCollector:
                 entries = [entry for entry in entries if entry.source_posting_id in posting_ids]
             if limit is not None:
                 entries = entries[:limit]
-
+            discovered_ids = {entry.source_posting_id for entry in entries}
+            run.listings_discovered = len(discovered_ids)
             for index, entry in enumerate(entries):
+                current_id = entry.source_posting_id
                 if index and self.delay_seconds:
                     time.sleep(self.delay_seconds)
                 observed_at = timezone.now()
-                detail_page = self.fetcher.fetch(entry.url)
+                page = self.fetcher.fetch(entry.url)
                 artifact = self._persist_raw(
                     run=run,
                     kind="detail",
-                    identifier=entry.source_posting_id,
-                    page=detail_page,
+                    identifier=current_id,
+                    page=page,
                     observed_at=observed_at,
                 )
                 run.details_fetched += 1
                 parsed = parse_detail(
-                    detail_page.body,
-                    requested_url=detail_page.final_url,
-                    expected_posting_id=entry.source_posting_id,
+                    page.body, requested_url=page.final_url, expected_posting_id=current_id
                 )
-                contract_payload = build_contract_payload(
+                contract = build_contract_payload(
                     parsed=parsed,
-                    page=detail_page,
+                    page=page,
                     raw_artifact=artifact,
                     source=source,
                     municipality=municipality,
                     run=run,
                     observed_at=observed_at,
                 )
-                validate_posting_observation_contract(contract_payload)
+                validate_posting_observation_contract(contract)
                 with transaction.atomic():
-                    PostingObservation.objects.create(
+                    observation = PostingObservation.objects.create(
                         collection_run=run,
                         source=source,
                         source_posting_id=parsed.source_posting_id,
@@ -548,18 +566,43 @@ class WinterthurCollector:
                         municipality=municipality,
                         raw_artifact=artifact,
                         structured_payload=parsed.structured_payload,
-                        contract_payload=contract_payload,
+                        contract_payload=contract,
                     )
+                    decision = self.classifier.classify_observation(observation)
+                    GreenRelevanceAssessment.objects.create(
+                        posting_observation=observation,
+                        classifier_version=CLASSIFIER_VERSION,
+                        taxonomy_version=TAXONOMY_VERSION,
+                        taxonomy_sha256=self.classifier.taxonomy_sha256,
+                        result=decision.result,
+                        matched_positive_terms=decision.matched_positive_terms,
+                        matched_conditional_terms=decision.matched_conditional_terms,
+                        matched_exclusion_terms=decision.matched_exclusion_terms,
+                        evidence=decision.evidence,
+                    )
+                observed_ids.add(current_id)
+                assessed_ids.add(current_id)
                 run.observations_created += 1
-
+                run.green_assessments_created += 1
+            counts_equal = (
+                run.listings_discovered
+                == run.details_fetched
+                == run.observations_created
+                == run.green_assessments_created
+            )
+            sets_equal = discovered_ids == observed_ids == assessed_ids
+            if full_snapshot and not (counts_equal and sets_equal):
+                raise WinterthurCollectorError("FULL_SOURCE count or posting-ID set mismatch")
             run.status = CollectionRun.Status.SUCCEEDED
+            run.snapshot_complete = full_snapshot and counts_equal and sets_equal
             run.finished_at = timezone.now()
             run.save()
             return run
         except Exception as exc:
             run.status = CollectionRun.Status.FAILED
+            run.snapshot_complete = False
             run.finished_at = timezone.now()
-            run.error_message = str(exc)
+            run.error_message = f"posting {current_id}: {exc}"
             run.save()
             raise
 

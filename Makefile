@@ -22,4 +22,4 @@ import-reference-data:
 	python manage.py import_reference_data
 
 collect-winterthur:
-	python manage.py collect_winterthur --acknowledge-automation-review
+	python manage.py collect_winterthur --full-snapshot --acknowledge-automation-review
