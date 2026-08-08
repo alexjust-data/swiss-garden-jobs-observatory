@@ -349,10 +349,32 @@ class DedupReviewItem(models.Model):
         DedupDecision, on_delete=models.PROTECT, related_name="review_item"
     )
     vacancy_a = models.ForeignKey(
-        Vacancy, on_delete=models.PROTECT, related_name="review_items_as_a"
+        Vacancy,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="review_items_as_a",
     )
     vacancy_b = models.ForeignKey(
-        Vacancy, on_delete=models.PROTECT, related_name="review_items_as_b"
+        Vacancy,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="review_items_as_b",
+    )
+    run_vacancy_state_a = models.ForeignKey(
+        "DedupRunVacancyState",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="review_items_as_a",
+    )
+    run_vacancy_state_b = models.ForeignKey(
+        "DedupRunVacancyState",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="review_items_as_b",
     )
     status = models.CharField(max_length=20, choices=Status, default=Status.PENDING)
     resolution_reason = models.TextField(blank=True)
@@ -362,6 +384,14 @@ class DedupReviewItem(models.Model):
 
     class Meta:
         db_table = "dedup_review_item"
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(run_vacancy_state_a__isnull=True)
+                | Q(run_vacancy_state_b__isnull=True)
+                | ~Q(run_vacancy_state_a=F("run_vacancy_state_b")),
+                name="dedup_review_run_states_distinct",
+            )
+        ]
 
 
 class PositionCountEvidence(AppendOnlyEvidence):
@@ -404,7 +434,11 @@ class DedupRunVacancyState(AppendOnlyEvidence):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     dedup_run = models.ForeignKey(DedupRun, on_delete=models.PROTECT, related_name="vacancy_states")
     vacancy_identity = models.ForeignKey(
-        Vacancy, on_delete=models.PROTECT, related_name="run_states"
+        Vacancy,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="run_states",
     )
     run_vacancy_key = models.CharField(max_length=64)
     status = models.CharField(max_length=20, choices=Vacancy.Status)
@@ -478,3 +512,18 @@ class DedupRunPostingAssignment(AppendOnlyEvidence):
                 name="dedup_run_posting_assignment_unique",
             )
         ]
+
+
+class VacancyProjectionState(models.Model):
+    identity_version = models.CharField(max_length=50, unique=True)
+    applied_dedup_run = models.OneToOneField(
+        DedupRun,
+        on_delete=models.PROTECT,
+        related_name="applied_projection",
+    )
+    applied_as_of = models.DateTimeField()
+    input_fingerprint = models.CharField(max_length=64)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vacancy_projection_state"

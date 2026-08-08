@@ -17,6 +17,7 @@ from .models import (
     VacancyLifecycleEvent,
     VacancyMembershipEvent,
     VacancyPostingMembership,
+    VacancyProjectionState,
 )
 
 
@@ -38,6 +39,7 @@ for model in (
     DedupRun,
     DedupRunPostingAssignment,
     DedupRunVacancyState,
+    VacancyProjectionState,
     Vacancy,
     VacancyPostingMembership,
     VacancyMembershipEvent,

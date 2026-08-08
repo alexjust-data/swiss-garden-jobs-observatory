@@ -24,6 +24,7 @@ from vacancies.models import (
     VacancyLifecycleEvent,
     VacancyMembershipEvent,
     VacancyPostingMembership,
+    VacancyProjectionState,
 )
 from vacancies.review import resolve_review
 from vacancies.tests.test_gate008 import Adapter, Clock, Fetcher
@@ -342,3 +343,123 @@ class Gate008PITReconciliationTests(TestCase):
             Posting.LifecycleStatus.STILL_ACTIVE,
         }
         assert vacancy.current_status == Vacancy.Status.CLOSED_OBSERVED
+
+    @staticmethod
+    def operational_payload() -> dict[str, list[tuple[object, ...]]]:
+        return {
+            "vacancies": list(
+                Vacancy.objects.order_by("pk").values_list(
+                    "pk",
+                    "merged_into_id",
+                    "canonical_posting_id",
+                    "current_status",
+                    "first_seen_at",
+                    "last_seen_at",
+                    "closed_observed_at",
+                    "current_episode_number",
+                )
+            ),
+            "memberships": list(
+                VacancyPostingMembership.objects.order_by("pk").values_list(
+                    "pk",
+                    "posting_id",
+                    "vacancy_id",
+                    "canonical_evidence_role",
+                    "link_method",
+                )
+            ),
+            "episodes": list(
+                VacancyEpisode.objects.order_by("pk").values_list(
+                    "pk",
+                    "vacancy_id",
+                    "episode_number",
+                    "status",
+                    "opened_observed_at",
+                    "last_seen_at",
+                    "closed_observed_at",
+                    "positions_count",
+                    "multi_hire_possible",
+                )
+            ),
+        }
+
+    def _assert_historical_review_preserves_current(self, *, merge: bool) -> None:
+        suffix = "MERGE" if merge else "KEEP"
+        source = self.source(f"SRC-HISTORICAL-REVIEW-{suffix}")
+        t1 = datetime(2026, 8, 1, tzinfo=UTC)
+        t2 = t1 + timedelta(days=1)
+        self.collect(source, Adapter("A"), t1)
+        self.collect(source, Adapter("B"), t1)
+        self.collect(source, Adapter("A", requisition="REQ-HISTORICAL"), t2)
+        self.collect(source, Adapter("B", requisition="REQ-HISTORICAL"), t2)
+
+        later_run, _ = run_deduplication(t2)
+        current_at_t2 = self.operational_payload()
+        earlier_run, _ = run_deduplication(t1)
+        review = DedupReviewItem.objects.get(algorithm_decision__dedup_run=earlier_run)
+
+        assert run_summary(later_run)["effective_vacancies"] == 1
+        assert run_summary(earlier_run)["effective_vacancies"] == 2
+        assert review.run_vacancy_state_a.pk != review.run_vacancy_state_b.pk
+        assert self.operational_payload() == current_at_t2
+        watermark = VacancyProjectionState.objects.get(identity_version="dedup-v0.1")
+        assert watermark.applied_dedup_run == later_run
+
+        resolve_review(
+            str(review.pk),
+            merge=merge,
+            reason="Historical evidence-context resolution",
+        )
+        review.refresh_from_db()
+        assert review.status == (
+            DedupReviewItem.Status.MERGED if merge else DedupReviewItem.Status.KEPT_SEPARATE
+        )
+        assert self.operational_payload() == current_at_t2
+        assert run_summary(later_run)["effective_vacancies"] == 1
+        assert run_summary(earlier_run)["effective_vacancies"] == 2
+
+    def test_historical_keep_separate_does_not_rewrite_newer_projection(self) -> None:
+        self._assert_historical_review_preserves_current(merge=False)
+
+    def test_historical_merge_does_not_rewrite_newer_projection(self) -> None:
+        self._assert_historical_review_preserves_current(merge=True)
+
+    def test_reverse_time_run_does_not_move_projection_watermark(self) -> None:
+        source = self.source("SRC-PROJECTION-WATERMARK")
+        t1 = datetime(2026, 8, 3, tzinfo=UTC)
+        t2 = t1 + timedelta(days=1)
+        self.collect(source, Adapter("A"), t1)
+        self.collect(source, Adapter("B"), t1)
+        self.collect(source, Adapter("A", requisition="REQ-WATERMARK"), t2)
+        self.collect(source, Adapter("B", requisition="REQ-WATERMARK"), t2)
+
+        later_run, _ = run_deduplication(t2)
+        current_at_t2 = self.operational_payload()
+        earlier_run, _ = run_deduplication(t1)
+
+        assert run_summary(later_run)["effective_vacancies"] == 1
+        assert run_summary(earlier_run)["effective_vacancies"] == 2
+        assert self.operational_payload() == current_at_t2
+        watermark = VacancyProjectionState.objects.get(identity_version="dedup-v0.1")
+        assert watermark.applied_dedup_run == later_run
+        assert watermark.applied_as_of == t2
+
+    def test_lifecycle_change_does_not_inherit_human_decision(self) -> None:
+        source = self.source("SRC-HUMAN-LIFECYCLE-CHANGE")
+        when = datetime(2026, 8, 5, tzinfo=UTC)
+        self.collect(source, Adapter("A"), when)
+        self.collect(source, Adapter("B"), when)
+        first_run, _ = run_deduplication(when)
+        review = DedupReviewItem.objects.get(algorithm_decision__dedup_run=first_run)
+        human = resolve_review(str(review.pk), merge=False, reason="Initial PIT evidence")
+        first_fingerprint = human.evidence["pair_evidence_fingerprint"]
+
+        later = when + timedelta(days=1)
+        self.collect_empty(source, later)
+        later_run, _ = run_deduplication(later)
+        later_review = DedupReviewItem.objects.get(algorithm_decision__dedup_run=later_run)
+        later_fingerprint = later_review.algorithm_decision.evidence["pair_evidence_fingerprint"]
+
+        assert later_fingerprint != first_fingerprint
+        assert later_run.review_pairs == 1
+        assert later_review.status == DedupReviewItem.Status.PENDING

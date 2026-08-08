@@ -126,9 +126,14 @@ def persist_run_snapshot(
     selected: list[PostingEvidence],
     clusters: RunClusters,
     inherited_decisions: dict[str, DedupDecision] | None = None,
-) -> None:
+) -> dict[str, DedupRunPostingAssignment]:
     if DedupRunVacancyState.objects.filter(dedup_run=run).exists():
-        return
+        return {
+            str(assignment.posting_id): assignment
+            for assignment in DedupRunPostingAssignment.objects.filter(
+                dedup_run=run
+            ).select_related("run_vacancy_state")
+        }
     by_id = {item.posting_id: item for item in selected}
     postings = {
         str(posting.pk): posting
@@ -139,9 +144,13 @@ def persist_run_snapshot(
         group = [by_id[posting_id] for posting_id in posting_ids]
         canonical = _canonical(group)
         canonical_posting = postings[canonical.posting_id]
-        membership = VacancyPostingMembership.objects.select_related("vacancy").get(
-            posting=canonical_posting,
-            identity_version=run.dedup_version,
+        membership = (
+            VacancyPostingMembership.objects.select_related("vacancy")
+            .filter(
+                posting=canonical_posting,
+                identity_version=run.dedup_version,
+            )
+            .first()
         )
         latest_event = (
             canonical.lifecycle_events[-1]["event_type"]
@@ -165,7 +174,7 @@ def persist_run_snapshot(
         positions_count, multi_hire = _position_projection(group, postings)
         state = DedupRunVacancyState.objects.create(
             dedup_run=run,
-            vacancy_identity=membership.vacancy,
+            vacancy_identity=membership.vacancy if membership else None,
             run_vacancy_key=_run_vacancy_key(posting_ids),
             status=status,
             canonical_posting=canonical_posting,
@@ -193,6 +202,12 @@ def persist_run_snapshot(
                 ),
                 decision=decision,
             )
+    return {
+        str(assignment.posting_id): assignment
+        for assignment in DedupRunPostingAssignment.objects.filter(dedup_run=run).select_related(
+            "run_vacancy_state"
+        )
+    }
 
 
 def snapshot_summary(run: DedupRun) -> dict[str, Any]:

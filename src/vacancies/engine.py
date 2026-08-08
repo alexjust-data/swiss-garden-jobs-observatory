@@ -10,7 +10,13 @@ from django.utils import timezone
 
 from observations.models import Posting, PostingLifecycleEvent
 
-from .evidence import PostingEvidence, evidence_snapshot, input_fingerprint, select_posting_evidence
+from .evidence import (
+    PostingEvidence,
+    evidence_snapshot,
+    input_fingerprint,
+    pair_evidence_fingerprint,
+    select_posting_evidence,
+)
 from .models import (
     DedupDecision,
     DedupReviewItem,
@@ -21,6 +27,7 @@ from .models import (
     VacancyLifecycleEvent,
     VacancyMembershipEvent,
     VacancyPostingMembership,
+    VacancyProjectionState,
 )
 from .normalizer import (
     DEDUP_VERSION,
@@ -62,7 +69,9 @@ def qualifies_as_repost(
     return 0 <= gap_days <= REPOST_WINDOW_DAYS and score >= Decimal("0.90")
 
 
-def _prior_human_decision(left: PostingEvidence, right: PostingEvidence) -> DedupDecision | None:
+def _prior_human_decision(
+    left: PostingEvidence, right: PostingEvidence, pair_fingerprint: str
+) -> DedupDecision | None:
     return (
         DedupDecision.objects.filter(
             posting_a_id=left.posting_id,
@@ -71,6 +80,7 @@ def _prior_human_decision(left: PostingEvidence, right: PostingEvidence) -> Dedu
             observation_b_id=right.observation_id,
             dedup_version=DEDUP_VERSION,
             method=DedupDecision.Method.HUMAN,
+            evidence__pair_evidence_fingerprint=pair_fingerprint,
             outcome__in=[
                 DedupDecision.Outcome.MERGE,
                 DedupDecision.Outcome.KEEP_SEPARATE,
@@ -425,13 +435,21 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
         configuration=CONFIGURATION,
         postings_considered=len(selected),
     )
+    watermark = (
+        VacancyProjectionState.objects.select_for_update()
+        .filter(identity_version=dedup_version)
+        .first()
+    )
+    apply_projection = watermark is None or as_of >= watermark.applied_as_of
     memberships: dict[str, VacancyPostingMembership] = {}
     clusters = RunClusters(item.posting_id for item in selected)
     inherited_decisions: dict[str, DedupDecision] = {}
-    for item in selected:
-        membership, created = _create_initial_membership(item, run)
-        memberships[item.posting_id] = membership
-        run.vacancies_created += int(created)
+    pending_reviews: list[tuple[DedupDecision, PostingEvidence, PostingEvidence]] = []
+    if apply_projection:
+        for item in selected:
+            membership, created = _create_initial_membership(item, run)
+            memberships[item.posting_id] = membership
+            run.vacancies_created += int(created)
     for raw_left, raw_right in combinations(selected, 2):
         left, right = canonical_pair(raw_left, raw_right)
         if not is_candidate(left, right):
@@ -443,11 +461,22 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
         if repost_barrier:
             barriers.append(repost_barrier)
         outcome = "KEEP_SEPARATE" if barriers else assessment.outcome
-        prior_human = _prior_human_decision(left, right)
+        pair_fingerprint = pair_evidence_fingerprint(left, right, CONFIGURATION)
+        prior_human = _prior_human_decision(left, right, pair_fingerprint)
         if prior_human:
             inherited_decisions[right.posting_id] = prior_human
             if prior_human.outcome == DedupDecision.Outcome.MERGE:
                 clusters.union(left.posting_id, right.posting_id)
+                if apply_projection:
+                    merge_vacancies(
+                        memberships[left.posting_id],
+                        memberships[right.posting_id],
+                        run,
+                        prior_human,
+                        human=True,
+                    )
+                    memberships[left.posting_id].refresh_from_db()
+                    memberships[right.posting_id].refresh_from_db()
             continue
         decision = DedupDecision.objects.create(
             dedup_run=run,
@@ -464,7 +493,11 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
             weights={key: str(value) for key, value in WEIGHTS.items()},
             blocking_evidence={"hard_keys": assessment.hard_key_evidence},
             hard_barriers=barriers,
-            evidence={"left": evidence_snapshot(left), "right": evidence_snapshot(right)},
+            evidence={
+                "left": evidence_snapshot(left),
+                "right": evidence_snapshot(right),
+                "pair_evidence_fingerprint": pair_fingerprint,
+            },
         )
         if barriers:
             run.hard_barrier_pairs += 1
@@ -473,30 +506,49 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
             clusters.union(left.posting_id, right.posting_id)
             run.hard_key_merges += int(assessment.method == "HARD_KEY")
             run.rule_auto_merges += int(assessment.method == "RULE_SCORE")
-            merge_vacancies(
-                memberships[left.posting_id], memberships[right.posting_id], run, decision
-            )
-            memberships[left.posting_id].refresh_from_db()
-            memberships[right.posting_id].refresh_from_db()
+            if apply_projection:
+                merge_vacancies(
+                    memberships[left.posting_id], memberships[right.posting_id], run, decision
+                )
+                memberships[left.posting_id].refresh_from_db()
+                memberships[right.posting_id].refresh_from_db()
         elif outcome == "REVIEW":
             run.review_pairs += 1
-            DedupReviewItem.objects.get_or_create(
-                algorithm_decision=decision,
-                defaults={
-                    "vacancy_a": memberships[left.posting_id].vacancy,
-                    "vacancy_b": memberships[right.posting_id].vacancy,
-                },
-            )
+            pending_reviews.append((decision, left, right))
         else:
             run.keep_separate_pairs += 1
     evidence_by_posting = {item.posting_id: item for item in selected}
-    effective = Vacancy.objects.filter(identity_version=DEDUP_VERSION, merged_into__isnull=True)
-    for vacancy in effective:
-        run.episodes_created += int(reconcile_effective_vacancy(vacancy, run, evidence_by_posting))
-    persist_run_snapshot(run, selected, clusters, inherited_decisions)
+    if apply_projection:
+        effective = Vacancy.objects.filter(identity_version=DEDUP_VERSION, merged_into__isnull=True)
+        for vacancy in effective:
+            run.episodes_created += int(
+                reconcile_effective_vacancy(vacancy, run, evidence_by_posting)
+            )
+    assignments = persist_run_snapshot(run, selected, clusters, inherited_decisions)
+    for decision, left, right in pending_reviews:
+        left_state = assignments[left.posting_id].run_vacancy_state
+        right_state = assignments[right.posting_id].run_vacancy_state
+        if left_state.pk == right_state.pk:
+            raise ValueError("A REVIEW pair must reference distinct run-scoped vacancies")
+        DedupReviewItem.objects.create(
+            algorithm_decision=decision,
+            vacancy_a=left_state.vacancy_identity,
+            vacancy_b=right_state.vacancy_identity,
+            run_vacancy_state_a=left_state,
+            run_vacancy_state_b=right_state,
+        )
     run.status = DedupRun.Status.SUCCEEDED
     run.finished_at = timezone.now()
     run.save()
+    if apply_projection:
+        VacancyProjectionState.objects.update_or_create(
+            identity_version=dedup_version,
+            defaults={
+                "applied_dedup_run": run,
+                "applied_as_of": as_of,
+                "input_fingerprint": fingerprint,
+            },
+        )
     return run, False
 
 

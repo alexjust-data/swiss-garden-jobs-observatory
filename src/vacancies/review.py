@@ -4,7 +4,12 @@ from django.db import transaction
 from django.utils import timezone
 
 from .engine import merge_vacancies, reconcile_effective_vacancy
-from .models import DedupDecision, DedupReviewItem, VacancyPostingMembership
+from .models import (
+    DedupDecision,
+    DedupReviewItem,
+    VacancyPostingMembership,
+    VacancyProjectionState,
+)
 from .normalizer import DEDUP_VERSION, NORMALIZER_VERSION
 
 
@@ -41,9 +46,21 @@ def resolve_review(review_id: str, *, merge: bool, reason: str) -> DedupDecision
         weights=algorithm.weights,
         blocking_evidence=algorithm.blocking_evidence,
         hard_barriers=algorithm.hard_barriers,
-        evidence={"reason": reason, "algorithm_decision_id": str(algorithm.pk)},
+        evidence={
+            "reason": reason,
+            "algorithm_decision_id": str(algorithm.pk),
+            "pair_evidence_fingerprint": algorithm.evidence.get("pair_evidence_fingerprint"),
+        },
     )
-    if merge:
+    watermark = (
+        VacancyProjectionState.objects.select_for_update()
+        .filter(
+            identity_version=DEDUP_VERSION,
+            applied_dedup_run=algorithm.dedup_run,
+        )
+        .first()
+    )
+    if merge and watermark:
         left = VacancyPostingMembership.objects.select_related("vacancy").get(
             posting=algorithm.posting_a, identity_version=DEDUP_VERSION
         )
@@ -52,9 +69,7 @@ def resolve_review(review_id: str, *, merge: bool, reason: str) -> DedupDecision
         )
         winner = merge_vacancies(left, right, algorithm.dedup_run, human, human=True)
         reconcile_effective_vacancy(winner, algorithm.dedup_run)
-        review.status = DedupReviewItem.Status.MERGED
-    else:
-        review.status = DedupReviewItem.Status.KEPT_SEPARATE
+    review.status = DedupReviewItem.Status.MERGED if merge else DedupReviewItem.Status.KEPT_SEPARATE
     review.resolution_reason = reason
     review.resolved_at = timezone.now()
     review.save(update_fields=["status", "resolution_reason", "resolved_at", "updated_at"])

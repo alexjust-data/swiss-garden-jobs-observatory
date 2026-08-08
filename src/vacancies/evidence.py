@@ -161,6 +161,29 @@ def input_fingerprint(
     return hashlib.sha256(encoded).hexdigest()
 
 
+def pair_evidence_fingerprint(
+    left: PostingEvidence,
+    right: PostingEvidence,
+    configuration: dict[str, Any],
+) -> str:
+    ordered = sorted((left, right), key=lambda item: item.posting_id)
+    payload = {
+        "dedup_version": DEDUP_VERSION,
+        "normalizer_version": NORMALIZER_VERSION,
+        "configuration": configuration,
+        "inputs": [
+            {
+                "posting_id": item.posting_id,
+                "observation_id": item.observation_id,
+                "lifecycle_events": item.lifecycle_events,
+            }
+            for item in ordered
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def evidence_snapshot(item: PostingEvidence) -> dict[str, Any]:
     value = asdict(item)
     value["observed_at"] = item.observed_at.isoformat()
