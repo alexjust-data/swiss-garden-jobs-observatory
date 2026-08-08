@@ -93,7 +93,16 @@ class PostingAdmin(admin.ModelAdmin):
     )
     list_filter = ("current_status", "source")
     search_fields = ("source_posting_id", "latest_canonical_url")
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = tuple(field.name for field in Posting._meta.fields)
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
+    def has_change_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
 
 
 @admin.register(PostingLifecycleEvent)

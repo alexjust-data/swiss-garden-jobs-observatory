@@ -507,6 +507,8 @@ class WinterthurCollector:
         assessed_ids: set[str] = set()
         try:
             listing_page = self.fetcher.fetch(WINTERTHUR_LISTING_URL)
+            run.listing_final_url = listing_page.final_url
+            run.listing_http_status = listing_page.status_code
             run.listing_raw_artifact = self._persist_raw(
                 run=run,
                 kind="listing",

@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from tempfile import TemporaryDirectory
 
 import pytest
+from django.contrib import admin
+from django.http import HttpRequest
 
 from collectors.winterthur import (
     WINTERTHUR_LISTING_URL,
@@ -12,6 +14,7 @@ from collectors.winterthur import (
     WinterthurCollectorError,
 )
 from core.storage import RawObjectStore
+from observations.admin import PostingAdmin
 from observations.contracts import validate_posting_observation_contract
 from observations.models import (
     CollectionRun,
@@ -121,6 +124,9 @@ class TemporalLifecycleTests(WinterthurCollectorTests):
         closing_at = first_negative_at + timedelta(hours=48)
         with TemporaryDirectory() as raw_dir:
             self.run_full(raw_dir, active_at, "8280")
+            latest_active = PostingObservation.objects.get(
+                source_posting_id="8280", observation_status="ACTIVE"
+            )
             pending_run = self.run_full(raw_dir, first_negative_at, "9000")
             posting = Posting.objects.get(source_posting_id="8280")
             assert posting.current_status == Posting.LifecycleStatus.DISAPPEARED_PENDING
@@ -134,6 +140,22 @@ class TemporalLifecycleTests(WinterthurCollectorTests):
             validate_posting_observation_contract(negative.contract_payload)
             assert pending_run.listing_raw_artifact is not None
             assert negative.raw_artifact.pk == pending_run.listing_raw_artifact.pk
+            contract = negative.contract_payload
+            assert contract["source_url"] == pending_run.listing_final_url
+            assert contract["canonical_url"] == negative.canonical_url
+            assert contract["http_status"] == pending_run.listing_http_status
+            assert contract["raw_payload_sha256"] == pending_run.listing_raw_artifact.sha256_digest
+            event = PostingLifecycleEvent.objects.get(posting_observation=negative)
+            assert event.evidence["absence_evidence_type"] == "FULL_SOURCE_LISTING_ABSENCE"
+            assert event.evidence["listing_url"] == pending_run.listing_final_url
+            assert event.evidence["listing_http_status"] == pending_run.listing_http_status
+            assert (
+                event.evidence["listing_raw_sha256"]
+                == pending_run.listing_raw_artifact.sha256_digest
+            )
+            assert event.evidence["previous_active_observation_id"] == str(latest_active.pk)
+            assert event.evidence["source_posting_id"] == "8280"
+            assert event.evidence["listing_total_discovered"] == 1
 
             closing_run = self.run_full(raw_dir, closing_at, "9000")
             posting.refresh_from_db()
@@ -218,6 +240,14 @@ class TemporalLifecycleTests(WinterthurCollectorTests):
             assert run.snapshot_complete is False
             assert posting.current_status == Posting.LifecycleStatus.NEW
             assert PostingObservation.objects.filter(posting=posting).count() == 1
+
+    def test_posting_admin_is_observational_only(self) -> None:
+        model_admin = PostingAdmin(Posting, admin.site)
+        request = HttpRequest()
+        assert set(model_admin.readonly_fields) == {field.name for field in Posting._meta.fields}
+        assert model_admin.has_add_permission(request) is False
+        assert model_admin.has_change_permission(request) is False
+        assert model_admin.has_delete_permission(request) is False
 
     def test_lifecycle_event_is_append_only(self) -> None:
         observed_at = datetime(2026, 8, 8, 8, tzinfo=UTC)

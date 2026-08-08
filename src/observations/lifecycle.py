@@ -72,15 +72,17 @@ def _not_found_contract(
     artifact = run.listing_raw_artifact
     if artifact is None:
         raise ValueError("healthy negative scan requires listing RAW evidence")
+    if not run.listing_final_url or run.listing_http_status is None:
+        raise ValueError("healthy negative scan requires listing HTTP provenance")
     return {
         "schema_version": "1.2",
         "source_id": str(run.source.pk),
         "source_native_id": posting.source_posting_id,
         "observed_at": observed_at.isoformat(),
         "observation_status": "NOT_FOUND",
-        "source_url": latest.canonical_url,
+        "source_url": run.listing_final_url,
         "canonical_url": latest.canonical_url,
-        "http_status": 200,
+        "http_status": run.listing_http_status,
         "raw_title": latest.title,
         "raw_location": None,
         "raw_employer": None,
@@ -169,6 +171,14 @@ def record_healthy_absences(
             source_health_status=CollectionRun.SourceHealthStatus.HEALTHY,
             evidence={
                 "observation_status": "NOT_FOUND",
+                "absence_evidence_type": "FULL_SOURCE_LISTING_ABSENCE",
+                "listing_url": run.listing_final_url,
+                "listing_http_status": run.listing_http_status,
+                "listing_raw_sha256": artifact.sha256_digest,
+                "previous_active_observation_id": str(latest.pk),
+                "source_posting_id": posting.source_posting_id,
+                "listing_total_discovered": run.listing_total_discovered,
+                "raw_title_provenance": "CARRIED_FORWARD_FROM_PREVIOUS_ACTIVE_OBSERVATION",
                 "negative_scan_number": negative_number,
                 "first_negative_at": first_negative.isoformat(),
                 "separation_seconds": separation.total_seconds(),

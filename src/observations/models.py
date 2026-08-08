@@ -127,6 +127,8 @@ class CollectionRun(models.Model):
     )
     source_health_reason = models.TextField(blank=True)
     listing_url = models.URLField(max_length=500)
+    listing_final_url = models.URLField(max_length=500, blank=True)
+    listing_http_status = models.PositiveSmallIntegerField(null=True, blank=True)
     listing_raw_artifact = models.OneToOneField(
         "core.RawArtifact",
         on_delete=models.PROTECT,
