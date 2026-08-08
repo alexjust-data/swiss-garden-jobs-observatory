@@ -121,3 +121,10 @@ Before promotion, every Winterthur detail is transformed into a separate `contra
 ## GATE-004: full Winterthur snapshot and green relevance
 
 `TARGETED` runs require `--posting-id` and are never complete snapshots. `FULL_SOURCE` runs require `--full-snapshot` and become complete only when listing, detail, observation, assessment counts and posting-ID sets are identical. Green relevance is an append-only derivation using frozen taxonomy v0.4, NFKC, casefolding and literal matching; no AI, fuzzy matching or scores are used.
+
+
+## GATE-005: Winterthur temporal lifecycle and source health
+
+A `Posting` is the mutable lifecycle projection for one source-native identity. Immutable `PostingObservation` and `PostingLifecycleEvent` rows remain the audit history. A healthy full-source absence creates `NOT_FOUND`; closure requires two healthy negative scans separated by at least 48 hours. Outages and degraded runs never advance closure.
+
+Run counters distinguish `listing_total_discovered` from `postings_in_scope`. Only `FULL_SOURCE` runs can generate negative lifecycle evidence. No scheduler is included.
