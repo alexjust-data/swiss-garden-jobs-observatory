@@ -3,7 +3,7 @@ from __future__ import annotations
 from django.db import transaction
 from django.utils import timezone
 
-from .engine import merge_vacancies
+from .engine import merge_vacancies, reconcile_effective_vacancy
 from .models import DedupDecision, DedupReviewItem, VacancyPostingMembership
 from .normalizer import DEDUP_VERSION, NORMALIZER_VERSION
 
@@ -50,7 +50,8 @@ def resolve_review(review_id: str, *, merge: bool, reason: str) -> DedupDecision
         right = VacancyPostingMembership.objects.select_related("vacancy").get(
             posting=algorithm.posting_b, identity_version=DEDUP_VERSION
         )
-        merge_vacancies(left, right, algorithm.dedup_run, human, human=True)
+        winner = merge_vacancies(left, right, algorithm.dedup_run, human, human=True)
+        reconcile_effective_vacancy(winner, algorithm.dedup_run)
         review.status = DedupReviewItem.Status.MERGED
     else:
         review.status = DedupReviewItem.Status.KEPT_SEPARATE

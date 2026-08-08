@@ -29,6 +29,7 @@ class PostingEvidence:
     observed_at: datetime
     first_seen_at: datetime
     lifecycle_status: str
+    lifecycle_events: tuple[dict[str, str], ...]
     title: str
     employer: str
     text: str
@@ -73,24 +74,36 @@ def _payload_text(payload: dict[str, Any], contract: dict[str, Any]) -> str:
     return " ".join(values)
 
 
+def _lifecycle_evidence(posting: Posting, as_of: datetime) -> tuple[dict[str, str], ...]:
+    events = PostingLifecycleEvent.objects.filter(posting=posting, observed_at__lte=as_of).order_by(
+        "observed_at", "pk"
+    )
+    return tuple(
+        {
+            "id": str(event.pk),
+            "event_type": event.event_type,
+            "observed_at": event.observed_at.isoformat(),
+        }
+        for event in events
+    )
+
+
 def select_posting_evidence(as_of: datetime) -> list[PostingEvidence]:
     latest_observation = PostingObservation.objects.filter(
-        posting_id=OuterRef("pk"), observed_at__lte=as_of, observation_status="ACTIVE"
+        posting_id=OuterRef("pk"),
+        observed_at__lte=as_of,
+        observation_status="ACTIVE",
     ).order_by("-observed_at", "-pk")
-    posting_ids = (
+    postings = (
         Posting.objects.filter(first_seen_at__lte=as_of)
         .annotate(eligible_observation_id=Subquery(latest_observation.values("id")[:1]))
         .exclude(eligible_observation_id=None)
     )
     result: list[PostingEvidence] = []
-    for posting in posting_ids.select_related("source"):
+    for posting in postings.select_related("source"):
         eligible_observation_id = getattr(posting, "eligible_observation_id")
         observation = PostingObservation.objects.get(pk=eligible_observation_id)
-        lifecycle = (
-            PostingLifecycleEvent.objects.filter(posting=posting, observed_at__lte=as_of)
-            .order_by("-observed_at", "-pk")
-            .first()
-        )
+        lifecycle_events = _lifecycle_evidence(posting, as_of)
         structured = observation.structured_payload or {}
         contract = observation.contract_payload or {}
         requisition, provenance = extract_explicit_requisition(structured)
@@ -102,7 +115,10 @@ def select_posting_evidence(as_of: datetime) -> list[PostingEvidence]:
                 source_posting_id=posting.source_posting_id,
                 observed_at=observation.observed_at,
                 first_seen_at=posting.first_seen_at,
-                lifecycle_status=lifecycle.event_type if lifecycle else posting.current_status,
+                lifecycle_status=(
+                    lifecycle_events[-1]["event_type"] if lifecycle_events else "ACTIVE_OBSERVED"
+                ),
+                lifecycle_events=lifecycle_events,
                 title=observation.title,
                 employer=str(
                     contract.get("raw_employer") or structured.get("hiring_organization") or ""
@@ -123,7 +139,9 @@ def select_posting_evidence(as_of: datetime) -> list[PostingEvidence]:
 
 
 def input_fingerprint(
-    as_of: datetime, configuration: dict[str, Any], evidence: list[PostingEvidence]
+    as_of: datetime,
+    configuration: dict[str, Any],
+    evidence: list[PostingEvidence],
 ) -> str:
     payload = {
         "dedup_version": DEDUP_VERSION,
@@ -131,7 +149,11 @@ def input_fingerprint(
         "as_of": as_of.isoformat(),
         "configuration": configuration,
         "inputs": [
-            {"posting_id": item.posting_id, "observation_id": item.observation_id}
+            {
+                "posting_id": item.posting_id,
+                "observation_id": item.observation_id,
+                "lifecycle_events": item.lifecycle_events,
+            }
             for item in evidence
         ],
     }

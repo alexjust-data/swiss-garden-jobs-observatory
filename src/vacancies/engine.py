@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from datetime import datetime
 from decimal import Decimal
 from itertools import combinations
@@ -33,6 +32,7 @@ from .normalizer import (
 from .positions import extract_position_count
 from .precedence import source_precedence_rank
 from .scoring import WEIGHTS, PairAssessment, assess_pair, is_candidate
+from .snapshots import RunClusters, persist_run_snapshot, snapshot_summary
 
 CONFIGURATION: dict[str, Any] = {
     "weights": {key: str(value) for key, value in WEIGHTS.items()},
@@ -60,6 +60,25 @@ def qualifies_as_repost(
         return True
     gap_days = (reappeared_at - closed_at).total_seconds() / 86400
     return 0 <= gap_days <= REPOST_WINDOW_DAYS and score >= Decimal("0.90")
+
+
+def _prior_human_decision(left: PostingEvidence, right: PostingEvidence) -> DedupDecision | None:
+    return (
+        DedupDecision.objects.filter(
+            posting_a_id=left.posting_id,
+            posting_b_id=right.posting_id,
+            observation_a_id=left.observation_id,
+            observation_b_id=right.observation_id,
+            dedup_version=DEDUP_VERSION,
+            method=DedupDecision.Method.HUMAN,
+            outcome__in=[
+                DedupDecision.Outcome.MERGE,
+                DedupDecision.Outcome.KEEP_SEPARATE,
+            ],
+        )
+        .order_by("-created_at")
+        .first()
+    )
 
 
 def _posting_closed_at(posting_id: str, as_of: datetime) -> datetime | None:
@@ -368,6 +387,20 @@ def _sync_positions(vacancy: Vacancy, evidence_by_posting: dict[str, PostingEvid
     episode.save(update_fields=["positions_count", "multi_hire_possible", "updated_at"])
 
 
+def reconcile_effective_vacancy(
+    vacancy: Vacancy,
+    run: DedupRun,
+    evidence_by_posting: dict[str, PostingEvidence] | None = None,
+) -> bool:
+    evidence = evidence_by_posting or {
+        item.posting_id: item for item in select_posting_evidence(run.as_of)
+    }
+    _canonicalize(vacancy, run)
+    created = _sync_episode(vacancy, run, evidence)
+    _sync_positions(vacancy, evidence)
+    return created
+
+
 @transaction.atomic
 def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tuple[DedupRun, bool]:
     if dedup_version != DEDUP_VERSION:
@@ -393,6 +426,8 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
         postings_considered=len(selected),
     )
     memberships: dict[str, VacancyPostingMembership] = {}
+    clusters = RunClusters(item.posting_id for item in selected)
+    inherited_decisions: dict[str, DedupDecision] = {}
     for item in selected:
         membership, created = _create_initial_membership(item, run)
         memberships[item.posting_id] = membership
@@ -408,6 +443,12 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
         if repost_barrier:
             barriers.append(repost_barrier)
         outcome = "KEEP_SEPARATE" if barriers else assessment.outcome
+        prior_human = _prior_human_decision(left, right)
+        if prior_human:
+            inherited_decisions[right.posting_id] = prior_human
+            if prior_human.outcome == DedupDecision.Outcome.MERGE:
+                clusters.union(left.posting_id, right.posting_id)
+            continue
         decision = DedupDecision.objects.create(
             dedup_run=run,
             posting_a_id=left.posting_id,
@@ -429,6 +470,7 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
             run.hard_barrier_pairs += 1
             run.keep_separate_pairs += 1
         elif outcome == "AUTO_MERGE":
+            clusters.union(left.posting_id, right.posting_id)
             run.hard_key_merges += int(assessment.method == "HARD_KEY")
             run.rule_auto_merges += int(assessment.method == "RULE_SCORE")
             merge_vacancies(
@@ -450,9 +492,8 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
     evidence_by_posting = {item.posting_id: item for item in selected}
     effective = Vacancy.objects.filter(identity_version=DEDUP_VERSION, merged_into__isnull=True)
     for vacancy in effective:
-        _canonicalize(vacancy, run)
-        run.episodes_created += int(_sync_episode(vacancy, run, evidence_by_posting))
-        _sync_positions(vacancy, evidence_by_posting)
+        run.episodes_created += int(reconcile_effective_vacancy(vacancy, run, evidence_by_posting))
+    persist_run_snapshot(run, selected, clusters, inherited_decisions)
     run.status = DedupRun.Status.SUCCEEDED
     run.finished_at = timezone.now()
     run.save()
@@ -460,24 +501,4 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
 
 
 def run_summary(run: DedupRun) -> dict[str, Any]:
-    effective = Vacancy.objects.filter(identity_version=run.dedup_version, merged_into__isnull=True)
-    episodes = VacancyEpisode.objects.filter(vacancy__in=effective)
-    position_counts = Counter(
-        "explicit_numeric"
-        if episode.positions_count
-        else "multi_hire_possible"
-        if episode.multi_hire_possible
-        else "unknown"
-        for episode in episodes
-    )
-    return {
-        "effective_vacancies": effective.count(),
-        "active_vacancies": effective.filter(current_status=Vacancy.Status.ACTIVE).count(),
-        "closed_vacancies": effective.filter(current_status=Vacancy.Status.CLOSED_OBSERVED).count(),
-        "episode_1": episodes.filter(episode_number=1).count(),
-        "reappeared": episodes.filter(episode_number__gt=1).values("vacancy_id").distinct().count(),
-        "position_count": dict(position_counts),
-        "review_queue_size": DedupReviewItem.objects.filter(
-            status=DedupReviewItem.Status.PENDING
-        ).count(),
-    }
+    return snapshot_summary(run)

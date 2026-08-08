@@ -9,6 +9,8 @@ from .models import (
     DedupDecision,
     DedupReviewItem,
     DedupRun,
+    DedupRunPostingAssignment,
+    DedupRunVacancyState,
     PositionCountEvidence,
     Vacancy,
     VacancyEpisode,
@@ -34,6 +36,8 @@ class ReadOnlyAdmin(admin.ModelAdmin):
 
 for model in (
     DedupRun,
+    DedupRunPostingAssignment,
+    DedupRunVacancyState,
     Vacancy,
     VacancyPostingMembership,
     VacancyMembershipEvent,

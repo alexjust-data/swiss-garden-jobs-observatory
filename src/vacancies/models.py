@@ -398,3 +398,83 @@ class PositionCountEvidence(AppendOnlyEvidence):
                 name="position_evidence_count_positive",
             ),
         ]
+
+
+class DedupRunVacancyState(AppendOnlyEvidence):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    dedup_run = models.ForeignKey(DedupRun, on_delete=models.PROTECT, related_name="vacancy_states")
+    vacancy_identity = models.ForeignKey(
+        Vacancy, on_delete=models.PROTECT, related_name="run_states"
+    )
+    run_vacancy_key = models.CharField(max_length=64)
+    status = models.CharField(max_length=20, choices=Vacancy.Status)
+    canonical_posting = models.ForeignKey(
+        "observations.Posting",
+        on_delete=models.PROTECT,
+        related_name="dedup_run_canonical_states",
+    )
+    first_seen_at = models.DateTimeField()
+    last_seen_at = models.DateTimeField()
+    closed_observed_at = models.DateTimeField(null=True, blank=True)
+    episode_number = models.PositiveIntegerField(default=1)
+    positions_count = models.PositiveIntegerField(null=True, blank=True)
+    multi_hire_possible = models.BooleanField(default=False)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "dedup_run_vacancy_state"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dedup_run", "run_vacancy_key"],
+                name="dedup_run_vacancy_key_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(last_seen_at__gte=F("first_seen_at")),
+                name="dedup_run_vacancy_seen_ordered",
+            ),
+            models.CheckConstraint(
+                condition=Q(closed_observed_at__isnull=True)
+                | Q(closed_observed_at__gte=F("first_seen_at")),
+                name="dedup_run_vacancy_closed_ordered",
+            ),
+            models.CheckConstraint(
+                condition=Q(positions_count__isnull=True) | Q(positions_count__gt=0),
+                name="dedup_run_vacancy_positions_positive",
+            ),
+        ]
+
+
+class DedupRunPostingAssignment(AppendOnlyEvidence):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    dedup_run = models.ForeignKey(
+        DedupRun, on_delete=models.PROTECT, related_name="posting_assignments"
+    )
+    posting = models.ForeignKey(
+        "observations.Posting",
+        on_delete=models.PROTECT,
+        related_name="dedup_run_assignments",
+    )
+    run_vacancy_state = models.ForeignKey(
+        DedupRunVacancyState,
+        on_delete=models.PROTECT,
+        related_name="posting_assignments",
+    )
+    membership_role = models.CharField(max_length=12, choices=VacancyPostingMembership.EvidenceRole)
+    link_method = models.CharField(max_length=20, choices=VacancyPostingMembership.LinkMethod)
+    decision = models.ForeignKey(
+        DedupDecision,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="run_assignments",
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "dedup_run_posting_assignment"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dedup_run", "posting"],
+                name="dedup_run_posting_assignment_unique",
+            )
+        ]

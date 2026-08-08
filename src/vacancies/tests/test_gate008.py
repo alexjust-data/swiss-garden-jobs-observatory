@@ -74,6 +74,7 @@ class Adapter:
         location: str = "Winterthur ZH",
         text: str = "Pflege der Gruenanlagen",
         requisition: str | None = None,
+        employment_terms: str | None = None,
     ) -> None:
         self.posting_id = posting_id
         self.title = title
@@ -81,6 +82,7 @@ class Adapter:
         self.location = location
         self.text = text
         self.requisition = requisition
+        self.employment_terms = employment_terms
 
     def initial_listing_request(self, source: Source) -> FetchRequest:
         return FetchRequest(f"https://{source.domain}/list", role="LISTING")
@@ -108,6 +110,8 @@ class Adapter:
         }
         if self.requisition:
             structured["requisition_id"] = self.requisition
+        if self.employment_terms:
+            structured["employment_type"] = self.employment_terms
         return ParsedSourcePosting(
             self.posting_id,
             entry.url,
@@ -154,6 +158,7 @@ def evidence(
         observed_at=now,
         first_seen_at=now,
         lifecycle_status="NEW",
+        lifecycle_events=(),
         title=title,
         employer=employer,
         text=text,
