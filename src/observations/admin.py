@@ -5,9 +5,12 @@ from django.http import HttpRequest
 
 from observations.models import (
     CollectionRun,
+    GeocoderCacheEntry,
+    GeocodingReviewItem,
     GreenRelevanceAssessment,
     Posting,
     PostingLifecycleEvent,
+    PostingLocationResolution,
     PostingObservation,
 )
 
@@ -121,6 +124,86 @@ class PostingLifecycleEventAdmin(admin.ModelAdmin):
         return False
 
     def has_change_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+
+@admin.register(PostingLocationResolution)
+class PostingLocationResolutionAdmin(admin.ModelAdmin):
+    list_display = (
+        "posting_observation",
+        "resolution_status",
+        "municipality",
+        "location_precision",
+        "coordinate_source",
+        "privacy_display_level",
+        "resolver_version",
+        "created_at",
+    )
+    list_filter = (
+        "resolution_status",
+        "location_precision",
+        "coordinate_source",
+        "privacy_display_level",
+        "resolver_version",
+    )
+    readonly_fields = tuple(field.name for field in PostingLocationResolution._meta.fields)
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
+    def has_change_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+
+@admin.register(GeocoderCacheEntry)
+class GeocoderCacheEntryAdmin(admin.ModelAdmin):
+    list_display = (
+        "provider",
+        "provider_version",
+        "request_fingerprint",
+        "http_status",
+        "created_at",
+    )
+    readonly_fields = tuple(field.name for field in GeocoderCacheEntry._meta.fields)
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
+    def has_change_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+
+@admin.register(GeocodingReviewItem)
+class GeocodingReviewItemAdmin(admin.ModelAdmin):
+    list_display = (
+        "posting_observation",
+        "reason",
+        "resolver_version",
+        "review_status",
+        "created_at",
+    )
+    list_filter = ("reason", "resolver_version", "review_status")
+    readonly_fields = (
+        "id",
+        "posting_observation",
+        "location_resolution",
+        "reason",
+        "candidate_evidence",
+        "resolver_version",
+        "created_at",
+        "updated_at",
+    )
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
         return False
 
     def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:

@@ -371,3 +371,265 @@ class PostingLifecycleEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.posting.pk}:{self.event_type}:{self.observed_at.isoformat()}"
+
+
+class ImmutablePostingLocationResolutionError(RuntimeError):
+    pass
+
+
+class ImmutableGeocoderCacheEntryError(RuntimeError):
+    pass
+
+
+class PostingLocationResolutionQuerySet(models.QuerySet["PostingLocationResolution"]):
+    def update(self, **kwargs: Any) -> int:
+        raise ImmutablePostingLocationResolutionError("Location resolution updates are forbidden")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise ImmutablePostingLocationResolutionError("Location resolution deletion is forbidden")
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutablePostingLocationResolutionError("Location bulk updates are forbidden")
+
+
+class PostingLocationResolutionManager(models.Manager["PostingLocationResolution"]):
+    def get_queryset(self) -> PostingLocationResolutionQuerySet:
+        return PostingLocationResolutionQuerySet(self.model, using=self._db)
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutablePostingLocationResolutionError("Location bulk updates are forbidden")
+
+
+class GeocoderCacheEntryQuerySet(models.QuerySet["GeocoderCacheEntry"]):
+    def update(self, **kwargs: Any) -> int:
+        raise ImmutableGeocoderCacheEntryError("Geocoder cache updates are forbidden")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise ImmutableGeocoderCacheEntryError("Geocoder cache deletion is forbidden")
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutableGeocoderCacheEntryError("Geocoder cache bulk updates are forbidden")
+
+
+class GeocoderCacheEntryManager(models.Manager["GeocoderCacheEntry"]):
+    def get_queryset(self) -> GeocoderCacheEntryQuerySet:
+        return GeocoderCacheEntryQuerySet(self.model, using=self._db)
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutableGeocoderCacheEntryError("Geocoder cache bulk updates are forbidden")
+
+
+class GeocoderCacheEntry(models.Model):
+    objects = GeocoderCacheEntryManager()
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.CharField(max_length=50)
+    provider_version = models.CharField(max_length=80)
+    normalized_request = models.JSONField()
+    request_fingerprint = models.CharField(max_length=64)
+    requested_url = models.URLField(max_length=1000)
+    final_url = models.URLField(max_length=1000)
+    http_status = models.PositiveSmallIntegerField()
+    content_type = models.CharField(max_length=255)
+    raw_artifact = models.OneToOneField(
+        "core.RawArtifact", on_delete=models.PROTECT, related_name="geocoder_cache_entry"
+    )
+    response_payload = models.JSONField()
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "geocoder_cache_entry"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "provider_version", "request_fingerprint"],
+                name="geocoder_cache_provider_request_unique",
+            )
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ImmutableGeocoderCacheEntryError("GeocoderCacheEntry is append-only")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ImmutableGeocoderCacheEntryError("GeocoderCacheEntry cannot be deleted")
+
+
+class PostingLocationResolution(models.Model):
+    class ResolutionStatus(models.TextChoices):
+        RESOLVED = "RESOLVED", "Resolved"
+        REVIEW = "REVIEW", "Review"
+        UNRESOLVED = "UNRESOLVED", "Unresolved"
+
+    class LocationPrecision(models.TextChoices):
+        EXACT_WORK_ADDRESS = "EXACT_WORK_ADDRESS", "Exact work address"
+        POSTCODE = "POSTCODE", "Postcode"
+        MUNICIPALITY = "MUNICIPALITY", "Municipality"
+        DISTRICT_OR_REGION = "DISTRICT_OR_REGION", "District or region"
+        CANTON = "CANTON", "Canton"
+        REMOTE_OR_MULTIPLE = "REMOTE_OR_MULTIPLE", "Remote or multiple"
+        UNKNOWN = "UNKNOWN", "Unknown"
+
+    class CoordinateSource(models.TextChoices):
+        SOURCE_STRUCTURED = "SOURCE_STRUCTURED", "Source structured"
+        SOURCE_TEXT_GEOCODED = "SOURCE_TEXT_GEOCODED", "Source text geocoded"
+        SWISSTOPO_SEARCHSERVER = "SWISSTOPO_SEARCHSERVER", "swisstopo SearchServer"
+        BFS_MUNICIPALITY_CENTROID = "BFS_MUNICIPALITY_CENTROID", "BFS centroid"
+        MANUAL_REVIEW = "MANUAL_REVIEW", "Manual review"
+        UNKNOWN = "UNKNOWN", "Unknown"
+
+    class PrivacyDisplayLevel(models.TextChoices):
+        EXACT_ALLOWED = "EXACT_ALLOWED", "Exact allowed"
+        POSTCODE_CENTROID = "POSTCODE_CENTROID", "Postcode centroid"
+        MUNICIPALITY_CENTROID = "MUNICIPALITY_CENTROID", "Municipality centroid"
+        REGION_CENTROID = "REGION_CENTROID", "Region centroid"
+        HIDDEN = "HIDDEN", "Hidden"
+
+    objects = PostingLocationResolutionManager()
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    posting_observation = models.ForeignKey(
+        PostingObservation, on_delete=models.PROTECT, related_name="location_resolutions"
+    )
+    resolver_version = models.CharField(max_length=80)
+    privacy_context = models.CharField(
+        max_length=32,
+        choices=[
+            ("PUBLIC_OR_NON_RESIDENTIAL", "Public or non-residential"),
+            ("PRIVATE_RESIDENCE", "Private residence"),
+            (
+                "CONFIDENTIAL_PRIVATE_RESIDENCE",
+                "Confidential private residence",
+            ),
+        ],
+        default="PUBLIC_OR_NON_RESIDENTIAL",
+    )
+    resolution_status = models.CharField(max_length=12, choices=ResolutionStatus)
+    municipality = models.ForeignKey(
+        "reference_data.Municipality",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="posting_location_resolutions",
+    )
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    location_precision = models.CharField(max_length=24, choices=LocationPrecision)
+    coordinate_source = models.CharField(max_length=30, choices=CoordinateSource)
+    geocoding_confidence = models.FloatField(null=True, blank=True)
+    privacy_display_level = models.CharField(max_length=24, choices=PrivacyDisplayLevel)
+    public_display_latitude = models.FloatField(null=True, blank=True)
+    public_display_longitude = models.FloatField(null=True, blank=True)
+    input_fingerprint = models.CharField(max_length=64)
+    evidence = models.JSONField(default=dict)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "posting_location_resolution"
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "posting_observation",
+                    "resolver_version",
+                    "privacy_context",
+                ],
+                name="location_resolution_observation_version_privacy_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(latitude__isnull=True) | (Q(latitude__gte=-90) & Q(latitude__lte=90)),
+                name="location_resolution_latitude_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(longitude__isnull=True)
+                | (Q(longitude__gte=-180) & Q(longitude__lte=180)),
+                name="location_resolution_longitude_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(public_display_latitude__isnull=True)
+                | (Q(public_display_latitude__gte=-90) & Q(public_display_latitude__lte=90)),
+                name="location_resolution_public_lat_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(public_display_longitude__isnull=True)
+                | (Q(public_display_longitude__gte=-180) & Q(public_display_longitude__lte=180)),
+                name="location_resolution_public_lon_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(geocoding_confidence__isnull=True)
+                | (Q(geocoding_confidence__gte=0) & Q(geocoding_confidence__lte=1)),
+                name="location_resolution_confidence_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(latitude__isnull=True, longitude__isnull=True)
+                    | Q(latitude__isnull=False, longitude__isnull=False)
+                ),
+                name="location_resolution_coordinate_pair",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        public_display_latitude__isnull=True,
+                        public_display_longitude__isnull=True,
+                    )
+                    | Q(
+                        public_display_latitude__isnull=False,
+                        public_display_longitude__isnull=False,
+                    )
+                ),
+                name="location_resolution_public_coordinate_pair",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    ~Q(privacy_display_level="HIDDEN")
+                    | Q(
+                        public_display_latitude__isnull=True,
+                        public_display_longitude__isnull=True,
+                    )
+                ),
+                name="location_resolution_hidden_has_no_coordinates",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["resolver_version", "resolution_status"]),
+            models.Index(fields=["municipality", "location_precision"]),
+            models.Index(fields=["input_fingerprint"]),
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ImmutablePostingLocationResolutionError(
+                "PostingLocationResolution is append-only"
+            )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ImmutablePostingLocationResolutionError("PostingLocationResolution cannot be deleted")
+
+
+class GeocodingReviewItem(models.Model):
+    class ReviewStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        RESOLVED = "RESOLVED", "Resolved"
+        DISMISSED = "DISMISSED", "Dismissed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    posting_observation = models.ForeignKey(
+        PostingObservation, on_delete=models.PROTECT, related_name="geocoding_reviews"
+    )
+    location_resolution = models.OneToOneField(
+        PostingLocationResolution, on_delete=models.PROTECT, related_name="review_item"
+    )
+    reason = models.CharField(max_length=80)
+    candidate_evidence = models.JSONField(default=list)
+    resolver_version = models.CharField(max_length=80)
+    review_status = models.CharField(
+        max_length=12, choices=ReviewStatus, default=ReviewStatus.PENDING
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "geocoding_review_item"
+        indexes = [
+            models.Index(fields=["review_status", "resolver_version"]),
+            models.Index(fields=["reason"]),
+        ]
