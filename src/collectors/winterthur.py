@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from html.parser import HTMLParser
@@ -23,6 +24,11 @@ from observations.green_relevance import (
     CLASSIFIER_VERSION,
     TAXONOMY_VERSION,
     GreenRelevanceClassifier,
+)
+from observations.lifecycle import (
+    get_or_create_posting,
+    record_active,
+    record_healthy_absences,
 )
 from observations.models import CollectionRun, GreenRelevanceAssessment, PostingObservation
 from reference_data.models import Municipality
@@ -452,6 +458,7 @@ class WinterthurCollector:
         fetcher: PageFetcher | None = None,
         raw_store: RawObjectStore | None = None,
         delay_seconds: float = 1.0,
+        clock: Callable[[], datetime] = timezone.now,
     ) -> None:
         if delay_seconds < 0:
             raise ValueError("delay_seconds must be nonnegative")
@@ -459,6 +466,7 @@ class WinterthurCollector:
         self.raw_store = raw_store or RawObjectStore(settings.CORE_RAW_OBJECT_STORE_PATH)
         self.delay_seconds = delay_seconds
         self.classifier = GreenRelevanceClassifier()
+        self.clock = clock
 
     def collect(
         self,
@@ -483,13 +491,17 @@ class WinterthurCollector:
         municipality = Municipality.objects.get(bfs_code=WINTERTHUR_BFS_CODE)
         if municipality.municipality_name != "Winterthur" or municipality.canton_code != "ZH":
             raise WinterthurGovernanceError("BFS 230 must resolve to Winterthur in canton ZH")
+        started_at = self.clock()
         scope = (
             CollectionRun.RunScope.FULL_SOURCE if full_snapshot else CollectionRun.RunScope.TARGETED
         )
         run = CollectionRun.objects.create(
-            source=source, listing_url=WINTERTHUR_LISTING_URL, run_scope=scope
+            source=source,
+            listing_url=WINTERTHUR_LISTING_URL,
+            run_scope=scope,
+            started_at=started_at,
         )
-        current_id = "listing"
+        current_id, stage = "listing", "listing"
         discovered_ids: set[str] = set()
         observed_ids: set[str] = set()
         assessed_ids: set[str] = set()
@@ -500,12 +512,15 @@ class WinterthurCollector:
                 kind="listing",
                 identifier="current",
                 page=listing_page,
-                observed_at=run.started_at,
+                observed_at=started_at,
             )
-            entries = parse_listing(listing_page.body)
+            all_entries = parse_listing(listing_page.body)
+            all_ids = {entry.source_posting_id for entry in all_entries}
+            run.listings_discovered = len(all_ids)
+            run.listing_total_discovered = len(all_ids)
+            entries = all_entries
             if posting_ids is not None:
-                available = {entry.source_posting_id for entry in entries}
-                missing = posting_ids - available
+                missing = posting_ids - all_ids
                 if missing:
                     raise WinterthurCollectorError(
                         f"requested postings are not active in the listing: {sorted(missing)}"
@@ -514,12 +529,13 @@ class WinterthurCollector:
             if limit is not None:
                 entries = entries[:limit]
             discovered_ids = {entry.source_posting_id for entry in entries}
-            run.listings_discovered = len(discovered_ids)
+            run.postings_in_scope = len(discovered_ids)
+            stage = "details"
             for index, entry in enumerate(entries):
                 current_id = entry.source_posting_id
                 if index and self.delay_seconds:
                     time.sleep(self.delay_seconds)
-                observed_at = timezone.now()
+                observed_at = self.clock()
                 page = self.fetcher.fetch(entry.url)
                 artifact = self._persist_raw(
                     run=run,
@@ -543,9 +559,17 @@ class WinterthurCollector:
                 )
                 validate_posting_observation_contract(contract)
                 with transaction.atomic():
+                    posting, posting_created = get_or_create_posting(
+                        source=source,
+                        source_posting_id=parsed.source_posting_id,
+                        observed_at=observed_at,
+                        canonical_url=parsed.canonical_url,
+                    )
                     observation = PostingObservation.objects.create(
                         collection_run=run,
+                        posting=posting,
                         source=source,
+                        observation_status="ACTIVE",
                         source_posting_id=parsed.source_posting_id,
                         observed_at=observed_at,
                         canonical_url=parsed.canonical_url,
@@ -580,12 +604,19 @@ class WinterthurCollector:
                         matched_exclusion_terms=decision.matched_exclusion_terms,
                         evidence=decision.evidence,
                     )
+                    record_active(
+                        posting=posting,
+                        observation=observation,
+                        run=run,
+                        observed_at=observed_at,
+                        created=posting_created,
+                    )
                 observed_ids.add(current_id)
                 assessed_ids.add(current_id)
                 run.observations_created += 1
                 run.green_assessments_created += 1
             counts_equal = (
-                run.listings_discovered
+                run.postings_in_scope
                 == run.details_fetched
                 == run.observations_created
                 == run.green_assessments_created
@@ -593,15 +624,30 @@ class WinterthurCollector:
             sets_equal = discovered_ids == observed_ids == assessed_ids
             if full_snapshot and not (counts_equal and sets_equal):
                 raise WinterthurCollectorError("FULL_SOURCE count or posting-ID set mismatch")
+            run.source_health_status = CollectionRun.SourceHealthStatus.HEALTHY
+            run.source_health_reason = "COMPLETE_VALIDATED_SCOPE"
+            if full_snapshot:
+                stage = "lifecycle"
+                with transaction.atomic():
+                    run.save()
+                    run.negative_observations_created = record_healthy_absences(
+                        run=run, active_ids=discovered_ids, observed_at=self.clock()
+                    )
             run.status = CollectionRun.Status.SUCCEEDED
             run.snapshot_complete = full_snapshot and counts_equal and sets_equal
-            run.finished_at = timezone.now()
+            run.finished_at = self.clock()
             run.save()
             return run
         except Exception as exc:
             run.status = CollectionRun.Status.FAILED
             run.snapshot_complete = False
-            run.finished_at = timezone.now()
+            run.source_health_status = (
+                CollectionRun.SourceHealthStatus.OUTAGE
+                if stage == "listing"
+                else CollectionRun.SourceHealthStatus.DEGRADED
+            )
+            run.source_health_reason = f"{stage.upper()}_FAILURE"
+            run.finished_at = self.clock()
             run.error_message = f"posting {current_id}: {exc}"
             run.save()
             raise
