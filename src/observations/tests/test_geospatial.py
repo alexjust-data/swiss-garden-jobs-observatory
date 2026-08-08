@@ -16,6 +16,7 @@ from observations.geospatial import (
     GeocoderFetchedResponse,
     GeospatialResolutionError,
     GeospatialResolver,
+    LocationPrivacyContext,
     validate_coordinates,
 )
 from observations.models import (
@@ -66,9 +67,11 @@ class FakeClient:
     def __init__(self, body: bytes | None = None) -> None:
         self.body = body or payload()
         self.calls = 0
+        self.requests: list[dict[str, object]] = []
 
     def fetch(self, request: dict[str, object]) -> GeocoderFetchedResponse:
         self.calls += 1
+        self.requests.append(request)
         url = "https://api3.geo.admin.ch/rest/services/api/SearchServer?type=locations"
         return GeocoderFetchedResponse(url, url, 200, "application/json", self.body)
 
@@ -256,14 +259,63 @@ class Gate006Tests(TestCase):
         assert future.resolve(first).pk != resolution.pk
         assert PostingLocationResolution.objects.count() == 3
 
-    def test_private_exact_coordinate_is_never_public(self) -> None:
-        private = self.make_source("SRC-PRIVATE-TEST", "PRIVATE_HOUSEHOLD_DIRECT")
-        resolution = self.resolver(FakeClient()).resolve(
-            self.observation(
-                "private", source=private, street="Confidential residence", geo=(47.5, 8.7)
-            )
+    def test_privacy_context_not_source_type_controls_public_coordinates(self) -> None:
+        ordinary_source = self.make_source("SRC-PRIVACY-CONTEXT", "DIRECT_PUBLIC_EMPLOYER")
+        public_observation = self.observation(
+            "public-exact",
+            source=ordinary_source,
+            street="Public worksite",
+            geo=(47.5, 8.7),
         )
-        assert (resolution.latitude, resolution.longitude) == (47.5, 8.7)
+        public_resolution = self.resolver(FakeClient()).resolve(
+            public_observation,
+            LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL,
+        )
+        assert public_resolution.public_display_latitude == 47.5
+        assert public_resolution.public_display_longitude == 8.7
+
+        conceptual_cases = (
+            ("PRIVATE_ESTATE_DIRECT", LocationPrivacyContext.PRIVATE_RESIDENCE),
+            (
+                "PRIVATE_HOUSEHOLD_DIRECT",
+                LocationPrivacyContext.CONFIDENTIAL_PRIVATE_RESIDENCE,
+            ),
+        )
+        for index, (conceptual_fixture, privacy_context) in enumerate(conceptual_cases):
+            observation = self.observation(
+                f"protected-{index}",
+                source=ordinary_source,
+                street="Confidential residence",
+                geo=(47.51 + index / 100, 8.71 + index / 100),
+            )
+            resolution = self.resolver(FakeClient()).resolve(
+                observation,
+                privacy_context,
+            )
+            assert ordinary_source.source_type == "DIRECT_PUBLIC_EMPLOYER"
+            assert conceptual_fixture not in ordinary_source.source_type
+            assert resolution.latitude is not None
+            assert resolution.public_display_latitude is None
+            assert resolution.public_display_longitude is None
+            assert resolution.privacy_display_level == "HIDDEN"
+            assert resolution.evidence["privacy"]["context"] == privacy_context.value
+            assert resolution.evidence["privacy"]["policy_version"] == "location-privacy-v0.1"
+
+    def test_protected_request_and_review_evidence_do_not_copy_street(self) -> None:
+        street = "Confidentialstrasse 12"
+        client = FakeClient(payload("Zurich", "8000"))
+        observation = self.observation("protected-review", street=street)
+        resolution = self.resolver(client).resolve(
+            observation,
+            LocationPrivacyContext.PRIVATE_RESIDENCE,
+        )
+        assert client.calls == 1
+        assert street not in str(client.requests[0])
+        assert client.requests[0]["searchText"] == "Winterthur ZH"
+        assert client.requests[0]["origins"] == "gg25"
+        review = GeocodingReviewItem.objects.get(location_resolution=resolution)
+        assert street not in json.dumps(review.candidate_evidence)
+        assert street not in json.dumps(resolution.evidence["geocoder"])
         assert resolution.public_display_latitude is None
         assert resolution.public_display_longitude is None
         assert resolution.privacy_display_level == "HIDDEN"
@@ -291,3 +343,46 @@ class Gate006Tests(TestCase):
         assert observation.structured_payload == structured
         assert observation.contract_payload == contract
         assert self.store.read_bytes(observation.raw_artifact.object_key) == raw
+
+    def test_database_rejects_half_pairs_and_hidden_public_coordinates(self) -> None:
+        observation = self.observation("coordinate-pairs")
+        base = {
+            "posting_observation": observation,
+            "resolution_status": "RESOLVED",
+            "municipality": self.municipality,
+            "location_precision": "MUNICIPALITY",
+            "coordinate_source": "MANUAL_REVIEW",
+            "geocoding_confidence": None,
+            "privacy_display_level": "EXACT_ALLOWED",
+            "input_fingerprint": "b" * 64,
+        }
+        invalid_values: tuple[dict[str, object], ...] = (
+            {"latitude": 47.5, "longitude": None},
+            {"latitude": None, "longitude": 8.7},
+            {
+                "latitude": None,
+                "longitude": None,
+                "public_display_latitude": 47.5,
+                "public_display_longitude": None,
+            },
+            {
+                "latitude": None,
+                "longitude": None,
+                "public_display_latitude": None,
+                "public_display_longitude": 8.7,
+            },
+            {
+                "latitude": 47.5,
+                "longitude": 8.7,
+                "public_display_latitude": 47.5,
+                "public_display_longitude": 8.7,
+                "privacy_display_level": "HIDDEN",
+            },
+        )
+        for index, values in enumerate(invalid_values):
+            fields = {**base, **values}
+            with pytest.raises(IntegrityError), transaction.atomic():
+                PostingLocationResolution.objects.create(
+                    resolver_version=f"invalid-coordinate-pair-{index}",
+                    **fields,
+                )

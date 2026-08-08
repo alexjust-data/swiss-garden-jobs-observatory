@@ -541,6 +541,36 @@ class PostingLocationResolution(models.Model):
                 | (Q(geocoding_confidence__gte=0) & Q(geocoding_confidence__lte=1)),
                 name="location_resolution_confidence_valid",
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(latitude__isnull=True, longitude__isnull=True)
+                    | Q(latitude__isnull=False, longitude__isnull=False)
+                ),
+                name="location_resolution_coordinate_pair",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        public_display_latitude__isnull=True,
+                        public_display_longitude__isnull=True,
+                    )
+                    | Q(
+                        public_display_latitude__isnull=False,
+                        public_display_longitude__isnull=False,
+                    )
+                ),
+                name="location_resolution_public_coordinate_pair",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    ~Q(privacy_display_level="HIDDEN")
+                    | Q(
+                        public_display_latitude__isnull=True,
+                        public_display_longitude__isnull=True,
+                    )
+                ),
+                name="location_resolution_hidden_has_no_coordinates",
+            ),
         ]
         indexes = [
             models.Index(fields=["resolver_version", "resolution_status"]),

@@ -5,6 +5,7 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from enum import StrEnum
 from html import unescape
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -31,7 +32,15 @@ HOST = "api3.geo.admin.ch"
 ENDPOINT = "https://api3.geo.admin.ch/rest/services/api/SearchServer"
 USER_AGENT = "SwissGardenJobsObservatory/0.1 (+https://github.com/alexjust-data/swiss-garden-jobs-observatory)"
 MAX_RESPONSE_BYTES = 1024 * 1024
-PROTECTED_SOURCE_TYPES = {"PRIVATE_ESTATE_DIRECT", "PRIVATE_HOUSEHOLD_DIRECT"}
+PRIVACY_POLICY_VERSION = "location-privacy-v0.1"
+
+
+class LocationPrivacyContext(StrEnum):
+    PUBLIC_OR_NON_RESIDENTIAL = "PUBLIC_OR_NON_RESIDENTIAL"
+    PRIVATE_RESIDENCE = "PRIVATE_RESIDENCE"
+    CONFIDENTIAL_PRIVATE_RESIDENCE = "CONFIDENTIAL_PRIVATE_RESIDENCE"
+
+
 MULTIPLE_MARKERS = (
     "diverse standorte",
     "mehrere standorte",
@@ -115,7 +124,8 @@ def validate_url(url: str) -> None:
 
 def build_url(request: dict[str, object]) -> str:
     required = {"geometryFormat", "lang", "limit", "searchText", "sr", "type"}
-    if set(request) != required:
+    allowed = required | {"origins"}
+    if not required.issubset(request) or not set(request).issubset(allowed):
         raise GeospatialResolutionError("unexpected SearchServer request parameters")
     url = f"{ENDPOINT}?{urlencode(sorted((key, str(value)) for key, value in request.items()))}"
     validate_url(url)
@@ -251,12 +261,20 @@ def multiple(observation: PostingObservation) -> bool:
     return ";" in value or any(marker in value for marker in MULTIPLE_MARKERS)
 
 
-def normalized_request(observation: PostingObservation) -> dict[str, object] | None:
+def normalized_request(
+    observation: PostingObservation,
+    privacy_context: LocationPrivacyContext,
+) -> dict[str, object] | None:
     locality = observation.location_locality.strip() or observation.municipality.municipality_name
     postcode = observation.location_postal_code.strip()
     street = observation.location_street.strip()
     region = observation.location_region.strip() or observation.municipality.canton_code
-    if street and not multiple(observation):
+    protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
+    origins = None
+    if protected and locality:
+        query = f"{locality} {region}".strip()
+        origins = "gg25"
+    elif street and not multiple(observation):
         query = " ".join(x for x in (street, postcode, locality) if x)
     elif postcode and locality:
         query = f"{postcode} {locality}"
@@ -266,7 +284,7 @@ def normalized_request(observation: PostingObservation) -> dict[str, object] | N
         query = region
     else:
         return None
-    return {
+    request: dict[str, object] = {
         "geometryFormat": "geojson",
         "lang": "de",
         "limit": 10,
@@ -274,6 +292,29 @@ def normalized_request(observation: PostingObservation) -> dict[str, object] | N
         "sr": 4326,
         "type": "locations",
     }
+    if origins is not None:
+        request["origins"] = origins
+    return request
+
+
+def review_candidate_evidence(
+    items: list[Candidate],
+    privacy_context: LocationPrivacyContext,
+) -> list[dict[str, Any]]:
+    if privacy_context == LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL:
+        return [item.raw for item in items]
+    return [
+        {
+            "origin": item.origin,
+            "municipality": item.municipality,
+            "canton": item.canton,
+            "country": item.country,
+            "postcode": item.postcode,
+            "latitude": item.latitude,
+            "longitude": item.longitude,
+        }
+        for item in items
+    ]
 
 
 class GeospatialResolver:
@@ -288,7 +329,13 @@ class GeospatialResolver:
         self.resolver_version = resolver_version
         self.stats = ResolutionStats()
 
-    def resolve(self, observation: PostingObservation) -> PostingLocationResolution:
+    def resolve(
+        self,
+        observation: PostingObservation,
+        privacy_context: LocationPrivacyContext = (
+            LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
+        ),
+    ) -> PostingLocationResolution:
         self.stats.observations_considered += 1
         existing = PostingLocationResolution.objects.filter(
             posting_observation=observation, resolver_version=self.resolver_version
@@ -299,7 +346,6 @@ class GeospatialResolver:
         input_value = {
             "resolver": self.resolver_version,
             "source": str(observation.source.pk),
-            "source_type": observation.source.source_type,
             "bfs": observation.municipality.pk,
             "municipality": observation.municipality.municipality_name,
             "canton": observation.municipality.canton_code,
@@ -311,7 +357,11 @@ class GeospatialResolver:
             "jobLocation": observation.structured_payload.get("jobLocation"),
         }
         input_fingerprint = fingerprint(input_value)
-        evidence: dict[str, Any] = {"input": input_value, "input_fingerprint": input_fingerprint}
+        evidence: dict[str, Any] = {
+            "input": input_value,
+            "input_fingerprint": input_fingerprint,
+            "_privacy_context": privacy_context.value,
+        }
         country = observation.location_country.strip().upper()
         if country and country != "CH":
             return self.persist(
@@ -360,7 +410,7 @@ class GeospatialResolver:
                 coordinates[1],
                 evidence,
             )
-        request = normalized_request(observation)
+        request = normalized_request(observation, privacy_context)
         if not request:
             return self.persist(
                 observation,
@@ -407,7 +457,7 @@ class GeospatialResolver:
                 None,
                 evidence,
                 reason,
-                [item.raw for item in found],
+                review_candidate_evidence(found, privacy_context),
             )
         if len({(item.latitude, item.longitude) for item in matches}) > 1:
             return self.persist(
@@ -420,7 +470,7 @@ class GeospatialResolver:
                 None,
                 evidence,
                 "MULTIPLE_PLAUSIBLE_RESULTS",
-                [item.raw for item in matches],
+                review_candidate_evidence(matches, privacy_context),
             )
         selected = matches[0]
         precision = (
@@ -432,7 +482,7 @@ class GeospatialResolver:
                 else ("POSTCODE" if postcode else "MUNICIPALITY")
             )
         )
-        evidence["selected_candidate"] = selected.raw
+        evidence["selected_candidate"] = review_candidate_evidence([selected], privacy_context)[0]
         return self.persist(
             observation,
             input_fingerprint,
@@ -513,11 +563,13 @@ class GeospatialResolver:
             raise GeospatialResolutionError("coordinates must be present together")
         if latitude is not None and longitude is not None:
             validate_coordinates(latitude, longitude)
-        protected = observation.source.source_type in PROTECTED_SOURCE_TYPES
-        hidden = protected and latitude is not None
+        privacy_context = LocationPrivacyContext(evidence.pop("_privacy_context"))
+        protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
+        hidden = protected
         privacy = "HIDDEN" if hidden else "EXACT_ALLOWED"
         evidence["privacy"] = {
-            "protected_residence": protected,
+            "context": privacy_context.value,
+            "policy_version": PRIVACY_POLICY_VERSION,
             "generalized": hidden,
             "display_level": privacy,
         }
