@@ -301,6 +301,46 @@ class Gate006Tests(TestCase):
             assert resolution.evidence["privacy"]["context"] == privacy_context.value
             assert resolution.evidence["privacy"]["policy_version"] == "location-privacy-v0.1"
 
+    def test_privacy_context_is_part_of_append_only_resolution_identity(self) -> None:
+        observation = self.observation(
+            "privacy-transition",
+            street="Residence",
+            geo=(47.5, 8.7),
+        )
+        resolver = self.resolver(FakeClient())
+        public_resolution = resolver.resolve(
+            observation,
+            LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL,
+        )
+        private_resolution = resolver.resolve(
+            observation,
+            LocationPrivacyContext.PRIVATE_RESIDENCE,
+        )
+        private_again = resolver.resolve(
+            observation,
+            LocationPrivacyContext.PRIVATE_RESIDENCE,
+        )
+
+        assert public_resolution.pk != private_resolution.pk
+        assert public_resolution.privacy_context == "PUBLIC_OR_NON_RESIDENTIAL"
+        assert public_resolution.public_display_latitude == 47.5
+        assert public_resolution.public_display_longitude == 8.7
+        assert private_resolution.privacy_context == "PRIVATE_RESIDENCE"
+        assert private_resolution.privacy_display_level == "HIDDEN"
+        assert private_resolution.public_display_latitude is None
+        assert private_resolution.public_display_longitude is None
+        assert private_again.pk == private_resolution.pk
+        assert (
+            PostingLocationResolution.objects.filter(
+                posting_observation=observation,
+                resolver_version="geospatial-v0.1",
+            ).count()
+            == 2
+        )
+        public_resolution.refresh_from_db()
+        assert public_resolution.public_display_latitude == 47.5
+        assert public_resolution.public_display_longitude == 8.7
+
     def test_protected_request_and_review_evidence_do_not_copy_street(self) -> None:
         street = "Confidentialstrasse 12"
         client = FakeClient(payload("Zurich", "8000"))
@@ -314,8 +354,13 @@ class Gate006Tests(TestCase):
         assert client.requests[0]["searchText"] == "Winterthur ZH"
         assert client.requests[0]["origins"] == "gg25"
         review = GeocodingReviewItem.objects.get(location_resolution=resolution)
+        assert street not in json.dumps(resolution.evidence)
         assert street not in json.dumps(review.candidate_evidence)
-        assert street not in json.dumps(resolution.evidence["geocoder"])
+        assert street not in str(client.requests)
+        cache = GeocoderCacheEntry.objects.get()
+        assert street not in json.dumps(cache.normalized_request)
+        assert street not in cache.requested_url
+        assert street not in cache.final_url
         assert resolution.public_display_latitude is None
         assert resolution.public_display_longitude is None
         assert resolution.privacy_display_level == "HIDDEN"

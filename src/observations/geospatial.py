@@ -338,24 +338,39 @@ class GeospatialResolver:
     ) -> PostingLocationResolution:
         self.stats.observations_considered += 1
         existing = PostingLocationResolution.objects.filter(
-            posting_observation=observation, resolver_version=self.resolver_version
+            posting_observation=observation,
+            resolver_version=self.resolver_version,
+            privacy_context=privacy_context.value,
         ).first()
         if existing:
             self.stats.already_resolved += 1
             return existing
-        input_value = {
-            "resolver": self.resolver_version,
-            "source": str(observation.source.pk),
-            "bfs": observation.municipality.pk,
-            "municipality": observation.municipality.municipality_name,
-            "canton": observation.municipality.canton_code,
-            "street": observation.location_street,
-            "locality": observation.location_locality,
-            "region": observation.location_region,
-            "postcode": observation.location_postal_code,
-            "country": observation.location_country,
-            "jobLocation": observation.structured_payload.get("jobLocation"),
-        }
+        protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
+        if protected:
+            input_value = {
+                "resolver": self.resolver_version,
+                "privacy_context": privacy_context.value,
+                "source": str(observation.source.pk),
+                "bfs": observation.municipality.pk,
+                "municipality": observation.municipality.municipality_name,
+                "canton": observation.municipality.canton_code,
+                "country": observation.location_country,
+            }
+        else:
+            input_value = {
+                "resolver": self.resolver_version,
+                "privacy_context": privacy_context.value,
+                "source": str(observation.source.pk),
+                "bfs": observation.municipality.pk,
+                "municipality": observation.municipality.municipality_name,
+                "canton": observation.municipality.canton_code,
+                "street": observation.location_street,
+                "locality": observation.location_locality,
+                "region": observation.location_region,
+                "postcode": observation.location_postal_code,
+                "country": observation.location_country,
+                "jobLocation": observation.structured_payload.get("jobLocation"),
+            }
         input_fingerprint = fingerprint(input_value)
         evidence: dict[str, Any] = {
             "input": input_value,
@@ -577,6 +592,7 @@ class GeospatialResolver:
             resolution = PostingLocationResolution.objects.create(
                 posting_observation=observation,
                 resolver_version=self.resolver_version,
+                privacy_context=privacy_context.value,
                 resolution_status=status,
                 municipality=observation.municipality,
                 latitude=latitude,

@@ -490,6 +490,18 @@ class PostingLocationResolution(models.Model):
         PostingObservation, on_delete=models.PROTECT, related_name="location_resolutions"
     )
     resolver_version = models.CharField(max_length=80)
+    privacy_context = models.CharField(
+        max_length=32,
+        choices=[
+            ("PUBLIC_OR_NON_RESIDENTIAL", "Public or non-residential"),
+            ("PRIVATE_RESIDENCE", "Private residence"),
+            (
+                "CONFIDENTIAL_PRIVATE_RESIDENCE",
+                "Confidential private residence",
+            ),
+        ],
+        default="PUBLIC_OR_NON_RESIDENTIAL",
+    )
     resolution_status = models.CharField(max_length=12, choices=ResolutionStatus)
     municipality = models.ForeignKey(
         "reference_data.Municipality",
@@ -514,8 +526,12 @@ class PostingLocationResolution(models.Model):
         db_table = "posting_location_resolution"
         constraints = [
             models.UniqueConstraint(
-                fields=["posting_observation", "resolver_version"],
-                name="location_resolution_observation_version_unique",
+                fields=[
+                    "posting_observation",
+                    "resolver_version",
+                    "privacy_context",
+                ],
+                name="location_resolution_observation_version_privacy_unique",
             ),
             models.CheckConstraint(
                 condition=Q(latitude__isnull=True) | (Q(latitude__gte=-90) & Q(latitude__lte=90)),
