@@ -84,6 +84,7 @@ class RexxAdapter:
         values["published_at_parse_method"] = (
             "STRUCTURED_DATA" if parsed.published_at_raw else "MISSING"
         )
+        values["contract_raw_text"] = parsed.description_html
         return ParsedSourcePosting(**values)
 
 
@@ -262,7 +263,7 @@ class ZurichCitySuccessFactorsLinkedAdapter:
             location_country="CH",
             structured_payload=structured,
             published_at_precision="EXACT_DATE" if posted else "UNKNOWN",
-            published_at_parse_method="STRUCTURED_DATA" if posted else "MISSING",
+            published_at_parse_method="SOURCE_FIELD" if posted else "MISSING",
         )
 
 

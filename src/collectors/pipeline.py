@@ -80,6 +80,16 @@ def resolve_municipality(parsed: ParsedSourcePosting) -> Municipality | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def publication_confidence(parsed: ParsedSourcePosting) -> float | None:
+    if not parsed.published_at_raw:
+        return None
+    if parsed.published_at_precision == "EXACT_DATE":
+        return 1.0 if parsed.date_posted is not None else None
+    if parsed.published_at_precision in {"EXACT_DATETIME", "RELATIVE_RESOLVED"}:
+        return 1.0 if parsed.source_published_at is not None else None
+    return None
+
+
 def build_contract_payload(
     *,
     parsed: ParsedSourcePosting,
@@ -98,7 +108,7 @@ def build_contract_payload(
             "canton_code": municipality.canton_code,
             "location_precision": "MUNICIPALITY",
         }
-    raw_text = "\n".join(
+    combined_text = "\n".join(
         part
         for part in (
             parsed.description_html,
@@ -108,6 +118,7 @@ def build_contract_payload(
         )
         if part
     )
+    raw_text = parsed.contract_raw_text if parsed.contract_raw_text is not None else combined_text
     return {
         "schema_version": "1.2",
         "source_id": str(source.pk),
@@ -131,7 +142,7 @@ def build_contract_payload(
         else None,
         "published_at_precision": parsed.published_at_precision,
         "published_at_parse_method": parsed.published_at_parse_method,
-        "published_at_confidence": 1.0 if parsed.published_at_raw else None,
+        "published_at_confidence": publication_confidence(parsed),
         "collector_run_id": str(run.pk),
         "source_health_status": "HEALTHY",
         "normalized_location": normalized,
@@ -148,7 +159,6 @@ class SharedCollectionPipeline:
         raw_store: RawObjectStore | None = None,
         delay_seconds: float = 1.0,
         clock: Callable[[], datetime] = timezone.now,
-        contract_builder: Callable[..., dict[str, object]] = build_contract_payload,
     ) -> None:
         if delay_seconds < 0:
             raise ValueError("delay_seconds must be nonnegative")
@@ -161,7 +171,6 @@ class SharedCollectionPipeline:
         self.raw_store = raw_store or RawObjectStore(settings.CORE_RAW_OBJECT_STORE_PATH)
         self.delay_seconds = delay_seconds
         self.clock = clock
-        self.contract_builder = contract_builder
         self.classifier = GreenRelevanceClassifier()
 
     def _fetch(self, request: FetchRequest) -> FetchedPage:
@@ -284,7 +293,7 @@ class SharedCollectionPipeline:
                 if parsed.source_posting_id != current_id:
                     raise CollectionPipelineError("adapter changed source posting identity")
                 municipality = resolve_municipality(parsed)
-                contract = self.contract_builder(
+                contract = build_contract_payload(
                     parsed=parsed,
                     page=page,
                     raw_artifact=artifact,

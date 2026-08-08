@@ -12,7 +12,6 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from django.utils import timezone
 
-from core.models import RawArtifact
 from core.storage import RawObjectStore
 from observations.contracts import PostingObservationContractError
 from observations.models import CollectionRun
@@ -396,46 +395,6 @@ def parse_detail(body: bytes, *, requested_url: str, expected_posting_id: str) -
     )
 
 
-def build_contract_payload(
-    *,
-    parsed: ParsedPosting,
-    page: FetchedPage,
-    raw_artifact: RawArtifact,
-    source: Source,
-    municipality: Municipality,
-    run: CollectionRun,
-    observed_at: datetime,
-) -> dict[str, object]:
-    return {
-        "schema_version": "1.2",
-        "source_id": str(source.pk),
-        "source_native_id": parsed.source_posting_id,
-        "observed_at": observed_at.isoformat(),
-        "observation_status": "ACTIVE",
-        "source_url": page.requested_url,
-        "canonical_url": parsed.canonical_url,
-        "http_status": page.status_code,
-        "raw_title": parsed.title,
-        "raw_location": parsed.raw_location,
-        "raw_employer": parsed.hiring_organization,
-        "raw_text": parsed.description_html,
-        "raw_payload_sha256": raw_artifact.sha256_digest,
-        "published_at_raw": parsed.published_at_raw,
-        "source_published_at": None,
-        "published_at_precision": "EXACT_DATE" if parsed.published_at_raw else "UNKNOWN",
-        "published_at_parse_method": ("STRUCTURED_DATA" if parsed.published_at_raw else "MISSING"),
-        "published_at_confidence": 1.0 if parsed.published_at_raw else None,
-        "collector_run_id": str(run.pk),
-        "source_health_status": "HEALTHY",
-        "normalized_location": {
-            "bfs_code": municipality.pk,
-            "municipality": municipality.municipality_name,
-            "canton_code": municipality.canton_code,
-            "location_precision": "MUNICIPALITY",
-        },
-    }
-
-
 class WinterthurCollector:
     def __init__(
         self,
@@ -476,7 +435,6 @@ class WinterthurCollector:
                 raw_store=self.raw_store,
                 delay_seconds=self.delay_seconds,
                 clock=self.clock,
-                contract_builder=build_contract_payload,
             ).collect(
                 posting_ids=posting_ids,
                 limit=limit,

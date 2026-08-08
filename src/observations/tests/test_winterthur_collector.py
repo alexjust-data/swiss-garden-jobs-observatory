@@ -207,7 +207,7 @@ class WinterthurCollectorTests(TestCase):
                 delay_seconds=0,
             )
             with (
-                patch("collectors.winterthur.build_contract_payload", return_value={}),
+                patch("collectors.pipeline.build_contract_payload", return_value={}),
                 pytest.raises(PostingObservationContractError, match="validation failed"),
             ):
                 collector.collect(posting_ids={"8280"}, acknowledge_automation_review=True)

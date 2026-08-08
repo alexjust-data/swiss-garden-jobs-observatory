@@ -4,6 +4,8 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from django.utils import timezone
+
 from collectors.platforms import FetchedPage, FetchRequest
 from sources.models import Source, SourceEndpoint
 
@@ -124,7 +126,7 @@ def ensure_default_endpoints(source: Source) -> None:
         ),
     }
     for role, family, host, base_url in definitions.get(str(source.pk), ()):
-        SourceEndpoint.objects.get_or_create(
+        endpoint, _ = SourceEndpoint.objects.get_or_create(
             source=source,
             endpoint_role=role,
             base_url=base_url,
@@ -133,8 +135,18 @@ def ensure_default_endpoints(source: Source) -> None:
                 "scheme": "https",
                 "host": host,
                 "enabled": True,
+                "verified_at": timezone.now(),
                 "evidence": {
-                    "decision": "docs/decisions/0003-gate-007-incremental-platform-reuse.md"
+                    "decision": "docs/decisions/0003-gate-007-incremental-platform-reuse.md",
+                    "verification": "GATE-007 live technical reconnaissance",
                 },
             },
         )
+        if endpoint.verified_at is None:
+            SourceEndpoint.objects.filter(pk=endpoint.pk, verified_at__isnull=True).update(
+                verified_at=timezone.now(),
+                evidence={
+                    "decision": "docs/decisions/0003-gate-007-incremental-platform-reuse.md",
+                    "verification": "GATE-007 live technical reconnaissance",
+                },
+            )

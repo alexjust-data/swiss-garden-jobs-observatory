@@ -76,6 +76,7 @@ class ParsedSourcePosting:
     source_updated_at: datetime | None = None
     published_at_precision: str = "UNKNOWN"
     published_at_parse_method: str = "MISSING"
+    contract_raw_text: str | None = None
 
 
 class PlatformAdapter(Protocol):

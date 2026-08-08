@@ -1,15 +1,26 @@
 from __future__ import annotations
 
+import inspect
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from tempfile import TemporaryDirectory
+from urllib.request import Request
 
 import pytest
 from django.test import TestCase
 
 from collectors.adapters import RexxAdapter, ZurichCitySuccessFactorsLinkedAdapter, get_adapter
-from collectors.governed_http import GovernedHttpError, validate_authorized_url
-from collectors.pipeline import CollectionPipelineError, SharedCollectionPipeline
+from collectors.governed_http import (
+    GovernedHttpError,
+    _AuthorizedRedirectHandler,
+    ensure_default_endpoints,
+    validate_authorized_url,
+)
+from collectors.pipeline import (
+    CollectionPipelineError,
+    SharedCollectionPipeline,
+    publication_confidence,
+)
 from collectors.platforms import (
     FetchedPage,
     FetchRequest,
@@ -18,15 +29,20 @@ from collectors.platforms import (
     ParsedSourcePosting,
     UnsupportedPlatformError,
 )
+from core.hashing import sha256_hex
+from core.models import RawArtifact
 from core.storage import RawObjectStore
 from observations.geospatial import GeospatialResolver
+from observations.lifecycle import record_healthy_absences
 from observations.models import (
     CollectionRun,
     CollectionRunFetch,
     GreenRelevanceAssessment,
     Posting,
+    PostingLifecycleEvent,
     PostingObservation,
 )
+from observations.tests.test_winterthur_collector import detail_payload
 from sources.models import Source, SourceEndpoint
 
 
@@ -233,8 +249,46 @@ class Gate007Tests(TestCase):
         assert resolution.resolution_status == "UNRESOLVED" and resolution.municipality is None
 
     def test_adapters_emit_common_dto_without_database_writes(self) -> None:
-        before = PostingObservation.objects.count()
-        assert RexxAdapter().platform_family == "REXX_SYSTEMS"
+        before_counts = (
+            PostingObservation.objects.count(),
+            Posting.objects.count(),
+            GreenRelevanceAssessment.objects.count(),
+            PostingLifecycleEvent.objects.count(),
+        )
+        rexx = RexxAdapter()
+        rexx_source = Source(
+            source_id="SRC-OFF-CITY-WINTERTHUR",
+            source_name="Winterthur",
+            platform_family="REXX_SYSTEMS",
+        )
+        rexx_request = rexx.initial_listing_request(rexx_source)
+        rexx_listing_body = b'<a href="https://jobs.winterthur.ch/?yid=8280">Gardener</a>'
+        rexx_listing = rexx.parse_listing_page(
+            FetchedPage(
+                rexx_request.url,
+                rexx_request.url,
+                200,
+                "text/html",
+                rexx_listing_body,
+            ),
+            rexx_request,
+            rexx_source,
+        )
+        rexx_entry = rexx_listing.entries[0]
+        parsed_rexx = rexx.parse_detail(
+            FetchedPage(
+                rexx_entry.url,
+                rexx_entry.url,
+                200,
+                "text/html",
+                detail_payload(),
+            ),
+            rexx_entry,
+            rexx_source,
+        )
+        assert isinstance(parsed_rexx, ParsedSourcePosting)
+        assert parsed_rexx.source_posting_id == "8280"
+        assert parsed_rexx.published_at_parse_method == "STRUCTURED_DATA"
         adapter = ZurichCitySuccessFactorsLinkedAdapter()
         source = Source(
             source_id="SRC-OFF-CITY-ZURICH",
@@ -281,4 +335,158 @@ class Gate007Tests(TestCase):
             and parsed.date_posted == datetime(2026, 8, 7).date()
         )
         assert parsed.structured_payload["successfactors_requisition_id"] == "49697"
-        assert PostingObservation.objects.count() == before
+        assert parsed.published_at_parse_method == "SOURCE_FIELD"
+        after_counts = (
+            PostingObservation.objects.count(),
+            Posting.objects.count(),
+            GreenRelevanceAssessment.objects.count(),
+            PostingLifecycleEvent.objects.count(),
+        )
+        assert after_counts == before_counts
+
+    def test_pipeline_has_one_non_replaceable_production_contract_builder(self) -> None:
+        parameters = inspect.signature(SharedCollectionPipeline.__init__).parameters
+        assert "contract_builder" not in parameters
+        import collectors.winterthur as winterthur_module
+
+        assert not hasattr(winterthur_module, "build_contract_payload")
+
+    def test_unparsed_publication_evidence_has_no_confidence(self) -> None:
+        parsed = ParsedSourcePosting(
+            "bad-date",
+            "https://example.test/jobs/bad-date",
+            "Role",
+            "not a valid date",
+            None,
+            None,
+            "",
+            "Employer",
+            "Text",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "CH",
+            {},
+            published_at_precision="UNKNOWN",
+            published_at_parse_method="MISSING",
+        )
+        assert publication_confidence(parsed) is None
+
+    def test_endpoint_verification_provenance_is_populated_once(self) -> None:
+        source = Source.objects.create(
+            source_id="SRC-OFF-CITY-WINTERTHUR",
+            source_name="Winterthur",
+            domain="jobs.winterthur.ch",
+            source_family="OFFICIAL",
+            source_type="DIRECT_PUBLIC_EMPLOYER",
+            priority="P0",
+            coverage_scope="Winterthur",
+            canonicality="CANONICAL",
+            platform_family="REXX_SYSTEMS",
+            access_method="WEB",
+            automation_status="COLLECTOR_CANDIDATE",
+            legal_review_status="APPROVED",
+            verification_status="VERIFIED",
+            official_url="https://jobs.winterthur.ch/",
+        )
+        ensure_default_endpoints(source)
+        endpoint = SourceEndpoint.objects.filter(source=source).first()
+        assert endpoint is not None and endpoint.verified_at is not None
+        first_verified_at = endpoint.verified_at
+        assert endpoint.evidence["verification"] == "GATE-007 live technical reconnaissance"
+        ensure_default_endpoints(source)
+        endpoint.refresh_from_db()
+        assert endpoint.verified_at == first_verified_at
+
+    def test_unauthorized_redirect_is_blocked_before_following(self) -> None:
+        handler = _AuthorizedRedirectHandler(self.source)
+        request = Request("https://example.test/path")
+        with pytest.raises(GovernedHttpError):
+            handler.redirect_request(
+                request,
+                None,
+                302,
+                "Found",
+                {},
+                "https://unauthorized.example/path",
+            )
+        with pytest.raises(GovernedHttpError):
+            validate_authorized_url(self.source, "https://user:secret@example.test/path")
+
+    def test_healthy_absence_is_lifecycle_isolated_by_source(self) -> None:
+        now = Clock()()
+        with TemporaryDirectory() as raw:
+            active_run = self.pipeline(raw, SyntheticAdapter()).collect(posting_ids={"123"})
+        source_a_posting = Posting.objects.get(source=self.source, source_posting_id="123")
+        source_b = Source.objects.create(
+            source_id="SRC-LIFECYCLE-B",
+            source_name="Lifecycle B",
+            domain="source-b.test",
+            source_family="OFFICIAL",
+            source_type="DIRECT_PUBLIC_EMPLOYER",
+            priority="P0",
+            coverage_scope="test",
+            canonicality="CANONICAL",
+            platform_family="TEST_PLATFORM",
+            access_method="WEB",
+            automation_status="COLLECTOR_CANDIDATE",
+            legal_review_status="APPROVED",
+            verification_status="VERIFIED",
+            official_url="https://source-b.test/",
+        )
+        source_b_posting = Posting.objects.create(
+            source=source_b,
+            source_posting_id="123",
+            first_seen_at=now,
+            last_seen_at=now,
+            latest_canonical_url="https://source-b.test/jobs/123",
+        )
+        before = (
+            source_b_posting.first_negative_at,
+            source_b_posting.last_negative_at,
+            source_b_posting.negative_scan_count,
+            source_b_posting.closed_observed_at,
+            source_b_posting.current_status,
+        )
+        listing_body = b"empty healthy source-a listing"
+        artifact = RawArtifact.objects.create(
+            object_key="tests/gate007/source-a-empty-listing",
+            sha256_digest=sha256_hex(listing_body),
+            byte_size=len(listing_body),
+            content_type="text/html",
+        )
+        absence_run = CollectionRun.objects.create(
+            source=self.source,
+            run_scope=CollectionRun.RunScope.FULL_SOURCE,
+            source_health_status=CollectionRun.SourceHealthStatus.HEALTHY,
+            listing_url="https://example.test/list/empty",
+            listing_final_url="https://example.test/list/empty",
+            listing_http_status=200,
+            listing_raw_artifact=artifact,
+            listing_total_discovered=0,
+        )
+        assert (
+            record_healthy_absences(
+                run=absence_run,
+                active_ids=set(),
+                observed_at=now + timedelta(days=1),
+            )
+            == 1
+        )
+        source_a_posting.refresh_from_db()
+        source_b_posting.refresh_from_db()
+        assert source_a_posting.current_status == Posting.LifecycleStatus.DISAPPEARED_PENDING
+        after = (
+            source_b_posting.first_negative_at,
+            source_b_posting.last_negative_at,
+            source_b_posting.negative_scan_count,
+            source_b_posting.closed_observed_at,
+            source_b_posting.current_status,
+        )
+        assert after == before
+        assert active_run.source.pk == self.source.pk
