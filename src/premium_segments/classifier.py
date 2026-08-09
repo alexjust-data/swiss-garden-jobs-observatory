@@ -185,16 +185,16 @@ class PremiumSegmentClassifier:
         employer_evidence: tuple[EmployerEvidenceInput, ...] = (),
         inference_evidence: str = "",
     ) -> PremiumDecision:
-        if green_result != GreenRelevanceAssessment.Result.GREEN_CONFIRMED:
+        if green_result != GreenRelevanceAssessment.Result.GREEN_CONFIRMED.value:
             return PremiumDecision(
-                PremiumSegmentAssessment.Segment.UNKNOWN,
-                PremiumSegmentAssessment.Status.SKIPPED_NOT_GREEN,
+                PremiumSegmentAssessment.Segment.UNKNOWN.value,
+                PremiumSegmentAssessment.Status.SKIPPED_NOT_GREEN.value,
                 "GREEN_RELEVANCE_GATE",
-                PremiumSegmentAssessment.EvidenceStrength.NONE,
+                PremiumSegmentAssessment.EvidenceStrength.NONE.value,
                 (),
                 (),
                 ("GREEN_CONFIRMED_REQUIRED",),
-                PremiumSegmentAssessment.PrivacyContext.PUBLIC_OR_NON_RESIDENTIAL,
+                PremiumSegmentAssessment.PrivacyContext.PUBLIC_OR_NON_RESIDENTIAL.value,
             )
         surfaces = {
             "TITLE": normalize_for_matching(title),
@@ -228,14 +228,14 @@ class PremiumSegmentClassifier:
         weak = ids & WEAK_PRIVATE
         qualified = ids & QUALIFIED_PREMIUM_REVIEW
         auxiliary = ids & (DESIGN_AUXILIARY | HOUSEHOLD_REQUIREMENT)
-        public = PremiumSegmentAssessment.PrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
-        private = PremiumSegmentAssessment.PrivacyContext.PRIVATE_RESIDENCE
+        public = PremiumSegmentAssessment.PrivacyContext.PUBLIC_OR_NON_RESIDENTIAL.value
+        private = PremiumSegmentAssessment.PrivacyContext.PRIVATE_RESIDENCE.value
         if premium and (estate or roles):
             return PremiumDecision(
-                PremiumSegmentAssessment.Segment.UNKNOWN,
-                PremiumSegmentAssessment.Status.REVIEW,
+                PremiumSegmentAssessment.Segment.UNKNOWN.value,
+                PremiumSegmentAssessment.Status.REVIEW.value,
                 "CONFLICTING_EXPLICIT_SEGMENTS",
-                PremiumSegmentAssessment.EvidenceStrength.STRONG,
+                PremiumSegmentAssessment.EvidenceStrength.STRONG.value,
                 tuple(matches),
                 tuple(prohibited),
                 ("PREMIUM_AND_ESTATE_CONFLICT",),
@@ -243,12 +243,12 @@ class PremiumSegmentClassifier:
             )
         if estate or roles:
             return PremiumDecision(
-                PremiumSegmentAssessment.Segment.PRIVATE_ESTATE_DIRECT,
-                PremiumSegmentAssessment.Status.CLASSIFIED,
+                PremiumSegmentAssessment.Segment.PRIVATE_ESTATE_DIRECT.value,
+                PremiumSegmentAssessment.Status.CLASSIFIED.value,
                 "EXPLICIT_ESTATE_SIGNAL" if estate else "GREEN_CORROBORATED_ESTATE_ROLE",
-                PremiumSegmentAssessment.EvidenceStrength.STRONG
+                PremiumSegmentAssessment.EvidenceStrength.STRONG.value
                 if estate
-                else PremiumSegmentAssessment.EvidenceStrength.MODERATE,
+                else PremiumSegmentAssessment.EvidenceStrength.MODERATE.value,
                 tuple(matches),
                 tuple(prohibited),
                 ("PRIVATE_ESTATE_EVIDENCE",),
@@ -260,12 +260,12 @@ class PremiumSegmentClassifier:
                 for match in matches
             )
             return PremiumDecision(
-                PremiumSegmentAssessment.Segment.PRIVATE_RESIDENTIAL_PREMIUM,
-                PremiumSegmentAssessment.Status.CLASSIFIED,
+                PremiumSegmentAssessment.Segment.PRIVATE_RESIDENTIAL_PREMIUM.value,
+                PremiumSegmentAssessment.Status.CLASSIFIED.value,
                 "EMPLOYER_PROFILE_SIGNAL" if matched_profile else "EXPLICIT_JOB_SIGNAL",
-                PremiumSegmentAssessment.EvidenceStrength.MODERATE
+                PremiumSegmentAssessment.EvidenceStrength.MODERATE.value
                 if matched_profile
-                else PremiumSegmentAssessment.EvidenceStrength.STRONG,
+                else PremiumSegmentAssessment.EvidenceStrength.STRONG.value,
                 tuple(matches),
                 tuple(prohibited),
                 ("EXPLICIT_PREMIUM_EVIDENCE",),
@@ -273,10 +273,10 @@ class PremiumSegmentClassifier:
             )
         if qualified:
             return PremiumDecision(
-                PremiumSegmentAssessment.Segment.UNKNOWN,
-                PremiumSegmentAssessment.Status.REVIEW,
+                PremiumSegmentAssessment.Segment.UNKNOWN.value,
+                PremiumSegmentAssessment.Status.REVIEW.value,
                 "QUALIFIED_PREMIUM_SIGNAL",
-                PremiumSegmentAssessment.EvidenceStrength.MODERATE,
+                PremiumSegmentAssessment.EvidenceStrength.MODERATE.value,
                 tuple(matches),
                 tuple(prohibited),
                 ("P004_REQUIRES_CORROBORATION",),
@@ -284,10 +284,10 @@ class PremiumSegmentClassifier:
             )
         if weak:
             return PremiumDecision(
-                PremiumSegmentAssessment.Segment.PRIVATE_RESIDENTIAL_STANDARD,
-                PremiumSegmentAssessment.Status.CLASSIFIED,
+                PremiumSegmentAssessment.Segment.PRIVATE_RESIDENTIAL_STANDARD.value,
+                PremiumSegmentAssessment.Status.CLASSIFIED.value,
                 "WEAK_PRIVATE_SIGNAL",
-                PremiumSegmentAssessment.EvidenceStrength.WEAK,
+                PremiumSegmentAssessment.EvidenceStrength.WEAK.value,
                 tuple(matches),
                 tuple(prohibited),
                 ("PRIVATE_NON_PREMIUM_EVIDENCE",),
@@ -297,10 +297,10 @@ class PremiumSegmentClassifier:
         if prohibited and not matches:
             reason = "PROHIBITED_INFERENCE_ONLY"
         return PremiumDecision(
-            PremiumSegmentAssessment.Segment.UNKNOWN,
-            PremiumSegmentAssessment.Status.NO_SUFFICIENT_EVIDENCE,
+            PremiumSegmentAssessment.Segment.UNKNOWN.value,
+            PremiumSegmentAssessment.Status.NO_SUFFICIENT_EVIDENCE.value,
             "NO_AUTOMATIC_CLASSIFICATION",
-            PremiumSegmentAssessment.EvidenceStrength.NONE,
+            PremiumSegmentAssessment.EvidenceStrength.NONE.value,
             tuple(matches),
             tuple(prohibited),
             (reason,),
@@ -462,25 +462,26 @@ def run_classification(
         observations_considered=len(inputs),
         green_confirmed_eligible=sum(
             item.green_assessment is not None
-            and item.green_assessment.result == GreenRelevanceAssessment.Result.GREEN_CONFIRMED
+            and item.green_assessment.result
+            == GreenRelevanceAssessment.Result.GREEN_CONFIRMED.value
             for item in inputs
         ),
-        classified_count=statuses[PremiumSegmentAssessment.Status.CLASSIFIED],
-        review_count=statuses[PremiumSegmentAssessment.Status.REVIEW],
+        classified_count=statuses[PremiumSegmentAssessment.Status.CLASSIFIED.value],
+        review_count=statuses[PremiumSegmentAssessment.Status.REVIEW.value],
         no_sufficient_evidence_count=statuses[
-            PremiumSegmentAssessment.Status.NO_SUFFICIENT_EVIDENCE
+            PremiumSegmentAssessment.Status.NO_SUFFICIENT_EVIDENCE.value
         ],
-        skipped_not_green_count=statuses[PremiumSegmentAssessment.Status.SKIPPED_NOT_GREEN],
+        skipped_not_green_count=statuses[PremiumSegmentAssessment.Status.SKIPPED_NOT_GREEN.value],
         private_residential_standard_count=segments[
-            PremiumSegmentAssessment.Segment.PRIVATE_RESIDENTIAL_STANDARD
+            PremiumSegmentAssessment.Segment.PRIVATE_RESIDENTIAL_STANDARD.value
         ],
         private_residential_premium_count=segments[
-            PremiumSegmentAssessment.Segment.PRIVATE_RESIDENTIAL_PREMIUM
+            PremiumSegmentAssessment.Segment.PRIVATE_RESIDENTIAL_PREMIUM.value
         ],
         private_estate_direct_count=segments[
-            PremiumSegmentAssessment.Segment.PRIVATE_ESTATE_DIRECT
+            PremiumSegmentAssessment.Segment.PRIVATE_ESTATE_DIRECT.value
         ],
-        unknown_count=segments[PremiumSegmentAssessment.Segment.UNKNOWN],
+        unknown_count=segments[PremiumSegmentAssessment.Segment.UNKNOWN.value],
         prohibited_inference_only_count=sum(
             "PROHIBITED_INFERENCE_ONLY" in decision.reason_codes for decision in decisions
         ),
@@ -512,7 +513,7 @@ def run_classification(
             privacy_context=decision.privacy_context,
             evidence=_evidence(item, decision, normalizer_version),
         )
-        if decision.status == PremiumSegmentAssessment.Status.REVIEW:
+        if decision.status == PremiumSegmentAssessment.Status.REVIEW.value:
             PremiumSegmentReviewItem.objects.create(
                 assessment=assessment,
                 reason=decision.reason_codes[0],
