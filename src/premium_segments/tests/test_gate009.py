@@ -29,7 +29,7 @@ from premium_segments.models import (
 from reference_data.models import PremiumSignal
 from sources.models import Source
 
-GREEN = GreenRelevanceAssessment.Result.GREEN_CONFIRMED.value
+GREEN = "GREEN_CONFIRMED"
 
 
 class PremiumClassifierRulesTests(TestCase):
