@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     "reference_data",
     "observations",
     "vacancies.apps.VacanciesConfig",
+    "premium_segments.apps.PremiumSegmentsConfig",
 ]
 
 MIDDLEWARE = [
