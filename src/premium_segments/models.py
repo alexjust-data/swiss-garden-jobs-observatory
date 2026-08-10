@@ -3,13 +3,21 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 
 class ImmutablePremiumEvidenceError(RuntimeError):
     pass
+
+
+SHA256_VALIDATOR = RegexValidator(
+    regex=r"^[0-9a-f]{64}$",
+    message="value must be a lowercase 64-character SHA-256 digest",
+)
 
 
 class PremiumEvidenceQuerySet(models.QuerySet[Any]):
@@ -40,6 +48,7 @@ class AppendOnlyPremiumEvidence(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         if not self._state.adding:
             raise ImmutablePremiumEvidenceError("premium evidence is append-only")
+        self.full_clean()
         super().save(*args, **kwargs)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
@@ -48,19 +57,43 @@ class AppendOnlyPremiumEvidence(models.Model):
 
 class EmployerProfileEvidence(AppendOnlyPremiumEvidence):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    source = models.ForeignKey(
+        "sources.Source", on_delete=models.PROTECT, related_name="premium_employer_evidence"
+    )
+    employer_identity_key = models.CharField(max_length=200)
     employer_name = models.CharField(max_length=300)
     evidence_text = models.TextField()
     evidence_type = models.CharField(max_length=50)
     source_url = models.URLField(max_length=1000, blank=True)
     available_at = models.DateTimeField()
-    raw_sha256 = models.CharField(max_length=64)
+    raw_sha256 = models.CharField(max_length=64, validators=[SHA256_VALIDATOR])
     evidence_version = models.CharField(max_length=50)
     provenance = models.JSONField(default=dict)
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
         db_table = "premium_employer_profile_evidence"
-        indexes = [models.Index(fields=["employer_name", "available_at"])]
+        indexes = [models.Index(fields=["source", "employer_identity_key", "available_at"])]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(raw_sha256__regex=r"^[0-9a-f]{64}$"),
+                name="premium_profile_raw_sha256_valid",
+            ),
+            models.CheckConstraint(
+                condition=~Q(employer_identity_key=""),
+                name="premium_profile_identity_key_nonempty",
+            ),
+            models.UniqueConstraint(
+                fields=[
+                    "source",
+                    "employer_identity_key",
+                    "available_at",
+                    "raw_sha256",
+                    "evidence_version",
+                ],
+                name="premium_profile_material_evidence_unique",
+            ),
+        ]
 
 
 class PremiumSegmentRun(AppendOnlyPremiumEvidence):
@@ -73,9 +106,9 @@ class PremiumSegmentRun(AppendOnlyPremiumEvidence):
     classifier_version = models.CharField(max_length=80)
     normalizer_version = models.CharField(max_length=80)
     taxonomy_version = models.CharField(max_length=80)
-    taxonomy_sha256 = models.CharField(max_length=64)
+    taxonomy_sha256 = models.CharField(max_length=64, validators=[SHA256_VALIDATOR])
     configuration = models.JSONField(default=dict)
-    input_fingerprint = models.CharField(max_length=64)
+    input_fingerprint = models.CharField(max_length=64, validators=[SHA256_VALIDATOR])
     observations_considered = models.PositiveIntegerField(default=0)
     green_confirmed_eligible = models.PositiveIntegerField(default=0)
     classified_count = models.PositiveIntegerField(default=0)
@@ -104,7 +137,37 @@ class PremiumSegmentRun(AppendOnlyPremiumEvidence):
                     "input_fingerprint",
                 ],
                 name="premium_run_exact_input_unique",
-            )
+            ),
+            models.CheckConstraint(
+                condition=Q(taxonomy_sha256__regex=r"^[0-9a-f]{64}$"),
+                name="premium_run_taxonomy_sha256_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(input_fingerprint__regex=r"^[0-9a-f]{64}$"),
+                name="premium_run_input_fingerprint_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(finished_at__gte=F("started_at")),
+                name="premium_run_timestamps_ordered",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    observations_considered=F("classified_count")
+                    + F("review_count")
+                    + F("no_sufficient_evidence_count")
+                    + F("skipped_not_green_count")
+                ),
+                name="premium_run_status_counts_complete",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    observations_considered=F("private_residential_standard_count")
+                    + F("private_residential_premium_count")
+                    + F("private_estate_direct_count")
+                    + F("unknown_count")
+                ),
+                name="premium_run_segment_counts_complete",
+            ),
         ]
 
 
@@ -163,10 +226,10 @@ class PremiumSegmentAssessment(AppendOnlyPremiumEvidence):
     assessment_status = models.CharField(max_length=30, choices=Status)
     method = models.CharField(max_length=50)
     evidence_strength = models.CharField(max_length=12, choices=EvidenceStrength)
-    matched_signal_ids = models.JSONField(default=list)
-    matched_fields_and_scopes = models.JSONField(default=list)
-    matched_evidence = models.JSONField(default=list)
-    prohibited_inferences = models.JSONField(default=list)
+    matched_signal_ids = models.JSONField(default=list, blank=True)
+    matched_fields_and_scopes = models.JSONField(default=list, blank=True)
+    matched_evidence = models.JSONField(default=list, blank=True)
+    prohibited_inferences = models.JSONField(default=list, blank=True)
     privacy_context = models.CharField(
         max_length=32, choices=PrivacyContext, default=PrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
     )
@@ -180,11 +243,75 @@ class PremiumSegmentAssessment(AppendOnlyPremiumEvidence):
             models.UniqueConstraint(
                 fields=["run", "posting_observation"],
                 name="premium_assessment_run_observation_unique",
-            )
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        assessment_status="CLASSIFIED",
+                        segment__in=[
+                            "PRIVATE_RESIDENTIAL_STANDARD",
+                            "PRIVATE_RESIDENTIAL_PREMIUM",
+                            "PRIVATE_ESTATE_DIRECT",
+                        ],
+                    )
+                    | Q(
+                        assessment_status__in=[
+                            "REVIEW",
+                            "NO_SUFFICIENT_EVIDENCE",
+                            "SKIPPED_NOT_GREEN",
+                        ],
+                        segment="UNKNOWN",
+                    )
+                ),
+                name="premium_assessment_status_segment_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(segment="UNKNOWN")
+                    | Q(privacy_context="PRIVATE_RESIDENCE")
+                    | Q(privacy_context="CONFIDENTIAL_PRIVATE_RESIDENCE")
+                ),
+                name="premium_assessment_private_segment_protected",
+            ),
         ]
         indexes = [
             models.Index(fields=["assessment_status", "segment"]),
             models.Index(fields=["posting_observation", "created_at"]),
+        ]
+
+    def clean(self) -> None:
+        super().clean()
+        if (
+            self.green_relevance_assessment is not None
+            and self.green_relevance_assessment.posting_observation.pk
+            != self.posting_observation.pk
+        ):
+            raise ValidationError(
+                {"green_relevance_assessment": "green assessment belongs to another observation"}
+            )
+
+
+class PremiumSegmentAssessmentEmployerEvidence(AppendOnlyPremiumEvidence):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assessment = models.ForeignKey(
+        PremiumSegmentAssessment,
+        on_delete=models.PROTECT,
+        related_name="employer_evidence_links",
+    )
+    employer_profile_evidence = models.ForeignKey(
+        EmployerProfileEvidence,
+        on_delete=models.PROTECT,
+        related_name="assessment_links",
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "premium_segment_assessment_employer_evidence"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["assessment", "employer_profile_evidence"],
+                name="premium_assessment_employer_evidence_unique",
+            )
         ]
 
 
@@ -197,7 +324,7 @@ class PremiumSegmentReviewItem(AppendOnlyPremiumEvidence):
         PremiumSegmentAssessment, on_delete=models.PROTECT, related_name="review_item"
     )
     reason = models.CharField(max_length=200)
-    conflicting_or_insufficient_evidence = models.JSONField(default=list)
+    conflicting_or_insufficient_evidence = models.JSONField(default=list, blank=True)
     status = models.CharField(max_length=12, choices=Status, default=Status.PENDING)
     created_at = models.DateTimeField(default=timezone.now)
 
@@ -208,3 +335,8 @@ class PremiumSegmentReviewItem(AppendOnlyPremiumEvidence):
                 condition=Q(status="PENDING"), name="premium_review_initial_status_pending"
             )
         ]
+
+    def clean(self) -> None:
+        super().clean()
+        if self.assessment.assessment_status != "REVIEW":
+            raise ValidationError({"assessment": "review item requires a REVIEW assessment"})

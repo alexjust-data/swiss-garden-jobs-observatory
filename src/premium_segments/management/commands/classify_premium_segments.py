@@ -22,7 +22,9 @@ class Command(BaseCommand):
         try:
             run, reused = run_classification(as_of)
         except Exception as exc:
-            raise CommandError(str(exc)) from exc
+            raise CommandError(
+                "premium segment classification failed; inspect private logs"
+            ) from exc
         summary = {
             "run_id": str(run.pk),
             "as_of": run.as_of.isoformat(),

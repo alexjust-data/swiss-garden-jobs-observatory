@@ -65,7 +65,7 @@ class PremiumClassifierRulesTests(TestCase):
         assert not decision.matches
 
     def test_weak_private_and_auxiliary_semantics(self) -> None:
-        private = self.classify("Pflege eines Privatgartens")
+        private = self.classify("Pflege Privatgarten")
         assert private.segment == "PRIVATE_RESIDENTIAL_STANDARD"
         assert private.status == "CLASSIFIED"
         for text in ("Gartendesign Pool Naturstein", "Diskretion und live-in"):
@@ -129,6 +129,7 @@ class PremiumSegmentPersistenceTests(TestCase):
         green: str = GREEN,
         street: str = "",
         locality: str = "Winterthur",
+        employer_identity_key: str = "",
     ) -> PostingObservation:
         self.sequence += 1
         listing = f"https://{source.domain}/jobs"
@@ -176,11 +177,33 @@ class PremiumSegmentPersistenceTests(TestCase):
             location_locality=locality,
             location_country="CH",
             raw_artifact=raw,
-            structured_payload={"description": text},
+            structured_payload={
+                "description": text,
+                "employer_identity_key": employer_identity_key,
+            },
             contract_payload={
                 "schema_version": "1.2",
+                "source_id": str(source.pk),
+                "source_native_id": posting_id,
+                "observed_at": when.isoformat(),
                 "observation_status": "ACTIVE",
+                "source_url": f"https://{source.domain}/jobs/{posting_id}",
+                "canonical_url": f"https://{source.domain}/jobs/{posting_id}",
+                "http_status": 200,
+                "raw_title": title,
+                "raw_location": locality,
+                "raw_employer": employer,
+                "raw_text": text,
                 "raw_payload_sha256": digest,
+                "published_at_raw": None,
+                "source_published_at": None,
+                "source_updated_at": None,
+                "published_at_precision": "UNKNOWN",
+                "published_at_parse_method": "MISSING",
+                "published_at_confidence": None,
+                "collector_run_id": str(run.pk),
+                "source_health_status": "HEALTHY",
+                "normalized_location": None,
             },
         )
         GreenRelevanceAssessment.objects.create(
@@ -194,8 +217,12 @@ class PremiumSegmentPersistenceTests(TestCase):
         )
         return observation
 
-    def profile(self, employer: str, text: str, available_at: datetime) -> EmployerProfileEvidence:
+    def profile(
+        self, source: Source, identity_key: str, employer: str, text: str, available_at: datetime
+    ) -> EmployerProfileEvidence:
         return EmployerProfileEvidence.objects.create(
+            source=source,
+            employer_identity_key=identity_key,
             employer_name=employer,
             evidence_text=text,
             evidence_type="PREMIUM_PROFILE",
@@ -215,8 +242,21 @@ class PremiumSegmentPersistenceTests(TestCase):
     def test_glowing_grass_requires_pit_profile_evidence(self) -> None:
         source = self.source("SRC-GLOWING")
         t1 = datetime(2026, 8, 1, tzinfo=UTC)
-        observation = self.observation(source, "GG-1", t1, employer="Glowing Grass")
-        profile = self.profile("Glowing Grass", "Arbeit im Premiumsegment", t1 + timedelta(days=1))
+        identity_key = "source:SRC-GLOWING"
+        observation = self.observation(
+            source,
+            "GG-1",
+            t1,
+            employer="Glowing Grass",
+            employer_identity_key=identity_key,
+        )
+        profile = self.profile(
+            source,
+            identity_key,
+            "Glowing Grass",
+            "Arbeit im Premiumsegment",
+            t1 + timedelta(days=1),
+        )
 
         later_run, _ = run_classification(t1 + timedelta(days=1))
         later = self.assessment(later_run, observation)

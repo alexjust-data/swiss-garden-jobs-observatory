@@ -3,23 +3,35 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from html.parser import HTMLParser
 from pathlib import Path
 
 from django.conf import settings
-from django.db import transaction
-from django.db.models import OuterRef, Subquery
+from django.db import connection, transaction
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from core.hashing import sha256_file
-from observations.models import GreenRelevanceAssessment, Posting, PostingObservation
+from observations.contracts import (
+    PostingObservationContractError,
+    validate_posting_observation_contract,
+)
+from observations.models import (
+    GreenRelevanceAssessment,
+    Posting,
+    PostingLifecycleEvent,
+    PostingObservation,
+)
 
 from .models import (
     EmployerProfileEvidence,
     PremiumSegmentAssessment,
+    PremiumSegmentAssessmentEmployerEvidence,
     PremiumSegmentReviewItem,
     PremiumSegmentRun,
 )
@@ -47,6 +59,8 @@ EVIDENCE_MODERATE = "MODERATE"
 EVIDENCE_STRONG = "STRONG"
 PRIVACY_PUBLIC_OR_NON_RESIDENTIAL = "PUBLIC_OR_NON_RESIDENTIAL"
 PRIVACY_PRIVATE_RESIDENCE = "PRIVATE_RESIDENCE"
+GREEN_CLASSIFIER_VERSION = "green-relevance-v0.1"
+GREEN_TAXONOMY_VERSION = "research-v0.4"
 EXPECTED_HEADERS = (
     "signal_id",
     "signal_group",
@@ -64,6 +78,15 @@ ESTATE_ROLE = frozenset({"P012", "P013", "P014"})
 DESIGN_AUXILIARY = frozenset({"P015", "P016", "P017", "P018", "P019", "P020"})
 HOUSEHOLD_REQUIREMENT = frozenset({"P021", "P022", "P023"})
 PROHIBITED = frozenset({"N001", "N002"})
+JOB_SURFACES = frozenset({"TITLE", "DESCRIPTION", "RESPONSIBILITIES", "QUALIFICATIONS", "BENEFITS"})
+SCOPE_SURFACES = {
+    "JOB": JOB_SURFACES,
+    "JOB_OR_EMPLOYER": JOB_SURFACES | {"EMPLOYER_PROFILE"},
+    "JOB_OR_SOURCE": JOB_SURFACES,
+    "TITLE_OR_TEXT": JOB_SURFACES,
+    "INFERENCE": frozenset({"PROHIBITED_INFERENCE"}),
+}
+URL_PATTERN = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
 
 CONFIGURATION: dict[str, object] = {
     "decision_table": "premium-segment-decision-table-v0.1",
@@ -75,6 +98,9 @@ CONFIGURATION: dict[str, object] = {
     "design_auxiliary": sorted(DESIGN_AUXILIARY),
     "household_requirement": sorted(HOUSEHOLD_REQUIREMENT),
     "prohibited": sorted(PROHIBITED),
+    "scope_surfaces": {key: sorted(value) for key, value in SCOPE_SURFACES.items()},
+    "source_profile_support": False,
+    "employer_profile_semantics": "cumulative_assertions_bound_to_explicit_identity",
     "confidence_semantics": "categorical_evidence_strength_not_probability",
 }
 
@@ -116,13 +142,55 @@ class PremiumDecision:
 class SelectedInput:
     observation: PostingObservation
     green_assessment: GreenRelevanceAssessment | None
-    employer_profile: EmployerProfileEvidence | None
+    employer_profiles: tuple[EmployerProfileEvidence, ...]
+    lifecycle_event_id: str | None
+
+
+class _VisibleTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.suppressed_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.casefold() in {"script", "style", "noscript", "template"}:
+            self.suppressed_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() in {"script", "style", "noscript", "template"}:
+            self.suppressed_depth = max(0, self.suppressed_depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self.suppressed_depth == 0:
+            self.parts.append(data)
+
+    def text(self) -> str:
+        return " ".join(self.parts)
 
 
 def normalize_for_matching(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     controlled = "".join(character if character.isalnum() else " " for character in normalized)
     return " ".join(controlled.split())
+
+
+def visible_text(value: str) -> str:
+    parser = _VisibleTextParser()
+    parser.feed(value)
+    parser.close()
+    return URL_PATTERN.sub(" ", parser.text())
+
+
+def phrase_matches(needle: str, haystack: str) -> bool:
+    needle_tokens = normalize_for_matching(needle).split()
+    haystack_tokens = normalize_for_matching(haystack).split()
+    if not needle_tokens or len(needle_tokens) > len(haystack_tokens):
+        return False
+    width = len(needle_tokens)
+    return any(
+        haystack_tokens[index : index + width] == needle_tokens
+        for index in range(len(haystack_tokens) - width + 1)
+    )
 
 
 def load_taxonomy(path: Path = TAXONOMY_PATH) -> tuple[tuple[PremiumSignalDefinition, ...], str]:
@@ -167,18 +235,20 @@ def _safe_match(
 class PremiumSegmentClassifier:
     def __init__(self, taxonomy_path: Path = TAXONOMY_PATH) -> None:
         self.signals, self.taxonomy_sha256 = load_taxonomy(taxonomy_path)
+        unknown_scopes = {signal.evidence_scope for signal in self.signals} - SCOPE_SURFACES.keys()
+        if unknown_scopes:
+            raise PremiumSegmentError(f"unsupported evidence scopes: {sorted(unknown_scopes)}")
 
     def classify_observation(
         self,
         observation: PostingObservation,
         green_result: str,
-        employer_profile: EmployerProfileEvidence | None = None,
+        employer_profiles: tuple[EmployerProfileEvidence, ...] = (),
     ) -> PremiumDecision:
-        profiles: tuple[EmployerEvidenceInput, ...] = ()
-        if employer_profile:
-            profiles = (
-                EmployerEvidenceInput(str(employer_profile.pk), employer_profile.evidence_text),
-            )
+        profiles = tuple(
+            EmployerEvidenceInput(str(profile.pk), profile.evidence_text)
+            for profile in employer_profiles
+        )
         return self.classify(
             title=observation.title,
             description=observation.description_html,
@@ -213,30 +283,29 @@ class PremiumSegmentClassifier:
                 PRIVACY_PUBLIC_OR_NON_RESIDENTIAL,
             )
         surfaces = {
-            "TITLE": normalize_for_matching(title),
-            "DESCRIPTION": normalize_for_matching(description),
-            "RESPONSIBILITIES": normalize_for_matching(responsibilities),
-            "QUALIFICATIONS": normalize_for_matching(qualifications),
-            "BENEFITS": normalize_for_matching(benefits),
+            "TITLE": visible_text(title),
+            "DESCRIPTION": visible_text(description),
+            "RESPONSIBILITIES": visible_text(responsibilities),
+            "QUALIFICATIONS": visible_text(qualifications),
+            "BENEFITS": visible_text(benefits),
         }
-        normalized_inference = normalize_for_matching(inference_evidence)
+        inference_surface = visible_text(inference_evidence)
         matches: list[dict[str, str]] = []
         prohibited: list[dict[str, str]] = []
         for signal in self.signals:
-            needle = normalize_for_matching(signal.search_term)
+            allowed_surfaces = SCOPE_SURFACES[signal.evidence_scope]
             if signal.evidence_scope == "INFERENCE":
-                if needle and needle in normalized_inference:
+                if phrase_matches(signal.search_term, inference_surface):
                     prohibited.append(_safe_match(signal, "PROHIBITED_INFERENCE"))
                 continue
-            for field, haystack in surfaces.items():
-                if needle and needle in haystack:
+            for field in sorted(JOB_SURFACES & allowed_surfaces):
+                if phrase_matches(signal.search_term, surfaces[field]):
                     matches.append(_safe_match(signal, field))
                     break
-            if "EMPLOYER" in signal.evidence_scope:
+            if "EMPLOYER_PROFILE" in allowed_surfaces:
                 for profile in employer_evidence:
-                    if needle and needle in normalize_for_matching(profile.evidence_text):
+                    if phrase_matches(signal.search_term, visible_text(profile.evidence_text)):
                         matches.append(_safe_match(signal, "EMPLOYER_PROFILE", profile.evidence_id))
-                        break
         ids = {match["signal_id"] for match in matches}
         premium = ids & STRONG_PREMIUM
         estate = ids & ESTATE_DIRECT
@@ -262,9 +331,7 @@ class PremiumSegmentClassifier:
                 SEGMENT_PRIVATE_ESTATE_DIRECT,
                 STATUS_CLASSIFIED,
                 "EXPLICIT_ESTATE_SIGNAL" if estate else "GREEN_CORROBORATED_ESTATE_ROLE",
-                EVIDENCE_STRONG
-                if estate
-                else EVIDENCE_MODERATE,
+                EVIDENCE_STRONG if estate else EVIDENCE_MODERATE,
                 tuple(matches),
                 tuple(prohibited),
                 ("PRIVATE_ESTATE_EVIDENCE",),
@@ -279,13 +346,11 @@ class PremiumSegmentClassifier:
                 SEGMENT_PRIVATE_RESIDENTIAL_PREMIUM,
                 STATUS_CLASSIFIED,
                 "EMPLOYER_PROFILE_SIGNAL" if matched_profile else "EXPLICIT_JOB_SIGNAL",
-                EVIDENCE_MODERATE
-                if matched_profile
-                else EVIDENCE_STRONG,
+                EVIDENCE_MODERATE if matched_profile else EVIDENCE_STRONG,
                 tuple(matches),
                 tuple(prohibited),
                 ("EXPLICIT_PREMIUM_EVIDENCE",),
-                public,
+                private,
             )
         if qualified:
             return PremiumDecision(
@@ -324,51 +389,102 @@ class PremiumSegmentClassifier:
         )
 
 
-def _contract_valid(observation: PostingObservation) -> bool:
+def _validate_contract_integrity(observation: PostingObservation) -> None:
     contract = observation.contract_payload or {}
+    try:
+        validate_posting_observation_contract(contract)
+    except PostingObservationContractError as exc:
+        raise PremiumSegmentError(
+            f"observation {observation.pk} failed frozen contract validation"
+        ) from exc
+    observed_at = parse_datetime(str(contract.get("observed_at", "")))
+    raw_sha256 = str(contract.get("raw_payload_sha256", ""))
+    expected = {
+        "source_id": str(observation.source.pk),
+        "source_native_id": observation.source_posting_id,
+        "observation_status": observation.observation_status,
+        "canonical_url": observation.canonical_url,
+        "raw_title": observation.title,
+        "collector_run_id": str(observation.collection_run.pk),
+    }
+    mismatches = [key for key, value in expected.items() if contract.get(key) != value]
+    if observation.observation_status != "ACTIVE":
+        mismatches.append("model_observation_status")
+    if observed_at is None or observed_at != observation.observed_at:
+        mismatches.append("observed_at")
+    if not re.fullmatch(r"[0-9a-f]{64}", raw_sha256):
+        mismatches.append("raw_payload_sha256_format")
+    if raw_sha256 != observation.raw_artifact.sha256_digest:
+        mismatches.append("raw_payload_sha256_link")
+    if mismatches:
+        raise PremiumSegmentError(
+            f"observation {observation.pk} has inconsistent contract provenance: "
+            + ", ".join(sorted(set(mismatches)))
+        )
+
+
+def _latest_lifecycle_event(posting: Posting, as_of: datetime) -> PostingLifecycleEvent | None:
     return (
-        contract.get("schema_version") == "1.2"
-        and contract.get("observation_status") == "ACTIVE"
-        and bool(contract.get("raw_payload_sha256"))
+        PostingLifecycleEvent.objects.filter(posting=posting, observed_at__lte=as_of)
+        .select_related("posting_observation")
+        .order_by("-observed_at", "-created_at", "-pk")
+        .first()
     )
 
 
 def select_inputs(as_of: datetime) -> list[SelectedInput]:
-    latest = PostingObservation.objects.filter(
-        posting_id=OuterRef("pk"), observation_status="ACTIVE", observed_at__lte=as_of
-    ).order_by("-observed_at", "-pk")
-    observation_ids = (
-        Posting.objects.filter(first_seen_at__lte=as_of)
-        .annotate(selected_observation_id=Subquery(latest.values("id")[:1]))
-        .exclude(selected_observation_id=None)
-        .values_list("selected_observation_id", flat=True)
-    )
-    observations = list(
-        PostingObservation.objects.filter(pk__in=observation_ids).select_related(
-            "source", "posting"
-        )
-    )
-    profiles_by_employer: dict[str, list[EmployerProfileEvidence]] = {}
-    for profile in EmployerProfileEvidence.objects.filter(available_at__lte=as_of):
-        profiles_by_employer.setdefault(normalize_for_matching(profile.employer_name), []).append(
-            profile
-        )
     selected: list[SelectedInput] = []
-    for observation in sorted(observations, key=lambda item: str(item.pk)):
-        if not _contract_valid(observation):
+    postings = (
+        Posting.objects.filter(first_seen_at__lte=as_of).select_related("source").order_by("pk")
+    )
+    for posting in postings:
+        lifecycle = _latest_lifecycle_event(posting, as_of)
+        if lifecycle is not None:
+            if lifecycle.event_type not in {"NEW", "STILL_ACTIVE"}:
+                continue
+            observation = lifecycle.posting_observation
+            lifecycle_event_id: str | None = str(lifecycle.pk)
+        else:
+            observation = (
+                PostingObservation.objects.filter(
+                    posting=posting,
+                    observation_status="ACTIVE",
+                    observed_at__lte=as_of,
+                )
+                .order_by("-observed_at", "-pk")
+                .first()
+            )
+            lifecycle_event_id = None
+        if observation is None:
             continue
+        _validate_contract_integrity(observation)
         green = (
             GreenRelevanceAssessment.objects.filter(
-                posting_observation=observation, created_at__lte=as_of
+                posting_observation=observation,
+                classifier_version=GREEN_CLASSIFIER_VERSION,
+                taxonomy_version=GREEN_TAXONOMY_VERSION,
+                created_at__lte=as_of,
             )
             .order_by("-created_at", "-pk")
             .first()
         )
-        profiles = profiles_by_employer.get(
-            normalize_for_matching(observation.hiring_organization), []
-        )
-        profile = max(profiles, key=lambda item: (item.available_at, str(item.pk)), default=None)
-        selected.append(SelectedInput(observation, green, profile))
+        identity_key = str(
+            (observation.structured_payload or {}).get("employer_identity_key", "")
+        ).strip()
+        profiles: tuple[EmployerProfileEvidence, ...] = ()
+        if identity_key and observation.hiring_organization.strip():
+            candidates = EmployerProfileEvidence.objects.filter(
+                source=observation.source,
+                employer_identity_key=identity_key,
+                available_at__lte=as_of,
+            ).order_by("available_at", "created_at", "pk")
+            normalized_employer = normalize_for_matching(observation.hiring_organization)
+            profiles = tuple(
+                profile
+                for profile in candidates
+                if normalize_for_matching(profile.employer_name) == normalized_employer
+            )
+        selected.append(SelectedInput(observation, green, profiles, lifecycle_event_id))
     return selected
 
 
@@ -392,9 +508,10 @@ def input_fingerprint(
                 "green_assessment_id": str(item.green_assessment.pk)
                 if item.green_assessment
                 else None,
-                "employer_profile_evidence_id": str(item.employer_profile.pk)
-                if item.employer_profile
-                else None,
+                "employer_profile_evidence_ids": [
+                    str(profile.pk) for profile in item.employer_profiles
+                ],
+                "lifecycle_event_id": item.lifecycle_event_id,
             }
             for item in inputs
         ],
@@ -412,9 +529,8 @@ def _evidence(
         "green_relevance_assessment_id": str(item.green_assessment.pk)
         if item.green_assessment
         else None,
-        "employer_profile_evidence_id": str(item.employer_profile.pk)
-        if item.employer_profile
-        else None,
+        "employer_profile_evidence_ids": [str(profile.pk) for profile in item.employer_profiles],
+        "lifecycle_event_id": item.lifecycle_event_id,
         "reason_codes": list(decision.reason_codes),
         "normalization": normalizer_version,
         "matching": "LITERAL_PHRASE_SCOPE_ENFORCED",
@@ -425,6 +541,14 @@ def _evidence(
             "exact_residential_address_copied": False,
         },
     }
+
+
+def _lock_exact_run(input_fingerprint: str) -> None:
+    if connection.vendor != "postgresql":
+        return
+    lock_key = int.from_bytes(bytes.fromhex(input_fingerprint)[:8], "big", signed=True)
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [lock_key])
 
 
 @transaction.atomic
@@ -440,6 +564,7 @@ def run_classification(
     fingerprint = input_fingerprint(
         as_of, classifier_version, normalizer_version, classifier.taxonomy_sha256, inputs
     )
+    _lock_exact_run(fingerprint)
     existing = PremiumSegmentRun.objects.filter(
         as_of=as_of,
         classifier_version=classifier_version,
@@ -454,7 +579,7 @@ def run_classification(
         classifier.classify_observation(
             item.observation,
             item.green_assessment.result if item.green_assessment else "MISSING",
-            item.employer_profile,
+            item.employer_profiles,
         )
         for item in inputs
     ]
@@ -477,26 +602,16 @@ def run_classification(
         input_fingerprint=fingerprint,
         observations_considered=len(inputs),
         green_confirmed_eligible=sum(
-            item.green_assessment is not None
-            and item.green_assessment.result
-            == GREEN_CONFIRMED
+            item.green_assessment is not None and item.green_assessment.result == GREEN_CONFIRMED
             for item in inputs
         ),
         classified_count=statuses[STATUS_CLASSIFIED],
         review_count=statuses[STATUS_REVIEW],
-        no_sufficient_evidence_count=statuses[
-            STATUS_NO_SUFFICIENT_EVIDENCE
-        ],
+        no_sufficient_evidence_count=statuses[STATUS_NO_SUFFICIENT_EVIDENCE],
         skipped_not_green_count=statuses[STATUS_SKIPPED_NOT_GREEN],
-        private_residential_standard_count=segments[
-            SEGMENT_PRIVATE_RESIDENTIAL_STANDARD
-        ],
-        private_residential_premium_count=segments[
-            SEGMENT_PRIVATE_RESIDENTIAL_PREMIUM
-        ],
-        private_estate_direct_count=segments[
-            SEGMENT_PRIVATE_ESTATE_DIRECT
-        ],
+        private_residential_standard_count=segments[SEGMENT_PRIVATE_RESIDENTIAL_STANDARD],
+        private_residential_premium_count=segments[SEGMENT_PRIVATE_RESIDENTIAL_PREMIUM],
+        private_estate_direct_count=segments[SEGMENT_PRIVATE_ESTATE_DIRECT],
         unknown_count=segments[SEGMENT_UNKNOWN],
         prohibited_inference_only_count=sum(
             "PROHIBITED_INFERENCE_ONLY" in decision.reason_codes for decision in decisions
@@ -510,7 +625,9 @@ def run_classification(
             run=run,
             posting_observation=item.observation,
             green_relevance_assessment=item.green_assessment,
-            employer_profile_evidence=item.employer_profile,
+            employer_profile_evidence=(
+                item.employer_profiles[0] if len(item.employer_profiles) == 1 else None
+            ),
             segment=decision.segment,
             assessment_status=decision.status,
             method=decision.method,
@@ -528,6 +645,15 @@ def run_classification(
             prohibited_inferences=list(decision.prohibited),
             privacy_context=decision.privacy_context,
             evidence=_evidence(item, decision, normalizer_version),
+        )
+        PremiumSegmentAssessmentEmployerEvidence.objects.bulk_create(
+            [
+                PremiumSegmentAssessmentEmployerEvidence(
+                    assessment=assessment,
+                    employer_profile_evidence=profile,
+                )
+                for profile in item.employer_profiles
+            ]
         )
         if decision.status == STATUS_REVIEW:
             PremiumSegmentReviewItem.objects.create(

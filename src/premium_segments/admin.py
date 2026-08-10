@@ -8,6 +8,7 @@ from django.http import HttpRequest
 from .models import (
     EmployerProfileEvidence,
     PremiumSegmentAssessment,
+    PremiumSegmentAssessmentEmployerEvidence,
     PremiumSegmentReviewItem,
     PremiumSegmentRun,
 )
@@ -31,6 +32,7 @@ for model in (
     EmployerProfileEvidence,
     PremiumSegmentRun,
     PremiumSegmentAssessment,
+    PremiumSegmentAssessmentEmployerEvidence,
     PremiumSegmentReviewItem,
 ):
     admin.site.register(model, ReadOnlyPremiumAdmin)
