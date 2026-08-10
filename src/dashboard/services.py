@@ -90,16 +90,16 @@ def source_link(observation: Any) -> tuple[str, str, str, str, str]:
         status = explicit
         method = "EXPLICIT_SOURCE_EVIDENCE"
     elif canonical and observation.source.canonicality == "CANONICAL":
-        status = DashboardVacancyRecord.SourceLinkStatus.CANONICAL
+        status = DashboardVacancyRecord.SourceLinkStatus.CANONICAL.value
         method = "CANONICAL_SOURCE_INDIVIDUAL_URL"
     elif source_url:
-        status = DashboardVacancyRecord.SourceLinkStatus.DISCOVERY_OR_HISTORICAL
+        status = DashboardVacancyRecord.SourceLinkStatus.DISCOVERY_OR_HISTORICAL.value
         method = "OBSERVED_SOURCE_FALLBACK"
     elif canonical:
-        status = DashboardVacancyRecord.SourceLinkStatus.REVIEW
+        status = DashboardVacancyRecord.SourceLinkStatus.REVIEW.value
         method = "UNVERIFIED_CANONICAL_URL"
     else:
-        status = DashboardVacancyRecord.SourceLinkStatus.NO_LINK_AVAILABLE
+        status = DashboardVacancyRecord.SourceLinkStatus.NO_LINK_AVAILABLE.value
         method = "NO_SAFE_URL"
     labels = {
         "CANONICAL": "Open original advert",
@@ -125,12 +125,12 @@ class RecordPlan:
 def _visibility(assessment: PremiumSegmentAssessment) -> str:
     green = assessment.green_relevance_assessment
     if green is None:
-        return DashboardVacancyRecord.VisibilityStatus.MISSING_GREEN_ASSESSMENT
+        return DashboardVacancyRecord.VisibilityStatus.MISSING_GREEN_ASSESSMENT.value
     if green.result == GreenRelevanceAssessment.Result.GREEN_CONFIRMED:
-        return DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED
+        return DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED.value
     if green.result == GreenRelevanceAssessment.Result.NOT_GREEN:
-        return DashboardVacancyRecord.VisibilityStatus.EXCLUDED_NOT_GREEN
-    return DashboardVacancyRecord.VisibilityStatus.REVIEW_NOT_PUBLIC
+        return DashboardVacancyRecord.VisibilityStatus.EXCLUDED_NOT_GREEN.value
+    return DashboardVacancyRecord.VisibilityStatus.REVIEW_NOT_PUBLIC.value
 
 
 def _location(
@@ -149,25 +149,33 @@ def _location(
     flags: list[str] = []
     if resolution is None:
         status = (
-            DashboardVacancyRecord.MappingStatus.PRIVACY_RESOLUTION_MISSING
+            DashboardVacancyRecord.MappingStatus.PRIVACY_RESOLUTION_MISSING.value
             if context in PROTECTED_CONTEXTS
-            else DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED
+            else DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED.value
         )
         return None, status, flags
     if resolution.resolution_status == "REVIEW":
-        return resolution, DashboardVacancyRecord.MappingStatus.LOCATION_REVIEW, flags
+        return resolution, DashboardVacancyRecord.MappingStatus.LOCATION_REVIEW.value, flags
     if resolution.resolution_status == "UNRESOLVED":
-        return resolution, DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED, flags
+        return resolution, DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED.value, flags
     if resolution.privacy_display_level == "HIDDEN":
-        return resolution, DashboardVacancyRecord.MappingStatus.LOCATION_HIDDEN, flags
+        return resolution, DashboardVacancyRecord.MappingStatus.LOCATION_HIDDEN.value, flags
     lat = resolution.public_display_latitude
     lon = resolution.public_display_longitude
     if lat is None or lon is None:
-        return resolution, DashboardVacancyRecord.MappingStatus.PUBLIC_COORDINATES_MISSING, flags
+        return (
+            resolution,
+            DashboardVacancyRecord.MappingStatus.PUBLIC_COORDINATES_MISSING.value,
+            flags,
+        )
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         flags.append("INVALID_PUBLIC_COORDINATES")
-        return resolution, DashboardVacancyRecord.MappingStatus.PUBLIC_COORDINATES_MISSING, flags
-    return resolution, DashboardVacancyRecord.MappingStatus.MAPPABLE, flags
+        return (
+            resolution,
+            DashboardVacancyRecord.MappingStatus.PUBLIC_COORDINATES_MISSING.value,
+            flags,
+        )
+    return resolution, DashboardVacancyRecord.MappingStatus.MAPPABLE.value, flags
 
 
 def _workload(observation: Any) -> str:
@@ -226,8 +234,8 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
             raise DashboardBuildError("premium assessment does not belong to canonical posting")
         visibility = _visibility(assessment)
         resolution, mapping, flags = _location(assessment)
-        if visibility != DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED:
-            mapping = DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED
+        if visibility != DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED.value:
+            mapping = DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED.value
         link_status, selected_url, label, link_method, source_url = source_link(observation)
         contract = observation.contract_payload or {}
         municipality = resolution.municipality if resolution else observation.municipality
@@ -271,13 +279,13 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
             "public_display_latitude": (
                 resolution.public_display_latitude
                 if resolution is not None
-                and mapping == DashboardVacancyRecord.MappingStatus.MAPPABLE
+                and mapping == DashboardVacancyRecord.MappingStatus.MAPPABLE.value
                 else None
             ),
             "public_display_longitude": (
                 resolution.public_display_longitude
                 if resolution is not None
-                and mapping == DashboardVacancyRecord.MappingStatus.MAPPABLE
+                and mapping == DashboardVacancyRecord.MappingStatus.MAPPABLE.value
                 else None
             ),
             "premium_segment": assessment.segment,
@@ -365,13 +373,13 @@ def build_dashboard_snapshot(
         plan
         for plan in plans
         if plan.values["visibility_status"]
-        == DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED
+        == DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED.value
     ]
     excluded = [
         plan
         for plan in plans
         if plan.values["visibility_status"]
-        == DashboardVacancyRecord.VisibilityStatus.EXCLUDED_NOT_GREEN
+        == DashboardVacancyRecord.VisibilityStatus.EXCLUDED_NOT_GREEN.value
     ]
     public_ids = {id(item) for item in public}
     excluded_ids = {id(item) for item in excluded}
@@ -379,7 +387,7 @@ def build_dashboard_snapshot(
     mappable = [
         plan
         for plan in public
-        if plan.values["mapping_status"] == DashboardVacancyRecord.MappingStatus.MAPPABLE
+        if plan.values["mapping_status"] == DashboardVacancyRecord.MappingStatus.MAPPABLE.value
     ]
     resolutions = [plan.values["location_resolution"] for plan in plans]
     snapshot = DashboardSnapshot.objects.create(
