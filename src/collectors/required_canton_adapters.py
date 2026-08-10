@@ -28,6 +28,7 @@ ZURICH_CANTON_API = "https://live.solique.ch/KTZH/de/api/v1/data/"
 ZURICH_CANTON_BASE = "https://live.solique.ch"
 APPENZELL_AR_API = "https://live.solique.ch/kanton-appenzell-ausserrhoden/api/json/"
 ZUG_LISTING = "https://zg.prospective.ch/"
+ZUG_APPRENTICESHIP_LISTING = "https://zg.prospective.ch/lernende/"
 BASEL_LANDSCHAFT_LISTING = "https://ohws.prospective.ch/public/v1/careercenter/1571/"
 
 _UUID_PATH = re.compile(
@@ -212,9 +213,11 @@ class AppenzellAusserrhodenSoliqueAdapter:
 
 
 class _ProspectiveListingParser(HTMLParser):
-    def __init__(self, detail_host: str) -> None:
+    def __init__(self, detail_host: str, contract_form_id: str) -> None:
         super().__init__(convert_charrefs=True)
         self.detail_host = detail_host
+        self.contract_form_id = contract_form_id
+        self.contract_seen = False
         self.entries: list[ListingEntry] = []
         self.page_offsets: set[int] = set()
         self.reported_total: int | None = None
@@ -222,6 +225,8 @@ class _ProspectiveListingParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = dict(attrs)
+        if tag == "form" and values.get("id") == self.contract_form_id:
+            self.contract_seen = True
         if tag == "a":
             href = values.get("href") or ""
             match = _UUID_PATH.search(urlsplit(href).path)
@@ -247,15 +252,25 @@ class _ProspectiveListingParser(HTMLParser):
 
 class _ConfiguredProspectiveLegacyAdapter(_ProspectiveAdapterBase):
     platform_family = ""
-    listing_url = ""
+    listing_surfaces: tuple[tuple[str, str], ...] = ()
     detail_host = ""
+    contract_form_id = ""
     page_size = 0
     include_workload = False
 
-    def _request(self, offset: int) -> FetchRequest:
+    def _request(self, offset: int, surface_index: int = 0) -> FetchRequest:
+        try:
+            surface_name, listing_url = self.listing_surfaces[surface_index]
+        except IndexError as exc:
+            raise PlatformAdapterError("Invalid Prospective listing surface") from exc
+        context = {
+            "offset": offset,
+            "surface_index": surface_index,
+            "surface_name": surface_name,
+        }
         if offset == 0:
             return FetchRequest(
-                self.listing_url, "text/html", "LISTING_PAGE", context={"offset": 0}
+                listing_url, "text/html", "LISTING_PAGE", context=context
             )
         fields = [
             ("offset", str(offset)),
@@ -266,31 +281,39 @@ class _ConfiguredProspectiveLegacyAdapter(_ProspectiveAdapterBase):
         if self.include_workload:
             fields.append(("workload", "10,100"))
         return FetchRequest(
-            self.listing_url,
+            listing_url,
             "text/html",
             "LISTING_PAGE",
             method="POST",
             form_data=tuple(fields),
-            context={"offset": offset},
+            context=context,
         )
 
     def initial_listing_request(self, source: Source) -> FetchRequest:
-        return self._request(0)
+        return self._request(0, 0)
 
     def parse_listing_page(
         self, page: FetchedPage, request: FetchRequest, source: Source
     ) -> ListingPage:
-        parser = _ProspectiveListingParser(self.detail_host)
+        parser = _ProspectiveListingParser(self.detail_host, self.contract_form_id)
         try:
             parser.feed(page.body.decode("utf-8"))
             parser.close()
         except UnicodeDecodeError as exc:
             raise PlatformAdapterError("Prospective listing is not UTF-8") from exc
+        if not parser.contract_seen:
+            raise PlatformAdapterError("Prospective listing contract marker is missing")
         current = cast(int, request.context.get("offset", 0))
+        surface_index = cast(int, request.context.get("surface_index", 0))
         next_offset = min(
             (offset for offset in parser.page_offsets if offset > current), default=None
         )
-        next_request = self._request(next_offset) if next_offset is not None else None
+        if next_offset is not None:
+            next_request = self._request(next_offset, surface_index)
+        elif surface_index + 1 < len(self.listing_surfaces):
+            next_request = self._request(0, surface_index + 1)
+        else:
+            next_request = None
         return ListingPage(
             parser.entries,
             next_request,
@@ -309,14 +332,19 @@ class _ConfiguredProspectiveLegacyAdapter(_ProspectiveAdapterBase):
 
 class ZugProspectiveLegacyAdapter(_ConfiguredProspectiveLegacyAdapter):
     platform_family = "PROSPECTIVE"
-    listing_url = ZUG_LISTING
+    listing_surfaces = (
+        ("ordinary", ZUG_LISTING),
+        ("apprenticeships", ZUG_APPRENTICESHIP_LISTING),
+    )
     detail_host = "www.zg.ch"
+    contract_form_id = "careercenter-form"
     page_size = 10
 
 
 class BaselLandschaftProspectiveLegacyAdapter(_ConfiguredProspectiveLegacyAdapter):
     platform_family = "PROSPECTIVE_UMANTIS_LINKED"
-    listing_url = BASEL_LANDSCHAFT_LISTING
+    listing_surfaces = (("all_vacancies", BASEL_LANDSCHAFT_LISTING),)
     detail_host = "jobs.baselland.ch"
+    contract_form_id = "oh-form"
     page_size = 15
     include_workload = True

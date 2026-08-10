@@ -9,11 +9,17 @@ from django.test import TestCase
 
 from collectors.adapters import get_adapter
 from collectors.governed_http import ensure_default_endpoints
-from collectors.pipeline import SharedCollectionPipeline
-from collectors.platforms import FetchedPage, FetchRequest, UnsupportedPlatformError
+from collectors.pipeline import CollectionPipelineError, SharedCollectionPipeline
+from collectors.platforms import (
+    FetchedPage,
+    FetchRequest,
+    PlatformAdapterError,
+    UnsupportedPlatformError,
+)
 from collectors.required_canton_adapters import (
     APPENZELL_AR_API,
     BASEL_LANDSCHAFT_LISTING,
+    ZUG_APPRENTICESHIP_LISTING,
     ZUG_LISTING,
     ZURICH_CANTON_API,
     AppenzellAusserrhodenSoliqueAdapter,
@@ -22,7 +28,12 @@ from collectors.required_canton_adapters import (
     ZurichCantonSoliqueAdapter,
 )
 from core.storage import RawObjectStore
-from observations.models import GreenRelevanceAssessment, PostingObservation
+from observations.models import (
+    CollectionRun,
+    GreenRelevanceAssessment,
+    PostingLifecycleEvent,
+    PostingObservation,
+)
 from sources.models import Source, SourceEndpoint
 
 
@@ -68,6 +79,35 @@ def job_html(title: str, canonical: str, locality: str = "") -> bytes:
         )
         + "</script>"
     ).encode()
+
+
+def prospective_listing(
+    *entries: str | tuple[str, str],
+    offsets: tuple[int, ...] = (),
+    form_id: str = "careercenter-form",
+) -> bytes:
+    normalized = (
+        entry if isinstance(entry, tuple) else (entry, f"Vacancy {index}")
+        for index, entry in enumerate(entries)
+    )
+    anchors = "".join(
+        f'<a href="{link}" title="{title}"></a>' for link, title in normalized
+    )
+    pagination = "".join(
+        f'<a onclick="sendPagination({offset})"></a>' for offset in offsets
+    )
+    return (
+        f'<html><body><form id="{form_id}">'
+        f"{anchors}{pagination}</form></body></html>"
+    ).encode()
+
+
+def zug_detail_url(slug: str, vacancy_id: str) -> str:
+    return f"https://www.zg.ch/jobs/offene-stellen/{slug}/{vacancy_id}"
+
+
+def zug_learning_detail_url(slug: str, vacancy_id: str) -> str:
+    return f"https://www.zg.ch/jobs/lernende/offene-stellen/{slug}/{vacancy_id}"
 
 
 class Fetcher:
@@ -200,6 +240,7 @@ class Gate011C1Tests(TestCase):
                 "https://www.zg.ch/jobs/offene-stellen/gaertner/11111111-1111-4111-8111-111111111111",
                 10,
                 False,
+                "careercenter-form",
             ),
             (
                 "SRC-OFF-CANTON-BL",
@@ -208,9 +249,10 @@ class Gate011C1Tests(TestCase):
                 "https://jobs.baselland.ch/offene-stellen/gaertner/22222222-2222-4222-8222-222222222222",
                 15,
                 True,
+                "oh-form",
             ),
         )
-        for source_id, platform, listing_url, detail, offset, has_total in cases:
+        for source_id, platform, listing_url, detail, offset, has_total, form_id in cases:
             registered = Source(source_id=source_id, platform_family=platform)
             adapter = get_adapter(registered)
             request = adapter.initial_listing_request(registered)
@@ -224,7 +266,9 @@ class Gate011C1Tests(TestCase):
                 else '<a onclick="sendPagination(0)"></a><a onclick="sendPagination(10)"></a>'
             )
             body = (
-                f'{total}<a class="job-0" href="{detail}" title="Gaertner/in"></a>{pagination}'
+                f'{total}<form id="{form_id}">'
+                f'<a class="job-0" href="{detail}" title="Gaertner/in"></a>'
+                f"{pagination}</form>"
             ).encode()
             listing = adapter.parse_listing_page(
                 FetchedPage(listing_url, listing_url, 200, "text/html", body),
@@ -284,6 +328,163 @@ class Gate011C1Tests(TestCase):
             GreenRelevanceAssessment.objects.filter(posting_observation__collection_run=run).count()
             == 1
         )
+
+    def test_zug_full_source_unifies_ordinary_and_apprenticeship_surfaces(
+        self,
+    ) -> None:
+        registered = source("SRC-OFF-CANTON-ZG", "PROSPECTIVE")
+        ids = (
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            "33333333-3333-4333-8333-333333333333",
+            "44444444-4444-4444-8444-444444444444",
+        )
+        ordinary = zug_detail_url("ordinary-role", ids[0])
+        technical = zug_detail_url("technical-role", ids[1])
+        gardener = zug_learning_detail_url("lehrstelle-gaertner-in", ids[2])
+        apprentice = zug_learning_detail_url("other-apprenticeship", ids[3])
+        pages = {
+            ("GET", ZUG_LISTING): FetchedPage(
+                ZUG_LISTING, ZUG_LISTING, 200, "text/html",
+                prospective_listing(
+                    (ordinary, "Sachbearbeiter/in"),
+                    (technical, "Techniker/in"),
+                ),
+            ),
+            ("GET", ZUG_APPRENTICESHIP_LISTING): FetchedPage(
+                ZUG_APPRENTICESHIP_LISTING, ZUG_APPRENTICESHIP_LISTING,
+                200, "text/html", prospective_listing(
+                    (gardener, "G\u00e4rtner/in EFZ"),
+                    (apprentice, "Kaufmann/-frau EFZ"),
+                ),
+            ),
+            ("GET", ordinary): FetchedPage(
+                ordinary, ordinary, 200, "text/html",
+                job_html("Sachbearbeiter/in", ordinary),
+            ),
+            ("GET", technical): FetchedPage(
+                technical, technical, 200, "text/html",
+                job_html("Techniker/in", technical),
+            ),
+            ("GET", gardener): FetchedPage(
+                gardener, gardener, 200, "text/html",
+                job_html("G\u00e4rtner/in EFZ", gardener),
+            ),
+            ("GET", apprentice): FetchedPage(
+                apprentice, apprentice, 200, "text/html",
+                job_html("Kaufmann/-frau EFZ", apprentice),
+            ),
+        }
+        fetcher = Fetcher(pages)
+        with TemporaryDirectory() as raw:
+            run = SharedCollectionPipeline(
+                source_id=registered.pk, fetcher=fetcher,
+                raw_store=RawObjectStore(raw), delay_seconds=0,
+                clock=lambda: datetime(2026, 8, 10, 17, tzinfo=UTC),
+            ).collect(full_snapshot=True, acknowledge_automation_review=True)
+
+        assert run.snapshot_complete and run.source_health_status == "HEALTHY"
+        listing_urls = [
+            request.url
+            for request in fetcher.requests
+            if request.url in {ZUG_LISTING, ZUG_APPRENTICESHIP_LISTING}
+        ]
+        assert listing_urls == [ZUG_LISTING, ZUG_APPRENTICESHIP_LISTING]
+        assert run.listing_total_discovered == run.details_fetched == 4
+        assert run.observations_created == run.green_assessments_created == 4
+        assert PostingObservation.objects.filter(collection_run=run).count() == 4
+        assert GreenRelevanceAssessment.objects.filter(
+            posting_observation__collection_run=run,
+            result="GREEN_CONFIRMED",
+        ).count() == 1
+
+    def test_zug_cross_surface_duplicate_is_one_source_identity(self) -> None:
+        registered = source("SRC-OFF-CANTON-ZG", "PROSPECTIVE")
+        vacancy_id = "11111111-1111-4111-8111-111111111111"
+        shared = zug_detail_url("shared-vacancy", vacancy_id)
+        pages = {
+            ("GET", ZUG_LISTING): FetchedPage(
+                ZUG_LISTING, ZUG_LISTING, 200, "text/html",
+                prospective_listing((shared, "Shared vacancy")),
+            ),
+            ("GET", ZUG_APPRENTICESHIP_LISTING): FetchedPage(
+                ZUG_APPRENTICESHIP_LISTING, ZUG_APPRENTICESHIP_LISTING,
+                200, "text/html", prospective_listing((shared, "Shared vacancy")),
+            ),
+            ("GET", shared): FetchedPage(
+                shared, shared, 200, "text/html", job_html("Shared vacancy", shared),
+            ),
+        }
+        with TemporaryDirectory() as raw:
+            run = SharedCollectionPipeline(
+                source_id=registered.pk, fetcher=Fetcher(pages),
+                raw_store=RawObjectStore(raw), delay_seconds=0,
+            ).collect(full_snapshot=True, acknowledge_automation_review=True)
+
+        assert run.snapshot_complete
+        assert run.listing_total_discovered == run.details_fetched == 1
+        assert PostingObservation.objects.filter(collection_run=run).count() == 1
+
+    def test_zug_cross_surface_identity_conflict_fails_closed(self) -> None:
+        registered = source("SRC-OFF-CANTON-ZG", "PROSPECTIVE")
+        vacancy_id = "11111111-1111-4111-8111-111111111111"
+        ordinary = zug_detail_url("ordinary-vacancy", vacancy_id)
+        apprenticeship = zug_learning_detail_url("apprenticeship", vacancy_id)
+        pages = {
+            ("GET", ZUG_LISTING): FetchedPage(
+                ZUG_LISTING, ZUG_LISTING, 200, "text/html",
+                prospective_listing((ordinary, "Ordinary vacancy")),
+            ),
+            ("GET", ZUG_APPRENTICESHIP_LISTING): FetchedPage(
+                ZUG_APPRENTICESHIP_LISTING, ZUG_APPRENTICESHIP_LISTING,
+                200, "text/html",
+                prospective_listing((apprenticeship, "Apprenticeship")),
+            ),
+        }
+        with TemporaryDirectory() as raw, pytest.raises(
+            CollectionPipelineError, match="conflicting detail URLs"
+        ):
+            SharedCollectionPipeline(
+                source_id=registered.pk, fetcher=Fetcher(pages),
+                raw_store=RawObjectStore(raw), delay_seconds=0,
+            ).collect(full_snapshot=True, acknowledge_automation_review=True)
+
+        run = CollectionRun.objects.get(source=registered)
+        assert run.status == "FAILED"
+        assert run.snapshot_complete is False
+        assert not PostingObservation.objects.filter(collection_run=run).exists()
+
+    def test_zug_partial_surface_failure_is_not_complete_or_lifecycle_evidence(
+        self,
+    ) -> None:
+        registered = source("SRC-OFF-CANTON-ZG", "PROSPECTIVE")
+        ordinary = zug_detail_url(
+            "ordinary-role", "11111111-1111-4111-8111-111111111111"
+        )
+        pages = {
+            ("GET", ZUG_LISTING): FetchedPage(
+                ZUG_LISTING, ZUG_LISTING, 200, "text/html",
+                prospective_listing(ordinary),
+            ),
+            ("GET", ZUG_APPRENTICESHIP_LISTING): FetchedPage(
+                ZUG_APPRENTICESHIP_LISTING, ZUG_APPRENTICESHIP_LISTING,
+                200, "text/html", b"<html>broken</html>",
+            ),
+        }
+        with TemporaryDirectory() as raw, pytest.raises(
+            PlatformAdapterError, match="contract marker"
+        ):
+            SharedCollectionPipeline(
+                source_id=registered.pk, fetcher=Fetcher(pages),
+                raw_store=RawObjectStore(raw), delay_seconds=0,
+            ).collect(full_snapshot=True, acknowledge_automation_review=True)
+
+        run = CollectionRun.objects.get(source=registered)
+        assert run.snapshot_complete is False
+        assert run.status == "FAILED"
+        assert not PostingLifecycleEvent.objects.filter(
+            posting__source=registered
+        ).exists()
 
     def test_verified_origins_do_not_authorize_umantis(self) -> None:
         expected = {

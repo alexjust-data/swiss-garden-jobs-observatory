@@ -18,7 +18,7 @@ Exactly four required P0 source identities are in scope:
 Live reconnaissance verified two vendor families with distinct deploy-time contracts:
 
 - Zurich uses the modern Solique JSON API; Appenzell Ausserrhoden uses the legacy Solique client-side JSON feed.
-- Zug and Basel-Landschaft use configurable Prospective legacy listings with POST pagination and official JSON-LD detail pages.
+- Zug and Basel-Landschaft use configurable Prospective legacy listings with POST pagination and official JSON-LD detail pages. Zug has two governed discovery surfaces, ordinary jobs and /lernende/, under one frozen Source identity; both must be exhausted before FULL_SOURCE is complete. Each deployment retains its verified listing-form contract marker rather than treating one customer's HTML marker as platform-wide.
 
 Adapters are selected by exact source identity before platform family. This prevents a verified adapter from silently enabling another source that happens to carry the same registry platform label.
 
@@ -30,7 +30,7 @@ Automation still requires the existing explicit acknowledgement. Only origins ve
 
 ## Completeness
 
-Solique feeds are complete in-memory job universes. Zurich additionally exposes a reported position count, which must equal unique discovered IDs. Prospective listings exhaust deterministic POST offsets; Basel-Landschaft also reports a total that must equal unique IDs. A conflict, malformed payload, non-advancing page or mismatched total fails closed and cannot produce a healthy complete snapshot.
+Solique feeds are complete in-memory job universes. Zurich additionally exposes a reported position count, which must equal unique discovered IDs. Prospective listings exhaust deterministic POST offsets; Zug then advances from the ordinary surface to /lernende/ and reconciles native IDs across both. Basel-Landschaft also reports a total that must equal unique IDs. A missing surface contract, conflict, malformed payload, non-advancing page or mismatched total fails closed and cannot produce a healthy complete snapshot.
 
 ## Geography and dates
 

@@ -161,7 +161,9 @@ def ensure_default_endpoints(source: Source) -> None:
         "SRC-OFF-CANTON-ZG": (
             ("LANDING", "PROSPECTIVE", "zg.ch", "https://zg.ch/de/offene-stellen"),
             ("LISTING", "PROSPECTIVE", "zg.prospective.ch", "https://zg.prospective.ch/"),
+            ("LISTING", "PROSPECTIVE", "zg.prospective.ch", "https://zg.prospective.ch/lernende/"),
             ("DETAIL", "PROSPECTIVE", "www.zg.ch", "https://www.zg.ch/jobs/offene-stellen/"),
+            ("DETAIL", "PROSPECTIVE", "www.zg.ch", "https://www.zg.ch/jobs/lernende/offene-stellen/"),
         ),
         "SRC-OFF-CANTON-BL": (
             ("LANDING", "PROSPECTIVE_UMANTIS_LINKED", "www.baselland.ch", "https://www.baselland.ch/politik-und-behorden/direktionen/finanz-und-kirchendirektion/personalamt/jobs/offene-stellen"),
