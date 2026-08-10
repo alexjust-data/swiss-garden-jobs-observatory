@@ -116,12 +116,12 @@ def _is_required(row: dict[str, str]) -> bool:
 def _target_role(row: dict[str, str]) -> str:
     source_id = _source_id(row)
     if source_id in NOT_APPLICABLE_IDS:
-        return Day0SourceUniverseEntry.TargetRole.NONE
+        return Day0SourceUniverseEntry.TargetRole.NONE.value
     if _is_required(row):
-        return Day0SourceUniverseEntry.TargetRole.REQUIRED
+        return Day0SourceUniverseEntry.TargetRole.REQUIRED.value
     if source_id in SUPPORTING_IDS or _priority(row) == "P1":
-        return Day0SourceUniverseEntry.TargetRole.SUPPORTING
-    return Day0SourceUniverseEntry.TargetRole.NONE
+        return Day0SourceUniverseEntry.TargetRole.SUPPORTING.value
+    return Day0SourceUniverseEntry.TargetRole.NONE.value
 
 
 def _has_access_blocker(row: dict[str, str]) -> bool:
@@ -412,17 +412,17 @@ def _evaluate_status(
     access_blockers: int,
 ) -> str:
     if universe.threshold_policy_status == Day0SourceUniverse.ThresholdPolicyStatus.PENDING:
-        return Day0ReadinessAssessment.Status.POLICY_PENDING
+        return Day0ReadinessAssessment.Status.POLICY_PENDING.value
     if access_blockers:
-        return Day0ReadinessAssessment.Status.BLOCKED_ACCESS
+        return Day0ReadinessAssessment.Status.BLOCKED_ACCESS.value
     if critical_count:
-        return Day0ReadinessAssessment.Status.BLOCKED_QUALITY
+        return Day0ReadinessAssessment.Status.BLOCKED_QUALITY.value
     if not required_count or universe.required_completion_threshold is None:
-        return Day0ReadinessAssessment.Status.NOT_READY
+        return Day0ReadinessAssessment.Status.NOT_READY.value
     ratio = Decimal(required_complete) / Decimal(required_count)
     if ratio < universe.required_completion_threshold:
-        return Day0ReadinessAssessment.Status.NOT_READY
-    return Day0ReadinessAssessment.Status.AUTHORIZED
+        return Day0ReadinessAssessment.Status.NOT_READY.value
+    return Day0ReadinessAssessment.Status.AUTHORIZED.value
 
 
 def _advisory_lock(fingerprint: str) -> None:
