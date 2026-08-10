@@ -21,6 +21,12 @@ from collectors.priority_city_adapters import (
     LuzernProspectiveLegacyAdapter,
     SchaffhausenUmantisLinkedAdapter,
 )
+from collectors.required_canton_adapters import (
+    AppenzellAusserrhodenSoliqueAdapter,
+    BaselLandschaftProspectiveLegacyAdapter,
+    ZugProspectiveLegacyAdapter,
+    ZurichCantonSoliqueAdapter,
+)
 from sources.models import Source
 
 ZURICH_API = "https://www.stadt-zuerich.ch/stzh/jobsearch"
@@ -280,8 +286,23 @@ _ADAPTERS: dict[str, PlatformAdapter] = {
     "UMANTIS_LINKED": SchaffhausenUmantisLinkedAdapter(),
 }
 
+_SOURCE_ADAPTERS: dict[str, PlatformAdapter] = {
+    "SRC-OFF-CANTON-ZH": ZurichCantonSoliqueAdapter(),
+    "SRC-OFF-CANTON-AR": AppenzellAusserrhodenSoliqueAdapter(),
+    "SRC-OFF-CANTON-ZG": ZugProspectiveLegacyAdapter(),
+    "SRC-OFF-CANTON-BL": BaselLandschaftProspectiveLegacyAdapter(),
+}
+
 
 def get_adapter(source: Source) -> PlatformAdapter:
+    source_adapter = _SOURCE_ADAPTERS.get(str(source.pk))
+    if source_adapter is not None:
+        if source_adapter.platform_family != source.platform_family:
+            raise UnsupportedPlatformError(
+                f"source {source.pk} platform {source.platform_family!r} does not match "
+                f"verified platform {source_adapter.platform_family!r}"
+            )
+        return source_adapter
     try:
         return _ADAPTERS[source.platform_family]
     except KeyError as exc:
