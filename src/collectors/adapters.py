@@ -16,6 +16,11 @@ from collectors.platforms import (
     PlatformAdapterError,
     UnsupportedPlatformError,
 )
+from collectors.priority_city_adapters import (
+    BernProspectiveApiAdapter,
+    LuzernProspectiveLegacyAdapter,
+    SchaffhausenUmantisLinkedAdapter,
+)
 from sources.models import Source
 
 ZURICH_API = "https://www.stadt-zuerich.ch/stzh/jobsearch"
@@ -270,6 +275,9 @@ class ZurichCitySuccessFactorsLinkedAdapter:
 _ADAPTERS: dict[str, PlatformAdapter] = {
     "REXX_SYSTEMS": RexxAdapter(),
     "CITY_SITE_SUCCESSFACTORS_LINKED": ZurichCitySuccessFactorsLinkedAdapter(),
+    "JOBS_BERN_CH": BernProspectiveApiAdapter(),
+    "CITY_LUZERN_PORTAL": LuzernProspectiveLegacyAdapter(),
+    "UMANTIS_LINKED": SchaffhausenUmantisLinkedAdapter(),
 }
 
 

@@ -37,3 +37,11 @@ HTTP and HTTPS source links are accepted because historical public-sector eviden
 retain HTTP URLs. URL credentials, controls, whitespace obfuscation, malformed hosts, and
 non-HTTP schemes fail closed. Portal and discovery statuses prefer the observed source URL
 and never receive an original-advert label.
+
+## GATE-011B integration correction
+
+Source `location_region` is raw source evidence and is not necessarily a two-letter canton code.
+Dashboard v0.1 now persists a canton only when the value belongs to the explicit Swiss canton-code
+set; otherwise it remains empty until governed municipality/location resolution exists. The canton
+policy version participates in snapshot configuration and fingerprinting. This prevents free-text
+values such as `Bern` or `Schaffhausen` from contaminating the public canton field.
