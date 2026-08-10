@@ -1,0 +1,50 @@
+﻿<article class="job-detail">
+  <p class="eyebrow">VACANCY {{ record.run_vacancy_key }}</p>
+  <h2 id="drawer-title">{{ record.title }}</h2>
+  <p class="detail-employer">{{ record.employer|default:"Employer not reported" }}</p>
+  {% if record.privacy_context != "PUBLIC_OR_NON_RESIDENTIAL" %}
+    <div class="privacy-warning">Approximate location for privacy. Exact residential information is not displayed.</div>
+  {% endif %}
+  {% if record.vacancy_status == "CLOSED_OBSERVED" %}
+    <div class="historical-warning">This vacancy was observed closed. The external publication may have changed or disappeared.</div>
+  {% endif %}
+  <dl class="detail-grid">
+    <div><dt>Observed state</dt><dd>{{ record.vacancy_status }}</dd></div>
+    <div><dt>Published</dt><dd>{% if record.source_published_date %}{{ record.source_published_date }}{% else %}Not reported by source{% endif %}</dd></div>
+    <div><dt>First observed</dt><dd>{{ record.first_seen_at }}</dd></div>
+    <div><dt>Last observed</dt><dd>{{ record.last_seen_at }}</dd></div>
+    <div><dt>Closed observed</dt><dd>{{ record.closed_observed_at|default:"Not applicable" }}</dd></div>
+    <div><dt>Place</dt><dd>{{ record.municipality_name|default:"Unresolved" }}{% if record.canton_code %}, {{ record.canton_code }}{% endif %}</dd></div>
+    <div><dt>Location precision</dt><dd>{{ record.location_precision }}</dd></div>
+    <div><dt>Workload</dt><dd>{{ record.workload|default:"Not reported" }}</dd></div>
+    <div><dt>Salary</dt><dd>Salary extraction not yet available</dd></div>
+    <div><dt>Green relevance</dt><dd>{{ record.green_assessment.result }}</dd></div>
+    <div><dt>Premium/private segment</dt><dd>{{ record.premium_segment }}</dd></div>
+    <div><dt>Positions sought</dt><dd>{{ record.positions_count|default:"Unknown" }}</dd></div>
+    <div><dt>Multiple hires possible</dt><dd>{{ record.multi_hire_possible|yesno:"Yes,No" }}</dd></div>
+    <div><dt>Episode</dt><dd>{{ record.episode_number }}</dd></div>
+    <div><dt>Source</dt><dd>{{ record.source_name }} / {{ record.source_type }}</dd></div>
+    <div><dt>Canonical URL status</dt><dd>{{ record.source_link_status }}</dd></div>
+  </dl>
+  {% if record.safe_description %}
+    <section class="detail-copy"><h3>Source description</h3><p>{{ record.safe_description }}</p></section>
+  {% endif %}
+  <section class="provenance">
+    <h3>Publication provenance</h3>
+    <ul>
+      {% for item in record.source_provenance %}
+        <li>{{ item.role }} · {{ item.source_name }} · posting {{ item.source_posting_id }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  <div class="identifiers">
+    <span>Posting {{ record.canonical_posting_id }}</span>
+    <span>Observation {{ record.canonical_observation_id }}</span>
+    <span>Snapshot {{ snapshot.id }}</span>
+  </div>
+  {% if record.selected_external_url and record.visible_link_label %}
+    <a class="external-action" href="{{ record.selected_external_url }}" target="_blank" rel="noopener noreferrer">{{ record.visible_link_label }}</a>
+  {% else %}
+    <span class="external-disabled">No verified external action available</span>
+  {% endif %}
+</article>

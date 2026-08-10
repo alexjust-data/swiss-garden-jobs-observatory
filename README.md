@@ -128,3 +128,40 @@ Before promotion, every Winterthur detail is transformed into a separate `contra
 A `Posting` is the mutable lifecycle projection for one source-native identity. Immutable `PostingObservation` and `PostingLifecycleEvent` rows remain the audit history. A healthy full-source absence creates `NOT_FOUND`; closure requires two healthy negative scans separated by at least 48 hours. Outages and degraded runs never advance closure.
 
 Run counters distinguish `listing_total_discovered` from `postings_in_scope`. Only `FULL_SOURCE` runs can generate negative lifecycle evidence. No scheduler is included.
+
+## GATE-010 point-in-time dashboard
+
+Build the pinned MapLibre assets and install the headless browser once:
+
+    npm ci
+    npm run build-assets
+    python -m playwright install chromium
+
+Create a dashboard snapshot from aligned successful upstream runs. This command is
+network-free and does not collect, geocode, deduplicate, or reclassify:
+
+    python manage.py build_dashboard_snapshot \
+      --as-of 2026-08-10T12:00:00+02:00 \
+      --dedup-run <UUID> \
+      --premium-run <UUID>
+
+Run Django and open http://127.0.0.1:8000/jobs/. Public endpoints are:
+
+    GET /api/v1/dashboard/snapshots/current/
+    GET /api/v1/dashboard/snapshots/<snapshot_uuid>/
+    GET /api/v1/dashboard/snapshots/<snapshot_uuid>/vacancies/
+    GET /api/v1/dashboard/snapshots/<snapshot_uuid>/vacancies.geojson
+    GET /api/v1/dashboard/snapshots/<snapshot_uuid>/vacancies/<run_vacancy_key>/
+    GET /postings/<posting_uuid>/?snapshot=<snapshot_uuid>
+
+DASHBOARD_MAP_STYLE_URL may contain an explicitly licensed MapLibre style URL.
+When empty, the page uses a local blank style and the complete public table remains usable.
+Set DASHBOARD_MAP_ATTRIBUTION to the attribution required by the configured provider.
+Automated tests never contact a tile provider.
+
+Run the browser acceptance independently with:
+
+    make browser-test
+
+The dashboard is an observed-source snapshot, not Day-0 or a complete Swiss labour-market census.
+Headline market counters remain unavailable until a later gate authorizes adequate coverage.

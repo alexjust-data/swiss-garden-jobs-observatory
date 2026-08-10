@@ -1,0 +1,11 @@
+﻿{
+  "name": "swiss-garden-jobs-observatory-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build-assets": "node scripts/build-dashboard-assets.mjs"
+  },
+  "dependencies": {
+    "maplibre-gl": "6.2.0"
+  }
+}
