@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import date
 from typing import Any
 from uuid import UUID
@@ -12,7 +13,7 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 
 from .models import DashboardSnapshot, DashboardVacancyRecord
-from .services import SCOPE_NOTICE
+from .services import DASHBOARD_VERSION, SCOPE_NOTICE
 
 
 class FilterError(ValueError):
@@ -20,9 +21,11 @@ class FilterError(ValueError):
 
 
 def _snapshot(snapshot_id: UUID | None = None) -> DashboardSnapshot:
-    query = DashboardSnapshot.objects.select_related("dedup_run", "premium_run")
+    query = DashboardSnapshot.objects.select_related("dedup_run", "premium_run").filter(
+        dashboard_version=DASHBOARD_VERSION
+    )
     if snapshot_id is None:
-        item = query.order_by("-as_of", "-created_at").first()
+        item = query.order_by("-as_of", "-input_fingerprint", "-pk").first()
         if item is None:
             raise Http404("No dashboard snapshot is available")
         return item
@@ -78,11 +81,40 @@ def _public_records(snapshot: DashboardSnapshot) -> QuerySet[DashboardVacancyRec
     )
 
 
+FILTER_KEYS = {
+    "status",
+    "canton",
+    "municipality",
+    "source",
+    "segment",
+    "precision",
+    "mapping",
+    "published_from",
+    "published_to",
+    "first_seen_from",
+    "first_seen_to",
+    "q",
+}
+
+
 def filtered_records(
-    request: HttpRequest, snapshot: DashboardSnapshot
+    request: HttpRequest,
+    snapshot: DashboardSnapshot,
+    *,
+    allow_pagination: bool = False,
 ) -> QuerySet[DashboardVacancyRecord]:
     query = _public_records(snapshot)
     params = request.GET
+    allowed = FILTER_KEYS | ({"page", "page_size"} if allow_pagination else set())
+    unknown = set(params) - allowed
+    if unknown:
+        raise FilterError(f"unknown filter: {sorted(unknown)[0]}")
+    repeated = [key for key, values in params.lists() if len(values) > 1]
+    if repeated:
+        raise FilterError(f"repeated filter: {sorted(repeated)[0]}")
+    for key in FILTER_KEYS:
+        if len(params.get(key, "")) > 200:
+            raise FilterError(f"{key} is too long")
     enums = {
         "status": {"ACTIVE", "CLOSED_OBSERVED"},
         "segment": {
@@ -133,6 +165,13 @@ def filtered_records(
         query = query.filter(first_seen_at__date__gte=_date(value, "first_seen_from"))
     if value := params.get("first_seen_to"):
         query = query.filter(first_seen_at__date__lte=_date(value, "first_seen_to"))
+    for start, end in (
+        ("published_from", "published_to"),
+        ("first_seen_from", "first_seen_to"),
+    ):
+        if params.get(start) and params.get(end):
+            if _date(params[start], start) > _date(params[end], end):
+                raise FilterError(f"{start} must not be after {end}")
     if value := params.get("q"):
         value = value.strip()[:100]
         query = query.filter(Q(title__icontains=value) | Q(employer__icontains=value))
@@ -188,7 +227,10 @@ def serialize_record(record: DashboardVacancyRecord, *, detail: bool = False) ->
 
 
 def jobs_page(request: HttpRequest) -> HttpResponse:
-    current = DashboardSnapshot.objects.order_by("-as_of", "-created_at").first()
+    try:
+        current = _snapshot()
+    except Http404:
+        current = None
     return render(
         request,
         "dashboard/jobs.html",
@@ -212,7 +254,7 @@ def snapshot_detail(request: HttpRequest, snapshot_id: UUID) -> JsonResponse:
 def vacancy_list(request: HttpRequest, snapshot_id: UUID) -> JsonResponse:
     snapshot = _snapshot(snapshot_id)
     try:
-        query = filtered_records(request, snapshot)
+        query = filtered_records(request, snapshot, allow_pagination=True)
         page_size = int(request.GET.get("page_size", "25"))
         page_number = int(request.GET.get("page", "1"))
         if page_size < 1 or page_size > 100 or page_number < 1:
@@ -243,12 +285,25 @@ def vacancy_geojson(request: HttpRequest, snapshot_id: UUID) -> JsonResponse:
     try:
         query = filtered_records(request, snapshot).filter(
             mapping_status=DashboardVacancyRecord.MappingStatus.MAPPABLE
-        )[:5000]
+        )
+        records = list(query[:5001])
+        truncated = len(records) > 5000
+        records = records[:5000]
     except FilterError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
     features = []
-    for record in query:
-        if record.public_display_longitude is None or record.public_display_latitude is None:
+    for record in records:
+        latitude = record.public_display_latitude
+        longitude = record.public_display_longitude
+        if (
+            latitude is None
+            or longitude is None
+            or not math.isfinite(latitude)
+            or not math.isfinite(longitude)
+            or not (-90 <= latitude <= 90 and -180 <= longitude <= 180)
+            or record.location_resolution_status != "RESOLVED"
+            or record.privacy_display_level == "HIDDEN"
+        ):
             continue
         features.append(
             {
@@ -267,7 +322,11 @@ def vacancy_geojson(request: HttpRequest, snapshot_id: UUID) -> JsonResponse:
     return JsonResponse(
         {
             "type": "FeatureCollection",
-            "metadata": snapshot_metadata(snapshot),
+            "metadata": {
+                **snapshot_metadata(snapshot),
+                "feature_limit": 5000,
+                "truncated": truncated,
+            },
             "features": features,
         }
     )

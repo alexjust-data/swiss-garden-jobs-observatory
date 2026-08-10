@@ -22,6 +22,8 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
   let map = null;
   let mapReady = false;
   let latestGeoJSON = { type: "FeatureCollection", features: [] };
+  let dataController = null;
+  let requestSequence = 0;
 
   function blankStyle() {
     return {
@@ -79,7 +81,27 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
     activeTrigger = trigger || document.activeElement;
     const response = await fetch(url, { headers: { "X-Requested-With": "dashboard-v0.1" } });
     if (!response.ok) throw new Error("Detail unavailable");
-    drawerContent.innerHTML = await response.text();
+    const parsed = new DOMParser().parseFromString(await response.text(), "text/html");
+    parsed.querySelectorAll(
+      "script,style,svg,math,iframe,object,embed,template,noscript,foreignObject"
+    ).forEach(function (node) { node.remove(); });
+    parsed.querySelectorAll("*").forEach(function (node) {
+      Array.from(node.attributes).forEach(function (attribute) {
+        if (!["class", "href", "target", "rel"].includes(attribute.name)) {
+          node.removeAttribute(attribute.name);
+        }
+      });
+      if (node.hasAttribute("href")) {
+        const safe = safeExternalLink(node.getAttribute("href"), node.textContent);
+        if (!safe) node.removeAttribute("href");
+        else {
+          node.setAttribute("href", safe.href);
+          node.setAttribute("target", "_blank");
+          node.setAttribute("rel", "noopener noreferrer");
+        }
+      }
+    });
+    drawerContent.replaceChildren(...parsed.body.childNodes);
     drawer.hidden = false;
     backdrop.hidden = false;
     document.body.style.overflow = "hidden";
@@ -253,8 +275,13 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
   }
 
   async function loadData(pushState) {
+    if (dataController) dataController.abort();
+    dataController = new AbortController();
+    const signal = dataController.signal;
+    const sequence = ++requestSequence;
+    quality.setAttribute("aria-busy", "true");
     if (!snapshotId) {
-      const current = await fetch(app.dataset.currentUrl).then(function (response) {
+      const current = await fetch(app.dataset.currentUrl, { signal: signal }).then(function (response) {
         if (!response.ok) throw new Error("No dashboard snapshot available");
         return response.json();
       });
@@ -267,21 +294,24 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
       window.history.replaceState({}, "", window.location.pathname + (query ? "?" + query : ""));
     }
     const responses = await Promise.all([
-      fetch(endpoint("table", params)),
-      fetch(endpoint("geojson", params))
+      fetch(endpoint("table", params), { signal: signal }),
+      fetch(endpoint("geojson", params), { signal: signal })
     ]);
     if (!responses[0].ok || !responses[1].ok) throw new Error("Invalid or unavailable filter state");
+    if (sequence !== requestSequence) return;
     const table = await responses[0].json();
     latestGeoJSON = await responses[1].json();
     renderRows(table.results);
     updateMap();
+    quality.setAttribute("aria-busy", "false");
     quality.textContent =
-      table.counts.mappable + " safely mappable · " +
-      table.counts.unmappable + " public but unmapped · snapshot " +
+      table.counts.mappable + " safely mappable Â· " +
+      table.counts.unmappable + " public but unmapped Â· snapshot " +
       table.as_of + ". Headline market counters remain pending Day-0.";
   }
 
   function showError(error) {
+    quality.setAttribute("aria-busy", "false");
     quality.textContent = "Dashboard request failed safely. " + error.message;
   }
 
@@ -296,6 +326,21 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
   backdrop.addEventListener("click", closeDetail);
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && !drawer.hidden) closeDetail();
+    if (event.key === "Tab" && !drawer.hidden) {
+      const focusable = Array.from(
+        drawer.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])')
+      ).filter(function (node) { return !node.hasAttribute("disabled"); });
+      if (!focusable.length) {
+        event.preventDefault();
+        closeButton.focus();
+      } else if (event.shiftKey && document.activeElement === focusable[0]) {
+        event.preventDefault();
+        focusable[focusable.length - 1].focus();
+      } else if (!event.shiftKey && document.activeElement === focusable[focusable.length - 1]) {
+        event.preventDefault();
+        focusable[0].focus();
+      }
+    }
   });
 
   window.dashboardApp = {

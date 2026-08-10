@@ -1,4 +1,4 @@
-﻿# Decision 0006: GATE-010 Point-in-Time Map Dashboard
+# Decision 0006: GATE-010 Point-in-Time Map Dashboard
 
 ## Status
 
@@ -19,3 +19,21 @@ The frontend uses Django templates, lightweight JavaScript, and locally served M
 GATE-010 does not authorize Day-0. Headline market cards remain pending and a persistent coverage disclaimer states that implemented sources are not a complete Swiss market census. Salary extraction, access-level classification, new collectors, scheduling, geocoding, and upstream semantic changes remain outside scope.
 
 Exact snapshot replay is fingerprinted and idempotent. PostgreSQL advisory locking prevents duplicate concurrent builds. A build is transactional and cannot publish partial record coverage. Frozen docs/research/v0_4 remains unchanged.
+
+## Audit clarification: temporal and presentation authority
+
+A geospatial derivation is eligible only when its immutable created_at is less than or
+equal to the dashboard as_of. Rebuilding a historical snapshot cannot consume a later
+resolution merely because it references the same observation. The dashboard fingerprint
+covers the selected resolution identity, its availability timestamp, run assignments, and
+all persisted presentation values.
+
+Current means the supported dashboard version with the greatest as_of; deterministic
+fingerprint and primary-key ordering resolve ties. Historical rebuild insertion time is not
+currentness. Exact snapshot endpoints are immutable; table, GeoJSON, and detail requests
+remain pinned to the selected snapshot UUID.
+
+HTTP and HTTPS source links are accepted because historical public-sector evidence may
+retain HTTP URLs. URL credentials, controls, whitespace obfuscation, malformed hosts, and
+non-HTTP schemes fail closed. Portal and discovery statuses prefer the observed source URL
+and never receive an original-advert label.

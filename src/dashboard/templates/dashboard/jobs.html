@@ -39,10 +39,10 @@
     </section>
 
     <section class="headline-grid" aria-label="Day-0 market indicators">
-      <article><span>ACTIVE UNIQUE</span><strong>—</strong><small>Pending GATE-011 Day-0</small></article>
-      <article><span>NEW 24H</span><strong>—</strong><small>Pending adequate coverage</small></article>
-      <article><span>REAPPEARED</span><strong>—</strong><small>Pending Day-0 authorization</small></article>
-      <article><span>SWISS COVERAGE</span><strong>—</strong><small>Not yet defensible</small></article>
+      <article><span>ACTIVE UNIQUE</span><strong>â€”</strong><small>Pending GATE-011 Day-0</small></article>
+      <article><span>NEW 24H</span><strong>â€”</strong><small>Pending adequate coverage</small></article>
+      <article><span>REAPPEARED</span><strong>â€”</strong><small>Pending Day-0 authorization</small></article>
+      <article><span>SWISS COVERAGE</span><strong>â€”</strong><small>Not yet defensible</small></article>
     </section>
 
     <form id="filters" class="filters" aria-label="Job filters">
@@ -63,7 +63,7 @@
           <span id="map-count" class="count-chip">0 markers</span>
         </div>
         <div id="map" aria-label="Map of safely mappable vacancies"></div>
-        <p id="map-empty" class="map-empty" hidden>No safely mappable records match this snapshot and filter state. Unmapped jobs remain available in the table.</p>
+        <p id="map-empty" class="map-empty" role="status" aria-live="polite" hidden>No safely mappable records match this snapshot and filter state. Unmapped jobs remain available in the table.</p>
         <div class="precision-legend">
           <span><i class="exact"></i>Exact allowed</span>
           <span><i class="approx"></i>Approximate for privacy</span>
@@ -76,21 +76,21 @@
           <div><p class="eyebrow">SAME SNAPSHOT / SAME FILTERS</p><h2>Public green vacancies</h2></div>
           <span id="result-count" class="count-chip">0 records</span>
         </div>
-        <div id="quality-note" class="quality-note">Loading immutable snapshot…</div>
+        <div id="quality-note" class="quality-note" role="status" aria-live="polite">Loading immutable snapshotâ€¦</div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Role</th><th>Place</th><th>Observed</th><th>Source</th></tr></thead>
             <tbody id="results-body"></tbody>
           </table>
         </div>
-        <p id="results-empty" class="empty-state" hidden>No public green-confirmed vacancies match these filters.</p>
+        <p id="results-empty" class="empty-state" role="status" aria-live="polite" hidden>No public green-confirmed vacancies match these filters.</p>
       </div>
     </section>
   </main>
 
   <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
   <aside id="job-drawer" class="drawer" aria-modal="true" aria-labelledby="drawer-title" hidden>
-    <button id="drawer-close" class="drawer-close" aria-label="Close job details">Close ×</button>
+    <button id="drawer-close" class="drawer-close" aria-label="Close job details">Close Ã—</button>
     <div id="drawer-content"></div>
   </aside>
 

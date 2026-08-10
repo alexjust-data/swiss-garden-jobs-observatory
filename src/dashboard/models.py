@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
 import uuid
 from typing import Any
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
@@ -109,6 +111,13 @@ class DashboardSnapshot(AppendOnlyDashboardEvidence):
                 ),
                 name="dashboard_snapshot_mapping_counts_complete",
             ),
+            models.CheckConstraint(
+                condition=Q(
+                    known_publication_date_count=F("public_green_eligible_count")
+                    - F("unknown_publication_date_count")
+                ),
+                name="dashboard_publication_counts_complete",
+            ),
         ]
 
 
@@ -195,6 +204,7 @@ class DashboardVacancyRecord(AppendOnlyDashboardEvidence):
     location_precision = models.CharField(max_length=24)
     privacy_context = models.CharField(max_length=32)
     privacy_display_level = models.CharField(max_length=24)
+    location_resolution_status = models.CharField(max_length=12, blank=True)
     public_display_latitude = models.FloatField(null=True, blank=True)
     public_display_longitude = models.FloatField(null=True, blank=True)
     premium_segment = models.CharField(max_length=40)
@@ -210,6 +220,60 @@ class DashboardVacancyRecord(AppendOnlyDashboardEvidence):
     source_provenance = models.JSONField(default=list)
     quality_flags = models.JSONField(default=list)
     created_at = models.DateTimeField(default=timezone.now)
+
+    def clean(self) -> None:
+        super().clean()
+        errors: dict[str, str] = {}
+        if self.snapshot.pk and self.dedup_run_vacancy_state.pk:
+            if self.dedup_run_vacancy_state.dedup_run.pk != self.snapshot.dedup_run.pk:
+                errors["dedup_run_vacancy_state"] = "state belongs to another dedup run"
+            if self.run_vacancy_key != self.dedup_run_vacancy_state.run_vacancy_key:
+                errors["run_vacancy_key"] = "run vacancy key does not match state"
+            if self.canonical_posting.pk != self.dedup_run_vacancy_state.canonical_posting.pk:
+                errors["canonical_posting"] = "canonical posting does not match state"
+        if self.canonical_observation.pk and self.canonical_posting.pk:
+            if self.canonical_observation.posting.pk != self.canonical_posting.pk:
+                errors["canonical_observation"] = "observation belongs to another posting"
+        if self.premium_assessment.pk and self.snapshot.pk:
+            if self.premium_assessment.run.pk != self.snapshot.premium_run.pk:
+                errors["premium_assessment"] = "assessment belongs to another premium run"
+            if self.premium_assessment.posting_observation.pk != self.canonical_observation.pk:
+                errors["premium_assessment"] = "assessment belongs to another observation"
+            if (
+                self.premium_assessment.green_relevance_assessment.pk
+                if self.premium_assessment.green_relevance_assessment
+                else None
+            ) != (self.green_assessment.pk if self.green_assessment else None):
+                errors["green_assessment"] = "green assessment does not match premium evidence"
+        if self.location_resolution is not None:
+            if self.location_resolution.posting_observation.pk != self.canonical_observation.pk:
+                errors["location_resolution"] = "location belongs to another observation"
+            if self.location_resolution.privacy_context != self.privacy_context:
+                errors["location_resolution"] = "location privacy context is incompatible"
+            if self.location_resolution.created_at > self.snapshot.as_of:
+                errors["location_resolution"] = "future location evidence is not PIT eligible"
+        if self.canonical_observation.pk:
+            source = self.canonical_observation.source
+            if self.source_name != source.source_name or self.source_type != source.source_type:
+                errors["source_name"] = "source presentation does not match observation source"
+        coordinates = (self.public_display_latitude, self.public_display_longitude)
+        if any(value is not None for value in coordinates):
+            if not all(value is not None and math.isfinite(value) for value in coordinates):
+                errors["public_display_latitude"] = "public coordinates must be a finite pair"
+            elif not (
+                -90 <= self.public_display_latitude <= 90
+                and -180 <= self.public_display_longitude <= 180
+            ):
+                errors["public_display_latitude"] = "public coordinates are outside valid ranges"
+        if self.mapping_status == self.MappingStatus.MAPPABLE:
+            if self.location_resolution_status != "RESOLVED":
+                errors["mapping_status"] = "mappable records require a RESOLVED location"
+            if self.privacy_display_level == "HIDDEN" or not all(
+                value is not None for value in coordinates
+            ):
+                errors["mapping_status"] = "mappable records require visible coordinate pairs"
+        if errors:
+            raise ValidationError(errors)
 
     class Meta:
         db_table = "dashboard_vacancy_record"
@@ -243,5 +307,25 @@ class DashboardVacancyRecord(AppendOnlyDashboardEvidence):
                     public_display_longitude__isnull=False,
                 ),
                 name="dashboard_record_mappable_has_coordinates",
+            ),
+            models.CheckConstraint(
+                condition=Q(public_display_latitude__isnull=True)
+                | (Q(public_display_latitude__gte=-90) & Q(public_display_latitude__lte=90)),
+                name="dashboard_public_latitude_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(public_display_longitude__isnull=True)
+                | (Q(public_display_longitude__gte=-180) & Q(public_display_longitude__lte=180)),
+                name="dashboard_public_longitude_range",
+            ),
+            models.CheckConstraint(
+                condition=~Q(mapping_status="MAPPABLE")
+                | (
+                    Q(location_resolution_status="RESOLVED")
+                    & ~Q(privacy_display_level="HIDDEN")
+                    & Q(public_display_latitude__isnull=False)
+                    & Q(public_display_longitude__isnull=False)
+                ),
+                name="dashboard_mappable_resolution_valid",
             ),
         ]

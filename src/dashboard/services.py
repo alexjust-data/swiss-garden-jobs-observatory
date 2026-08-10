@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from html.parser import HTMLParser
@@ -14,10 +15,17 @@ from django.db import connection, transaction
 from observations.geospatial import RESOLVER_VERSION
 from observations.models import GreenRelevanceAssessment, PostingLocationResolution
 from premium_segments.classifier import CLASSIFIER_VERSION as PREMIUM_CLASSIFIER_VERSION
-from premium_segments.classifier import GREEN_CLASSIFIER_VERSION
+from premium_segments.classifier import GREEN_CLASSIFIER_VERSION, load_taxonomy
+from premium_segments.classifier import NORMALIZER_VERSION as PREMIUM_NORMALIZER_VERSION
+from premium_segments.classifier import TAXONOMY_VERSION as PREMIUM_TAXONOMY_VERSION
 from premium_segments.models import PremiumSegmentAssessment, PremiumSegmentRun
 from vacancies.evidence import select_posting_evidence
-from vacancies.models import DedupReviewItem, DedupRun, DedupRunVacancyState
+from vacancies.models import (
+    DedupReviewItem,
+    DedupRun,
+    DedupRunPostingAssignment,
+    DedupRunVacancyState,
+)
 
 from .models import DashboardSnapshot, DashboardVacancyRecord
 
@@ -48,12 +56,25 @@ class _VisibleText(HTMLParser):
         self.parts: list[str] = []
         self.hidden_depth = 0
 
+    HIDDEN_TAGS = {
+        "script",
+        "style",
+        "template",
+        "noscript",
+        "svg",
+        "math",
+        "iframe",
+        "object",
+        "embed",
+        "foreignobject",
+    }
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() in {"script", "style", "template", "noscript"}:
+        if tag.lower() in self.HIDDEN_TAGS:
             self.hidden_depth += 1
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in {"script", "style", "template", "noscript"} and self.hidden_depth:
+        if tag.lower() in self.HIDDEN_TAGS and self.hidden_depth:
             self.hidden_depth -= 1
 
     def handle_data(self, data: str) -> None:
@@ -64,16 +85,33 @@ class _VisibleText(HTMLParser):
 def visible_text(value: str, limit: int = 6000) -> str:
     parser = _VisibleText()
     parser.feed(value or "")
-    return re.sub(r"\s+", " ", " ".join(parser.parts)).strip()[:limit]
+    rendered = "".join(
+        character
+        for character in " ".join(parser.parts)
+        if not unicodedata.category(character).startswith("C") or character in "\t\r\n"
+    )
+    return re.sub(r"\s+", " ", rendered).strip()[:limit]
 
 
 def safe_external_url(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         return ""
-    parsed = urlparse(value.strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    raw = value.strip()
+    if any(
+        character.isspace() or unicodedata.category(character).startswith("C") for character in raw
+    ):
         return ""
-    if parsed.username or parsed.password:
+    try:
+        parsed = urlparse(raw)
+        hostname = parsed.hostname
+        _ = parsed.port
+        if hostname:
+            hostname.encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        return ""
+    if parsed.scheme not in {"http", "https"} or not hostname:
+        return ""
+    if parsed.username or parsed.password or raw.startswith("//"):
         return ""
     return parsed.geturl()
 
@@ -84,8 +122,14 @@ def source_link(observation: Any) -> tuple[str, str, str, str, str]:
     explicit = str(structured.get("canonical_url_status") or "").strip().upper()
     canonical = safe_external_url(observation.canonical_url)
     source_url = safe_external_url(contract.get("source_url"))
-    if explicit not in KNOWN_LINK_STATUSES:
-        explicit = ""
+    if explicit and explicit not in KNOWN_LINK_STATUSES:
+        return (
+            cast(str, DashboardVacancyRecord.SourceLinkStatus.REVIEW),
+            "",
+            "",
+            "INVALID_EXPLICIT_STATUS",
+            source_url,
+        )
     if explicit:
         status = explicit
         method = "EXPLICIT_SOURCE_EVIDENCE"
@@ -109,7 +153,10 @@ def source_link(observation: Any) -> tuple[str, str, str, str, str]:
         "DISCOVERY_OR_HISTORICAL": "Open observed source",
         "EXPIRED_SOURCE": "Open expired link",
     }
-    selected = canonical or source_url
+    if status in {"PORTAL_KNOWN_URL_PENDING", "DISCOVERY_OR_HISTORICAL"}:
+        selected = source_url or canonical
+    else:
+        selected = canonical or source_url
     if status in {"NO_LINK_AVAILABLE", "REVIEW"}:
         selected = ""
     return str(status), selected, labels.get(str(status), ""), method, source_url
@@ -135,6 +182,8 @@ def _visibility(assessment: PremiumSegmentAssessment) -> str:
 
 def _location(
     assessment: PremiumSegmentAssessment,
+    *,
+    as_of: datetime,
 ) -> tuple[PostingLocationResolution | None, str, list[str]]:
     context = assessment.privacy_context
     resolution = (
@@ -142,6 +191,7 @@ def _location(
             posting_observation=assessment.posting_observation,
             resolver_version=RESOLVER_VERSION,
             privacy_context=context,
+            created_at__lte=as_of,
         )
         .order_by("-created_at", "-pk")
         .first()
@@ -237,7 +287,7 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
         if observation.posting_id != state.canonical_posting_id:
             raise DashboardBuildError("premium assessment does not belong to canonical posting")
         visibility = _visibility(assessment)
-        resolution, mapping, flags = _location(assessment)
+        resolution, mapping, flags = _location(assessment, as_of=dedup_run.as_of)
         if visibility != cast(str, DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED):
             mapping = cast(str, DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED)
         link_status, selected_url, label, link_method, source_url = source_link(observation)
@@ -280,6 +330,7 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
             "privacy_display_level": (
                 resolution.privacy_display_level if resolution else "HIDDEN" if protected else ""
             ),
+            "location_resolution_status": (resolution.resolution_status if resolution else ""),
             "public_display_latitude": (
                 resolution.public_display_latitude
                 if resolution is not None
@@ -315,7 +366,29 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
                     "green_assessment_id": str(assessment.green_relevance_assessment_id or ""),
                     "premium_assessment_id": str(assessment.pk),
                     "location_resolution_id": str(resolution.pk) if resolution else None,
+                    "location_available_at": (
+                        resolution.created_at.isoformat() if resolution else None
+                    ),
                     "assignments": provenance,
+                    "presentation": {
+                        key: (
+                            value.isoformat()
+                            if hasattr(value, "isoformat")
+                            else str(value.pk)
+                            if hasattr(value, "pk")
+                            else value
+                        )
+                        for key, value in values.items()
+                        if key
+                        not in {
+                            "dedup_run_vacancy_state",
+                            "canonical_posting",
+                            "canonical_observation",
+                            "green_assessment",
+                            "premium_assessment",
+                            "location_resolution",
+                        }
+                    },
                 },
             )
         )
@@ -356,6 +429,40 @@ def _validate_runs(dedup_run: DedupRun, premium_run: PremiumSegmentRun, as_of: d
         raise DashboardBuildError("unsupported dedup version")
     if premium_run.classifier_version != PREMIUM_CLASSIFIER_VERSION:
         raise DashboardBuildError("unsupported premium classifier version")
+    if premium_run.normalizer_version != PREMIUM_NORMALIZER_VERSION:
+        raise DashboardBuildError("unsupported premium normalizer version")
+    if premium_run.taxonomy_version != PREMIUM_TAXONOMY_VERSION:
+        raise DashboardBuildError("unsupported premium taxonomy version")
+    _, expected_taxonomy_sha256 = load_taxonomy()
+    if premium_run.taxonomy_sha256 != expected_taxonomy_sha256:
+        raise DashboardBuildError("unsupported premium taxonomy hash")
+
+    assigned_posting_ids = {
+        str(value)
+        for value in DedupRunPostingAssignment.objects.filter(dedup_run=dedup_run).values_list(
+            "posting_id", flat=True
+        )
+    }
+    expected_observations = {
+        item.observation_id
+        for item in select_posting_evidence(as_of)
+        if item.posting_id in assigned_posting_ids
+    }
+    actual_observations = {
+        str(value)
+        for value in PremiumSegmentAssessment.objects.filter(run=premium_run).values_list(
+            "posting_observation_id", flat=True
+        )
+    }
+    if expected_observations != actual_observations:
+        raise DashboardBuildError("dedup and premium evidence universes are incompatible")
+    if (
+        PremiumSegmentAssessment.objects.filter(run=premium_run)
+        .exclude(green_relevance_assessment__isnull=True)
+        .exclude(green_relevance_assessment__classifier_version=GREEN_CLASSIFIER_VERSION)
+        .exists()
+    ):
+        raise DashboardBuildError("premium run uses an incompatible green classifier")
 
 
 @transaction.atomic
@@ -435,9 +542,11 @@ def build_dashboard_snapshot(
             status=DedupReviewItem.Status.PENDING,
         ).count(),
     )
-    DashboardVacancyRecord.objects.bulk_create(
-        [DashboardVacancyRecord(snapshot=snapshot, **plan.values) for plan in plans]
-    )
+    records = [DashboardVacancyRecord(snapshot=snapshot, **plan.values) for plan in plans]
+    for record in records:
+        record.clean()
+        record.validate_constraints()
+    DashboardVacancyRecord.objects.bulk_create(records)
     if snapshot.vacancy_records.count() != snapshot.total_vacancy_states:
         raise DashboardBuildError("dashboard record coverage is incomplete")
     return snapshot, False

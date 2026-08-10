@@ -21,6 +21,7 @@ from premium_segments.classifier import (
     GREEN_TAXONOMY_VERSION,
     NORMALIZER_VERSION,
     TAXONOMY_VERSION,
+    load_taxonomy,
 )
 from premium_segments.models import PremiumSegmentAssessment, PremiumSegmentRun
 from sources.models import Source
@@ -189,7 +190,7 @@ def create_dashboard_upstream(
         classifier_version=CLASSIFIER_VERSION,
         normalizer_version=NORMALIZER_VERSION,
         taxonomy_version=TAXONOMY_VERSION,
-        taxonomy_sha256=digest("premium-taxonomy"),
+        taxonomy_sha256=load_taxonomy()[1],
         configuration={"fixture": "dashboard-v0.1"},
         input_fingerprint=digest(f"premium-{suffix}-{as_of.isoformat()}"),
         observations_considered=1,
