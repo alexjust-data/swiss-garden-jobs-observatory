@@ -168,6 +168,8 @@ class Gate011BTests(TestCase):
         assert listing.next_request is not None
         assert listing.next_request.method == "POST"
         assert ("offset", "25") in listing.next_request.form_data
+        assert "filter_10" not in request.url
+        assert all(key != "filter_10" for key, _ in listing.next_request.form_data)
         parsed = adapter.parse_detail(
             FetchedPage(
                 detail_url,
@@ -186,6 +188,69 @@ class Gate011BTests(TestCase):
         )
         assert parsed.published_at_parse_method == "STRUCTURED_DATA"
         assert parsed.location_locality == "Luzern"
+
+    def test_full_source_luzern_includes_ordinary_and_apprenticeship(self) -> None:
+        registered = make_source("SRC-OFF-CITY-LUZERN", "CITY_LUZERN_PORTAL", "stadtluzern.ch")
+        adapter = get_adapter(registered)
+        listing_request = adapter.initial_listing_request(registered)
+        ordinary_url = (
+            "https://job.stadtluzern.ch/stellen/stadtluzern/offene-stellen/"
+            "sachbearbeiter-in/ordinary"
+        )
+        apprenticeship_url = (
+            "https://job.stadtluzern.ch/stellen/stadtluzern/offene-stellen/"
+            "lehrstelle-gaertner-in/apprenticeship"
+        )
+        listing_body = f"""
+        <a id="job-201" href="{ordinary_url}" title="Sachbearbeiter*in">
+          <h3>Sachbearbeiter*in</h3>
+        </a>
+        <a id="job-202" href="{apprenticeship_url}" title="Lehrstelle Gärtner*in">
+          <h3>Lehrstelle Gärtner*in</h3>
+        </a>
+        """.encode()
+        pages = {
+            ("GET", listing_request.url): FetchedPage(
+                listing_request.url,
+                listing_request.url,
+                200,
+                "text/html",
+                listing_body,
+            ),
+            ("GET", ordinary_url): FetchedPage(
+                ordinary_url,
+                ordinary_url,
+                200,
+                "text/html",
+                job_posting_html("Sachbearbeiter*in", canonical=ordinary_url),
+            ),
+            ("GET", apprenticeship_url): FetchedPage(
+                apprenticeship_url,
+                apprenticeship_url,
+                200,
+                "text/html",
+                job_posting_html("Lehrstelle Gärtner*in", canonical=apprenticeship_url),
+            ),
+        }
+        with TemporaryDirectory() as raw:
+            run = SharedCollectionPipeline(
+                source_id=registered.pk,
+                fetcher=Fetcher(pages),
+                raw_store=RawObjectStore(raw),
+                delay_seconds=0,
+                clock=lambda: datetime(2026, 8, 10, 12, tzinfo=UTC),
+            ).collect(full_snapshot=True, acknowledge_automation_review=True)
+        observations = PostingObservation.objects.filter(collection_run=run)
+        assessments = GreenRelevanceAssessment.objects.filter(
+            posting_observation__collection_run=run
+        )
+        assert run.snapshot_complete and run.listing_total_discovered == 2
+        assert set(observations.values_list("source_posting_id", flat=True)) == {"201", "202"}
+        assert observations.count() == assessments.count() == 2
+        assert (
+            assessments.get(posting_observation__source_posting_id="202").result
+            == "GREEN_CONFIRMED"
+        )
 
     def test_schaffhausen_uses_local_mirror_and_explicit_exhaustion(self) -> None:
         adapter = SchaffhausenUmantisLinkedAdapter()

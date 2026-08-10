@@ -20,11 +20,7 @@ from sources.models import Source
 
 BERN_API = "https://jobs.bern.ch/public/v1/medium/1840/jobs"
 BERN_PAGE_SIZE = 96
-LUZERN_LISTING = (
-    "https://job.stadtluzern.ch/stellen/stadtluzern/"
-    "?lang=de&filter_10=1351172,1351173,1351174,1351175,1351176,1351177,1351178,1351180"
-)
-LUZERN_FILTERS = tuple(str(value) for value in range(1351172, 1351181) if value != 1351179)
+LUZERN_LISTING = "https://job.stadtluzern.ch/stellen/stadtluzern/?lang=de"
 SCHAFFHAUSEN_API = (
     "https://jobs.stadt-schaffhausen.ch/wp-json/wp/v2/jobs?per_page=100&_fields=id,slug,link,title"
 )
@@ -341,9 +337,11 @@ class _LuzernListingParser(HTMLParser):
 def _luzern_request(offset: int) -> FetchRequest:
     if offset == 0:
         return FetchRequest(LUZERN_LISTING, "text/html", "LISTING_PAGE", context={"offset": 0})
-    fields: list[tuple[str, str]] = [("query", ""), ("workload", "10,100")]
-    fields.extend(("filter_10", value) for value in LUZERN_FILTERS)
-    fields.append(("offset", str(offset)))
+    fields: list[tuple[str, str]] = [
+        ("query", ""),
+        ("workload", "10,100"),
+        ("offset", str(offset)),
+    ]
     return FetchRequest(
         LUZERN_LISTING,
         "text/html",

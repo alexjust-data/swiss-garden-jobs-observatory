@@ -98,3 +98,30 @@ GATE-011A readiness assessment `aba512c8-20a5-4a33-a5d1-56b197532624` reports 5/
 sources complete and healthy (17.24%). Status remains `DAY_0_THRESHOLD_POLICY_PENDING`; threshold
 and freshness policies remain pending, and no market figure is authorized. Exact dashboard and
 readiness replays reused their immutable records.
+## Luzern FULL_SOURCE completeness correction
+
+Independent review identified that the first implementation enumerated `filter_10` categories and
+excluded category `1351179` (Lehrstellen). Run `13d6d54c-1a6f-45fc-a20f-50de66d6da4a` and its
+16-posting replay remain immutable historical evidence, but they are superseded for gate
+acceptance and must not be treated as complete source coverage.
+
+The corrected discovery surface is the canonical unfiltered city listing:
+
+`https://job.stadtluzern.ch/stellen/stadtluzern/?lang=de`
+
+Neither initial discovery nor POST pagination sends `filter_10`. Deterministic completion is the
+absence of a next-page control after processing every unique source-native ID returned by the
+unfiltered portal; no live count is hard-coded.
+
+Controlled corrected run `db2f919a-dc19-4397-b6bc-5834913ef8d1` discovered and processed
+23/23/23/23 postings in one listing request, with `SUCCEEDED`, `HEALTHY` and
+`snapshot_complete=true`. It produced 16 `STILL_ACTIVE`, 7 `NEW`, 2 `GREEN_CONFIRMED`, 0
+`REVIEW` and 21 `NOT_GREEN`. All 23 publication dates came from `STRUCTURED_DATA` with
+`EXACT_DATE`; municipality remained unresolved for all 23. The two green records are the source's
+Gärtner*in EFZ Pflanzenproduktion and Gärtner*in EBA Garten- und Landschaftsbau apprenticeships.
+
+At aligned `as_of=2026-08-10T19:04:09.667267+02:00`, downstream processing selected 662 postings
+and 662 effective vacancies, with zero AUTO_MERGE and the unchanged six dedup REVIEW pairs. The
+dashboard exposes 11 public GREEN_CONFIRMED records and zero safe map features. Day-0 readiness
+remains `DAY_0_THRESHOLD_POLICY_PENDING`; 5/29 required sources are complete and healthy
+(17.24%), while threshold and freshness policies remain pending.

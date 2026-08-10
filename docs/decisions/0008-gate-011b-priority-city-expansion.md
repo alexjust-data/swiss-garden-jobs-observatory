@@ -36,3 +36,10 @@ Where a city listing points to Umantis, the unauthorized Umantis origin is not f
 vacancy identity is resolved through the city-owned WordPress index and the city-owned REST
 record supplies the conservative source detail. Missing fields remain unknown; no external detail
 is inferred.
+## Luzern correction
+
+Luzern FULL_SOURCE discovery uses the unfiltered canonical city listing. Category allow-lists are
+not an authorized scientific scope boundary; apprenticeships and all other source-visible job
+categories remain in source evidence and are classified downstream. The earlier 16-posting run is
+historical evidence but not the accepted completeness proof. Corrected run
+`db2f919a-dc19-4397-b6bc-5834913ef8d1` is the gate acceptance run.
