@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from django.db import connection, transaction
@@ -90,16 +90,16 @@ def source_link(observation: Any) -> tuple[str, str, str, str, str]:
         status = explicit
         method = "EXPLICIT_SOURCE_EVIDENCE"
     elif canonical and observation.source.canonicality == "CANONICAL":
-        status = DashboardVacancyRecord.SourceLinkStatus.CANONICAL.value
+        status = cast(str, DashboardVacancyRecord.SourceLinkStatus.CANONICAL)
         method = "CANONICAL_SOURCE_INDIVIDUAL_URL"
     elif source_url:
-        status = DashboardVacancyRecord.SourceLinkStatus.DISCOVERY_OR_HISTORICAL.value
+        status = cast(str, DashboardVacancyRecord.SourceLinkStatus.DISCOVERY_OR_HISTORICAL)
         method = "OBSERVED_SOURCE_FALLBACK"
     elif canonical:
-        status = DashboardVacancyRecord.SourceLinkStatus.REVIEW.value
+        status = cast(str, DashboardVacancyRecord.SourceLinkStatus.REVIEW)
         method = "UNVERIFIED_CANONICAL_URL"
     else:
-        status = DashboardVacancyRecord.SourceLinkStatus.NO_LINK_AVAILABLE.value
+        status = cast(str, DashboardVacancyRecord.SourceLinkStatus.NO_LINK_AVAILABLE)
         method = "NO_SAFE_URL"
     labels = {
         "CANONICAL": "Open original advert",
@@ -125,12 +125,12 @@ class RecordPlan:
 def _visibility(assessment: PremiumSegmentAssessment) -> str:
     green = assessment.green_relevance_assessment
     if green is None:
-        return DashboardVacancyRecord.VisibilityStatus.MISSING_GREEN_ASSESSMENT.value
+        return cast(str, DashboardVacancyRecord.VisibilityStatus.MISSING_GREEN_ASSESSMENT)
     if green.result == GreenRelevanceAssessment.Result.GREEN_CONFIRMED:
-        return DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED.value
+        return cast(str, DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED)
     if green.result == GreenRelevanceAssessment.Result.NOT_GREEN:
-        return DashboardVacancyRecord.VisibilityStatus.EXCLUDED_NOT_GREEN.value
-    return DashboardVacancyRecord.VisibilityStatus.REVIEW_NOT_PUBLIC.value
+        return cast(str, DashboardVacancyRecord.VisibilityStatus.EXCLUDED_NOT_GREEN)
+    return cast(str, DashboardVacancyRecord.VisibilityStatus.REVIEW_NOT_PUBLIC)
 
 
 def _location(
@@ -149,33 +149,37 @@ def _location(
     flags: list[str] = []
     if resolution is None:
         status = (
-            DashboardVacancyRecord.MappingStatus.PRIVACY_RESOLUTION_MISSING.value
+            cast(str, DashboardVacancyRecord.MappingStatus.PRIVACY_RESOLUTION_MISSING)
             if context in PROTECTED_CONTEXTS
-            else DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED.value
+            else cast(str, DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED)
         )
         return None, status, flags
     if resolution.resolution_status == "REVIEW":
-        return resolution, DashboardVacancyRecord.MappingStatus.LOCATION_REVIEW.value, flags
+        return resolution, cast(str, DashboardVacancyRecord.MappingStatus.LOCATION_REVIEW), flags
     if resolution.resolution_status == "UNRESOLVED":
-        return resolution, DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED.value, flags
+        return (
+            resolution,
+            cast(str, DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED),
+            flags,
+        )
     if resolution.privacy_display_level == "HIDDEN":
-        return resolution, DashboardVacancyRecord.MappingStatus.LOCATION_HIDDEN.value, flags
+        return resolution, cast(str, DashboardVacancyRecord.MappingStatus.LOCATION_HIDDEN), flags
     lat = resolution.public_display_latitude
     lon = resolution.public_display_longitude
     if lat is None or lon is None:
         return (
             resolution,
-            DashboardVacancyRecord.MappingStatus.PUBLIC_COORDINATES_MISSING.value,
+            cast(str, DashboardVacancyRecord.MappingStatus.PUBLIC_COORDINATES_MISSING),
             flags,
         )
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         flags.append("INVALID_PUBLIC_COORDINATES")
         return (
             resolution,
-            DashboardVacancyRecord.MappingStatus.PUBLIC_COORDINATES_MISSING.value,
+            cast(str, DashboardVacancyRecord.MappingStatus.PUBLIC_COORDINATES_MISSING),
             flags,
         )
-    return resolution, DashboardVacancyRecord.MappingStatus.MAPPABLE.value, flags
+    return resolution, cast(str, DashboardVacancyRecord.MappingStatus.MAPPABLE), flags
 
 
 def _workload(observation: Any) -> str:
@@ -234,8 +238,8 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
             raise DashboardBuildError("premium assessment does not belong to canonical posting")
         visibility = _visibility(assessment)
         resolution, mapping, flags = _location(assessment)
-        if visibility != DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED.value:
-            mapping = DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED.value
+        if visibility != cast(str, DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED):
+            mapping = cast(str, DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED)
         link_status, selected_url, label, link_method, source_url = source_link(observation)
         contract = observation.contract_payload or {}
         municipality = resolution.municipality if resolution else observation.municipality
@@ -279,13 +283,13 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
             "public_display_latitude": (
                 resolution.public_display_latitude
                 if resolution is not None
-                and mapping == DashboardVacancyRecord.MappingStatus.MAPPABLE.value
+                and mapping == cast(str, DashboardVacancyRecord.MappingStatus.MAPPABLE)
                 else None
             ),
             "public_display_longitude": (
                 resolution.public_display_longitude
                 if resolution is not None
-                and mapping == DashboardVacancyRecord.MappingStatus.MAPPABLE.value
+                and mapping == cast(str, DashboardVacancyRecord.MappingStatus.MAPPABLE)
                 else None
             ),
             "premium_segment": assessment.segment,
@@ -373,13 +377,13 @@ def build_dashboard_snapshot(
         plan
         for plan in plans
         if plan.values["visibility_status"]
-        == DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED.value
+        == cast(str, DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED)
     ]
     excluded = [
         plan
         for plan in plans
         if plan.values["visibility_status"]
-        == DashboardVacancyRecord.VisibilityStatus.EXCLUDED_NOT_GREEN.value
+        == cast(str, DashboardVacancyRecord.VisibilityStatus.EXCLUDED_NOT_GREEN)
     ]
     public_ids = {id(item) for item in public}
     excluded_ids = {id(item) for item in excluded}
@@ -387,7 +391,7 @@ def build_dashboard_snapshot(
     mappable = [
         plan
         for plan in public
-        if plan.values["mapping_status"] == DashboardVacancyRecord.MappingStatus.MAPPABLE.value
+        if plan.values["mapping_status"] == cast(str, DashboardVacancyRecord.MappingStatus.MAPPABLE)
     ]
     resolutions = [plan.values["location_resolution"] for plan in plans]
     snapshot = DashboardSnapshot.objects.create(
