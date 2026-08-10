@@ -1,0 +1,99 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Observed green jobs | Swiss Garden Jobs Observatory</title>
+  <link rel="stylesheet" href="{% static 'dashboard/vendor/maplibre-gl.css' %}">
+  <link rel="stylesheet" href="{% static 'dashboard/dashboard.css' %}">
+</head>
+<body>
+  <header class="masthead">
+    <a class="wordmark" href="/jobs/">
+      <span class="wordmark-mark">SG</span>
+      <span>Swiss Garden<br>Jobs Observatory</span>
+    </a>
+    <div class="snapshot-stamp">
+      <span>POINT-IN-TIME VIEW</span>
+      <strong id="snapshot-as-of">{% if snapshot %}{{ snapshot.as_of|date:"Y-m-d H:i T" }}{% else %}No snapshot{% endif %}</strong>
+    </div>
+  </header>
+
+  <main id="dashboard-app"
+        data-current-url="{% url 'dashboard:current' %}"
+        data-snapshot-id="{% if snapshot %}{{ snapshot.id }}{% endif %}"
+        data-map-style="{{ map_style_url }}"
+        data-map-attribution="{{ map_attribution }}">
+    <section class="scope-banner" aria-label="Source coverage notice">
+      <strong>Observed sources, not a market census.</strong>
+      <p>{{ scope_notice }}</p>
+    </section>
+
+    <section class="hero">
+      <div>
+        <p class="eyebrow">GATE-010 / PUBLIC EVIDENCE VIEW</p>
+        <h1>The green work<br>we can actually see.</h1>
+      </div>
+      <p class="hero-note">Every row is pinned to one immutable dashboard snapshot. Missing geography stays missing. Private locations stay private.</p>
+    </section>
+
+    <section class="headline-grid" aria-label="Day-0 market indicators">
+      <article><span>ACTIVE UNIQUE</span><strong>—</strong><small>Pending GATE-011 Day-0</small></article>
+      <article><span>NEW 24H</span><strong>—</strong><small>Pending adequate coverage</small></article>
+      <article><span>REAPPEARED</span><strong>—</strong><small>Pending Day-0 authorization</small></article>
+      <article><span>SWISS COVERAGE</span><strong>—</strong><small>Not yet defensible</small></article>
+    </section>
+
+    <form id="filters" class="filters" aria-label="Job filters">
+      <label>Search<input name="q" type="search" placeholder="Title or employer"></label>
+      <label>Status<select name="status"><option value="">All observed states</option><option>ACTIVE</option><option>CLOSED_OBSERVED</option></select></label>
+      <label>Canton<input name="canton" maxlength="2" placeholder="ZH"></label>
+      <label>Municipality<input name="municipality" placeholder="Winterthur"></label>
+      <label>Segment<select name="segment"><option value="">All segments</option><option>UNKNOWN</option><option>PRIVATE_RESIDENTIAL_STANDARD</option><option>PRIVATE_RESIDENTIAL_PREMIUM</option><option>PRIVATE_ESTATE_DIRECT</option></select></label>
+      <label>Geography<select name="mapping"><option value="">Mapped + unmapped</option><option value="MAPPABLE">Mappable</option><option value="UNMAPPABLE">Unmappable</option></select></label>
+      <button type="submit">Apply filters</button>
+      <button type="reset" class="secondary">Reset</button>
+    </form>
+
+    <section class="workspace">
+      <div class="map-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">SAFE PUBLIC GEOGRAPHY</p><h2>Observed locations</h2></div>
+          <span id="map-count" class="count-chip">0 markers</span>
+        </div>
+        <div id="map" aria-label="Map of safely mappable vacancies"></div>
+        <p id="map-empty" class="map-empty" hidden>No safely mappable records match this snapshot and filter state. Unmapped jobs remain available in the table.</p>
+        <div class="precision-legend">
+          <span><i class="exact"></i>Exact allowed</span>
+          <span><i class="approx"></i>Approximate for privacy</span>
+          <span><i class="unmapped"></i>Unresolved / review</span>
+        </div>
+      </div>
+
+      <div class="results-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">SAME SNAPSHOT / SAME FILTERS</p><h2>Public green vacancies</h2></div>
+          <span id="result-count" class="count-chip">0 records</span>
+        </div>
+        <div id="quality-note" class="quality-note">Loading immutable snapshot…</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Role</th><th>Place</th><th>Observed</th><th>Source</th></tr></thead>
+            <tbody id="results-body"></tbody>
+          </table>
+        </div>
+        <p id="results-empty" class="empty-state" hidden>No public green-confirmed vacancies match these filters.</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+  <aside id="job-drawer" class="drawer" aria-modal="true" aria-labelledby="drawer-title" hidden>
+    <button id="drawer-close" class="drawer-close" aria-label="Close job details">Close ×</button>
+    <div id="drawer-content"></div>
+  </aside>
+
+  <script type="module" src="{% static 'dashboard/dashboard.js' %}"></script>
+</body>
+</html>

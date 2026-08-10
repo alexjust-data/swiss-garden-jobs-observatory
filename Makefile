@@ -1,7 +1,8 @@
 setup:
 	python -m pip install --upgrade pip
 	python -m pip install -r requirements-dev.txt
-	python -m pip install -r requirements.txt
+	npm ci
+	npm run build-assets
 
 migrate:
 	python manage.py migrate
@@ -23,3 +24,10 @@ import-reference-data:
 
 collect-winterthur:
 	python manage.py collect_winterthur --full-snapshot --acknowledge-automation-review
+browser-test:
+	python -m playwright install chromium
+	pytest -q src/dashboard/tests/test_browser.py
+
+build-dashboard-assets:
+	npm ci
+	npm run build-assets

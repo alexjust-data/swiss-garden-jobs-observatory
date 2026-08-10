@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     "observations",
     "vacancies.apps.VacanciesConfig",
     "premium_segments.apps.PremiumSegmentsConfig",
+    "dashboard.apps.DashboardConfig",
 ]
 
 MIDDLEWARE = [
@@ -103,3 +104,8 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORE_RAW_OBJECT_STORE_PATH = _env("JOB_OBSERVATORY_RAW_STORE_PATH", str(BASE_DIR / "data" / "raw"))
+DASHBOARD_MAP_STYLE_URL = _env("DASHBOARD_MAP_STYLE_URL")
+DASHBOARD_MAP_ATTRIBUTION = _env(
+    "DASHBOARD_MAP_ATTRIBUTION",
+    "Map data provider attribution must be configured with DASHBOARD_MAP_STYLE_URL",
+)
