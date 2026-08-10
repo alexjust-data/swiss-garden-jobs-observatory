@@ -20,6 +20,9 @@ class FetchRequest:
     url: str
     accept: str = "text/html"
     role: str = "AUXILIARY"
+    method: str = "GET"
+    form_data: tuple[tuple[str, str], ...] = ()
+    context: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

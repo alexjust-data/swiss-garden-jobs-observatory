@@ -44,6 +44,7 @@ def create_dashboard_upstream(
     premium_status: str = "NO_SUFFICIENT_EVIDENCE",
     privacy_context: str = "PUBLIC_OR_NON_RESIDENTIAL",
     location_status: str | None = None,
+    location_region: str = "ZH",
     public_coordinates: tuple[float, float] | None = None,
     internal_coordinates: tuple[float, float] | None = None,
     title: str = "Gardener",
@@ -116,7 +117,7 @@ def create_dashboard_upstream(
         hiring_organization=f"Employer {suffix}",
         description_html=description,
         location_locality="Winterthur",
-        location_region="ZH",
+        location_region=location_region,
         location_country="CH",
         raw_artifact=raw,
         structured_payload={

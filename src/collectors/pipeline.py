@@ -229,6 +229,10 @@ class SharedCollectionPipeline:
                     http_status=page.status_code,
                     content_type=page.content_type,
                     raw_artifact=artifact,
+                    evidence={
+                        "request_method": request.method.upper(),
+                        "form_data": list(request.form_data),
+                    },
                 )
                 if ordinal == 0:
                     run.listing_final_url = page.final_url
@@ -286,7 +290,10 @@ class SharedCollectionPipeline:
                     http_status=page.status_code,
                     content_type=page.content_type,
                     raw_artifact=artifact,
-                    evidence={"source_posting_id": current_id},
+                    evidence={
+                        "source_posting_id": current_id,
+                        "request_method": detail_request.method.upper(),
+                    },
                 )
                 run.details_fetched += 1
                 parsed = self.adapter.parse_detail(page, entry, self.source)

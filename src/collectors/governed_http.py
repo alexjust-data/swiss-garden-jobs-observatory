@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from django.utils import timezone
@@ -66,8 +66,16 @@ class GovernedHttpClient:
 
     def fetch_request(self, request_spec: FetchRequest) -> FetchedPage:
         validate_authorized_url(self.source, request_spec.url)
+        method = request_spec.method.upper()
+        if method not in {"GET", "POST"}:
+            raise GovernedHttpError(f"unsupported governed HTTP method: {method}")
+        if method == "GET" and request_spec.form_data:
+            raise GovernedHttpError("GET requests cannot carry form data")
+        data = urlencode(request_spec.form_data).encode("ascii") if method == "POST" else None
         request = Request(
             request_spec.url,
+            data=data,
+            method=method,
             headers={"User-Agent": USER_AGENT, "Accept": request_spec.accept},
         )
         with self._opener.open(request, timeout=self.timeout_seconds) as response:
@@ -124,7 +132,37 @@ def ensure_default_endpoints(source: Source) -> None:
                 "https://www.stadt-zuerich.ch/de/politik-und-verwaltung/arbeiten-bei-der-stadt/jobs/",
             ),
         ),
+        "SRC-OFF-CITY-BERN": (
+            ("LANDING", "JOBS_BERN_CH", "www.bern.ch", "https://www.bern.ch/themen/arbeiten-fuer-die-stadt-bern/offene-stellen"),
+            ("API", "JOBS_BERN_CH", "jobs.bern.ch", "https://jobs.bern.ch/public/v1/medium/1840/jobs"),
+            ("DETAIL", "JOBS_BERN_CH", "jobs.bern.ch", "https://jobs.bern.ch/offene-stellen/"),
+        ),
+        "SRC-OFF-CITY-LUZERN": (
+            ("LANDING", "CITY_LUZERN_PORTAL", "jobs.stadtluzern.ch", "https://jobs.stadtluzern.ch/stellen/offene-stellen-stadt-luzern/"),
+            ("LISTING", "CITY_LUZERN_PORTAL", "job.stadtluzern.ch", "https://job.stadtluzern.ch/stellen/stadtluzern/"),
+            ("DETAIL", "CITY_LUZERN_PORTAL", "job.stadtluzern.ch", "https://job.stadtluzern.ch/stellen/stadtluzern/offene-stellen/"),
+        ),
+        "SRC-OFF-CITY-SCHAFFHAUSEN": (
+            ("LANDING", "UMANTIS_LINKED", "jobs.stadt-schaffhausen.ch", "https://jobs.stadt-schaffhausen.ch/freie-stellen/"),
+            ("LISTING", "UMANTIS_LINKED", "jobs.stadt-schaffhausen.ch", "https://jobs.stadt-schaffhausen.ch/freie-stellen/"),
+            ("API", "UMANTIS_LINKED", "jobs.stadt-schaffhausen.ch", "https://jobs.stadt-schaffhausen.ch/wp-json/wp/v2/jobs"),
+            ("DETAIL", "UMANTIS_LINKED", "jobs.stadt-schaffhausen.ch", "https://jobs.stadt-schaffhausen.ch/jobs/"),
+        ),    }
+    gate_011b = str(source.pk) in {
+        "SRC-OFF-CITY-BERN",
+        "SRC-OFF-CITY-LUZERN",
+        "SRC-OFF-CITY-SCHAFFHAUSEN",
     }
+    decision = (
+        "docs/decisions/0008-gate-011b-priority-city-expansion.md"
+        if gate_011b
+        else "docs/decisions/0003-gate-007-incremental-platform-reuse.md"
+    )
+    verification = (
+        "GATE-011B live technical reconnaissance"
+        if gate_011b
+        else "GATE-007 live technical reconnaissance"
+    )
     for role, family, host, base_url in definitions.get(str(source.pk), ()):
         endpoint, _ = SourceEndpoint.objects.get_or_create(
             source=source,
@@ -137,8 +175,8 @@ def ensure_default_endpoints(source: Source) -> None:
                 "enabled": True,
                 "verified_at": timezone.now(),
                 "evidence": {
-                    "decision": "docs/decisions/0003-gate-007-incremental-platform-reuse.md",
-                    "verification": "GATE-007 live technical reconnaissance",
+                    "decision": decision,
+                    "verification": verification,
                 },
             },
         )
@@ -146,7 +184,7 @@ def ensure_default_endpoints(source: Source) -> None:
             SourceEndpoint.objects.filter(pk=endpoint.pk, verified_at__isnull=True).update(
                 verified_at=timezone.now(),
                 evidence={
-                    "decision": "docs/decisions/0003-gate-007-incremental-platform-reuse.md",
-                    "verification": "GATE-007 live technical reconnaissance",
+                    "decision": decision,
+                    "verification": verification,
                 },
             )

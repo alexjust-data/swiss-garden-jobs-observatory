@@ -415,3 +415,21 @@ def test_partial_record_failure_rolls_back_snapshot() -> None:
             )
     assert DashboardSnapshot.objects.count() == 0
     assert DashboardVacancyRecord.objects.count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_non_code_source_region_is_not_persisted_as_canton() -> None:
+    data = create_dashboard_upstream(location_status="UNRESOLVED", location_region="Bern")
+    snapshot, _ = build_dashboard_snapshot(
+        as_of=data["as_of"], dedup_run=data["dedup"], premium_run=data["premium_run"]
+    )
+    assert snapshot.vacancy_records.get().canton_code == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_valid_source_canton_code_remains_available() -> None:
+    data = create_dashboard_upstream(location_status="UNRESOLVED", location_region="be")
+    snapshot, _ = build_dashboard_snapshot(
+        as_of=data["as_of"], dedup_run=data["dedup"], premium_run=data["premium_run"]
+    )
+    assert snapshot.vacancy_records.get().canton_code == "BE"

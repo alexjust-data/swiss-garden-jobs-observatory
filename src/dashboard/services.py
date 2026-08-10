@@ -31,6 +31,10 @@ from .models import DashboardSnapshot, DashboardVacancyRecord
 
 DASHBOARD_VERSION = "dashboard-v0.1"
 SOURCE_LINK_POLICY_VERSION = "source-link-v0.1"
+CANTON_CODE_POLICY_VERSION = "swiss-canton-code-v0.1"
+SWISS_CANTON_CODES = frozenset(
+    "AG AI AR BE BL BS FR GE GL GR JU LU NE NW OW SG SH SO SZ TG TI UR VD VS ZG ZH".split()
+)
 SCOPE_NOTICE = (
     "This dashboard contains vacancies observed from the sources currently implemented by "
     "the Swiss Garden Jobs Observatory. It is not yet a complete census of the Swiss "
@@ -41,9 +45,15 @@ CONFIGURATION = {
     "map_coordinates": "public_display_only",
     "day_zero_authorized": False,
     "source_link_policy": SOURCE_LINK_POLICY_VERSION,
+    "canton_code_policy": CANTON_CODE_POLICY_VERSION,
 }
 PROTECTED_CONTEXTS = {"PRIVATE_RESIDENCE", "CONFIDENTIAL_PRIVATE_RESIDENCE"}
 KNOWN_LINK_STATUSES = set(DashboardVacancyRecord.SourceLinkStatus.values)
+
+
+def _public_canton_code(value: object) -> str:
+    candidate = str(value or "").strip().upper()
+    return candidate if candidate in SWISS_CANTON_CODES else ""
 
 
 class DashboardBuildError(RuntimeError):
@@ -314,9 +324,9 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
             "safe_description": "" if protected else visible_text(observation.description_html),
             "vacancy_status": state.status,
             "municipality_name": municipality.municipality_name if municipality else "",
-            "canton_code": municipality.canton_code
-            if municipality
-            else observation.location_region,
+            "canton_code": _public_canton_code(
+                municipality.canton_code if municipality else observation.location_region
+            ),
             "source_published_date": observation.date_posted,
             "published_at_precision": str(contract.get("published_at_precision") or "UNKNOWN"),
             "published_at_parse_method": str(
