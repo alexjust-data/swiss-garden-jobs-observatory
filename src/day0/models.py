@@ -1,8 +1,10 @@
+# mypy: disable-error-code="attr-defined"
 from __future__ import annotations
 
 import uuid
 from typing import Any
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
@@ -40,6 +42,7 @@ class AppendOnlyDay0Evidence(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         if not self._state.adding:
             raise ImmutableDay0EvidenceError(f"{type(self).__name__} is append-only")
+        self.full_clean()
         super().save(*args, **kwargs)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
@@ -101,6 +104,61 @@ class Day0SourceUniverse(AppendOnlyDay0Evidence):
         ]
 
 
+class Day0AuthorizationPolicy(AppendOnlyDay0Evidence):
+    class PolicyStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending"
+        ACCEPTED = "ACCEPTED", "Accepted"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    policy_version = models.CharField(max_length=80, unique=True)
+    threshold_policy_status = models.CharField(max_length=12, choices=PolicyStatus)
+    required_completion_threshold = models.DecimalField(
+        max_digits=5, decimal_places=4, null=True, blank=True
+    )
+    freshness_policy_status = models.CharField(max_length=12, choices=PolicyStatus)
+    required_source_max_age_hours = models.PositiveIntegerField(null=True, blank=True)
+    configuration = models.JSONField(default=dict)
+    input_fingerprint = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "day0_authorization_policy"
+        ordering = ["-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(input_fingerprint__regex=r"^[0-9a-f]{64}$"),
+                name="day0_policy_fingerprint_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        threshold_policy_status="PENDING",
+                        required_completion_threshold__isnull=True,
+                    )
+                    | Q(
+                        threshold_policy_status="ACCEPTED",
+                        required_completion_threshold__gt=0,
+                        required_completion_threshold__lte=1,
+                    )
+                ),
+                name="day0_policy_threshold_coherent",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        freshness_policy_status="PENDING",
+                        required_source_max_age_hours__isnull=True,
+                    )
+                    | Q(
+                        freshness_policy_status="ACCEPTED",
+                        required_source_max_age_hours__gt=0,
+                    )
+                ),
+                name="day0_policy_freshness_coherent",
+            ),
+        ]
+
+
 class Day0SourceUniverseEntry(AppendOnlyDay0Evidence):
     class Classification(models.TextChoices):
         REQUIRED = "DAY0_REQUIRED", "Day-0 required"
@@ -114,6 +172,12 @@ class Day0SourceUniverseEntry(AppendOnlyDay0Evidence):
         SUPPORTING = "SUPPORTING", "Supporting"
         NONE = "NONE", "None"
 
+    class AccessStatus(models.TextChoices):
+        READY = "READY_FOR_IMPLEMENTATION", "Ready for implementation"
+        BLOCKED = "BLOCKED_PENDING_ACCESS_REVIEW", "Blocked pending access review"
+        NOT_APPLICABLE = "NOT_APPLICABLE", "Not applicable"
+        UNKNOWN_LEGACY = "UNKNOWN_LEGACY", "Unknown legacy"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     universe = models.ForeignKey(
         Day0SourceUniverse, on_delete=models.PROTECT, related_name="entries"
@@ -121,7 +185,12 @@ class Day0SourceUniverseEntry(AppendOnlyDay0Evidence):
     source = models.ForeignKey("sources.Source", on_delete=models.PROTECT)
     classification = models.CharField(max_length=40, choices=Classification)
     target_role = models.CharField(max_length=12, choices=TargetRole)
+    access_status = models.CharField(
+        max_length=40, choices=AccessStatus, default=AccessStatus.UNKNOWN_LEGACY
+    )
     reason = models.TextField()
+    access_reason = models.TextField(default="Legacy source-universe entry")
+    canton_code = models.CharField(max_length=2, blank=True)
     source_name = models.CharField(max_length=200)
     source_family = models.CharField(max_length=80)
     source_type = models.CharField(max_length=80)
@@ -162,18 +231,9 @@ class Day0ReadinessAssessment(AppendOnlyDay0Evidence):
     class Status(models.TextChoices):
         AUTHORIZED = "DAY_0_AUTHORIZED", "Day-0 authorized"
         NOT_READY = "DAY_0_NOT_READY", "Day-0 not ready"
-        POLICY_PENDING = (
-            "DAY_0_THRESHOLD_POLICY_PENDING",
-            "Day-0 threshold policy pending",
-        )
-        BLOCKED_ACCESS = (
-            "DAY_0_BLOCKED_BY_SOURCE_ACCESS",
-            "Day-0 blocked by source access",
-        )
-        BLOCKED_QUALITY = (
-            "DAY_0_BLOCKED_BY_DATA_QUALITY",
-            "Day-0 blocked by data quality",
-        )
+        POLICY_PENDING = "DAY_0_THRESHOLD_POLICY_PENDING", "Day-0 threshold policy pending"
+        BLOCKED_ACCESS = "DAY_0_BLOCKED_BY_SOURCE_ACCESS", "Day-0 blocked by source access"
+        BLOCKED_QUALITY = "DAY_0_BLOCKED_BY_DATA_QUALITY", "Day-0 blocked by data quality"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     readiness_version = models.CharField(max_length=80)
@@ -181,22 +241,36 @@ class Day0ReadinessAssessment(AppendOnlyDay0Evidence):
     source_universe = models.ForeignKey(
         Day0SourceUniverse, on_delete=models.PROTECT, related_name="assessments"
     )
+    authorization_policy = models.ForeignKey(
+        Day0AuthorizationPolicy,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="assessments",
+    )
     policy_version = models.CharField(max_length=80)
     dedup_run = models.ForeignKey("vacancies.DedupRun", on_delete=models.PROTECT)
     premium_run = models.ForeignKey("premium_segments.PremiumSegmentRun", on_delete=models.PROTECT)
     dashboard_snapshot = models.ForeignKey("dashboard.DashboardSnapshot", on_delete=models.PROTECT)
     readiness_status = models.CharField(max_length=40, choices=Status)
     selected_source_ids = models.JSONField(default=list)
-    selected_collection_run_ids = models.JSONField(default=list)
+    selected_collection_run_ids = models.JSONField(default=list, blank=True)
     metrics = models.JSONField(default=dict)
-    critical_review_ids = models.JSONField(default=list)
-    noncritical_review_ids = models.JSONField(default=list)
-    blockers = models.JSONField(default=list)
+    critical_review_ids = models.JSONField(default=list, blank=True)
+    noncritical_review_ids = models.JSONField(default=list, blank=True)
+    blockers = models.JSONField(default=list, blank=True)
     required_source_count = models.PositiveIntegerField()
     supporting_source_count = models.PositiveIntegerField()
     deferred_source_count = models.PositiveIntegerField()
+    not_applicable_source_count = models.PositiveIntegerField(default=0)
     blocked_source_count = models.PositiveIntegerField()
+    blocked_required_source_count = models.PositiveIntegerField(default=0)
+    blocked_supporting_source_count = models.PositiveIntegerField(default=0)
+    blocked_other_source_count = models.PositiveIntegerField(default=0)
     implemented_required_source_count = models.PositiveIntegerField()
+    required_complete_count = models.PositiveIntegerField(default=0)
+    required_healthy_count = models.PositiveIntegerField(default=0)
+    required_freshness_valid_count = models.PositiveIntegerField(default=0)
     required_full_source_healthy_count = models.PositiveIntegerField()
     required_source_completion_ratio = models.DecimalField(
         max_digits=7, decimal_places=6, null=True, blank=True
@@ -206,7 +280,15 @@ class Day0ReadinessAssessment(AppendOnlyDay0Evidence):
     )
     critical_review_count = models.PositiveIntegerField()
     noncritical_review_count = models.PositiveIntegerField()
+    critical_green_review_count = models.PositiveIntegerField(default=0)
+    critical_dedup_review_count = models.PositiveIntegerField(default=0)
+    other_critical_review_count = models.PositiveIntegerField(default=0)
+    green_confirmed_count = models.PositiveIntegerField(default=0)
+    green_review_count = models.PositiveIntegerField(default=0)
+    not_green_count = models.PositiveIntegerField(default=0)
+    missing_green_count = models.PositiveIntegerField(default=0)
     observed_postings = models.PositiveIntegerField()
+    selected_source_postings = models.PositiveIntegerField(default=0)
     active_unique_vacancies = models.PositiveIntegerField()
     known_positions_total = models.PositiveIntegerField()
     vacancies_unknown_position_count = models.PositiveIntegerField()
@@ -221,13 +303,14 @@ class Day0ReadinessAssessment(AppendOnlyDay0Evidence):
             models.UniqueConstraint(
                 fields=[
                     "source_universe",
+                    "authorization_policy",
                     "as_of",
                     "dedup_run",
                     "premium_run",
                     "dashboard_snapshot",
                     "input_fingerprint",
                 ],
-                name="day0_readiness_exact_input_unique",
+                name="day0_readiness_v2_exact_input_unique",
             ),
             models.CheckConstraint(
                 condition=Q(input_fingerprint__regex=r"^[0-9a-f]{64}$"),
@@ -256,10 +339,29 @@ class Day0ReadinessAssessment(AppendOnlyDay0Evidence):
             ),
         ]
 
+    def clean(self) -> None:
+        errors: dict[str, str] = {}
+        if self.dashboard_snapshot_id:
+            snapshot = self.dashboard_snapshot
+            if snapshot.dedup_run_id != self.dedup_run_id:
+                errors["dedup_run"] = "Dashboard snapshot belongs to another DedupRun."
+            if snapshot.premium_run_id != self.premium_run_id:
+                errors["premium_run"] = "Dashboard snapshot belongs to another PremiumSegmentRun."
+            if snapshot.as_of != self.as_of:
+                errors["as_of"] = "Dashboard snapshot as_of differs from readiness as_of."
+        if (
+            self.authorization_policy_id
+            and self.policy_version != self.authorization_policy.policy_version
+        ):
+            errors["policy_version"] = "Policy version does not match authorization policy."
+        if errors:
+            raise ValidationError(errors)
+
 
 class Day0ReadinessSourceEvidence(AppendOnlyDay0Evidence):
     class CompletionStatus(models.TextChoices):
         COMPLETE_HEALTHY = "COMPLETE_HEALTHY", "Complete and healthy"
+        COMPLETE_FRESHNESS_PENDING = "COMPLETE_FRESHNESS_PENDING", "Complete; freshness pending"
         NO_ELIGIBLE_RUN = "NO_ELIGIBLE_RUN", "No eligible run"
         DEGRADED = "DEGRADED", "Degraded"
         OUTAGE = "OUTAGE", "Outage"
@@ -273,11 +375,39 @@ class Day0ReadinessSourceEvidence(AppendOnlyDay0Evidence):
     universe_entry = models.ForeignKey(Day0SourceUniverseEntry, on_delete=models.PROTECT)
     source = models.ForeignKey("sources.Source", on_delete=models.PROTECT)
     collection_run = models.ForeignKey(
-        "observations.CollectionRun", on_delete=models.PROTECT, null=True, blank=True
+        "observations.CollectionRun",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="day0_legacy_selected_evidence",
     )
-    completion_status = models.CharField(max_length=24, choices=CompletionStatus)
+    latest_activity_run = models.ForeignKey(
+        "observations.CollectionRun",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="day0_latest_activity_evidence",
+    )
+    latest_full_source_run = models.ForeignKey(
+        "observations.CollectionRun",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="day0_latest_full_source_evidence",
+    )
+    latest_health_run = models.ForeignKey(
+        "observations.CollectionRun",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="day0_latest_health_evidence",
+    )
+    completion_status = models.CharField(max_length=32, choices=CompletionStatus)
     is_complete = models.BooleanField(default=False)
     is_healthy = models.BooleanField(default=False)
+    structurally_complete = models.BooleanField(default=False)
+    currently_healthy = models.BooleanField(default=False)
+    freshness_valid = models.BooleanField(null=True, blank=True)
     evidence = models.JSONField(default=dict)
     created_at = models.DateTimeField(default=timezone.now)
 
@@ -291,7 +421,46 @@ class Day0ReadinessSourceEvidence(AppendOnlyDay0Evidence):
             ),
             models.CheckConstraint(
                 condition=~Q(completion_status="COMPLETE_HEALTHY")
-                | Q(is_complete=True, is_healthy=True, collection_run__isnull=False),
-                name="day0_complete_healthy_evidence_coherent",
+                | Q(
+                    is_complete=True,
+                    is_healthy=True,
+                    structurally_complete=True,
+                    currently_healthy=True,
+                    freshness_valid=True,
+                    latest_full_source_run__isnull=False,
+                    latest_health_run__isnull=False,
+                )
+                | Q(
+                    is_complete=True,
+                    is_healthy=True,
+                    collection_run__isnull=False,
+                    latest_full_source_run__isnull=True,
+                    latest_health_run__isnull=True,
+                    freshness_valid__isnull=True,
+                ),
+                name="day0_complete_healthy_v2_coherent",
             ),
         ]
+
+    def clean(self) -> None:
+        errors: dict[str, str] = {}
+        if self.universe_entry_id and self.assessment_id:
+            if self.universe_entry.universe_id != self.assessment.source_universe_id:
+                errors["universe_entry"] = "Universe entry belongs to another source universe."
+        if self.universe_entry_id and self.source_id != self.universe_entry.source_id:
+            errors["source"] = "Source differs from universe entry source."
+        for field in (
+            "collection_run",
+            "latest_activity_run",
+            "latest_full_source_run",
+            "latest_health_run",
+        ):
+            run = getattr(self, field)
+            if run is None:
+                continue
+            if run.source_id != self.source_id:
+                errors[field] = "CollectionRun belongs to another source."
+            if self.assessment_id and run.finished_at and run.finished_at > self.assessment.as_of:
+                errors[field] = "CollectionRun is after assessment as_of."
+        if errors:
+            raise ValidationError(errors)

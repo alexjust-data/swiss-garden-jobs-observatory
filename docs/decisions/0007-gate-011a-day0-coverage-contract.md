@@ -42,3 +42,15 @@ The current two-source implementation is expected to remain not ready. Expansion
 4. Governed staffing/private-market supporting coverage.
 
 Actual reconnaissance and collectors belong to GATE-011B. This decision adds no network access, collection, geocoding, reclassification, scheduler, market number, or changes to frozen research or closed-gate semantics.
+
+## Audit correction: source identity, access and time
+
+The v0.2 source universe is derived from exact frozen registry identities and fields. The only identity-specific mapping is the documented canton-source to BFS canton-code mapping because the registry has no structured canton code. Every mapped identity must exist in the frozen registry and every canton must contain at least one municipality in the governed German-language municipality universe.
+
+Target role and operational access are orthogonal. `REQUIRED`, `SUPPORTING`, `DEFERRED`, and `NOT_APPLICABLE` describe Day-0 source role; `READY_FOR_IMPLEMENTATION`, `BLOCKED_PENDING_ACCESS_REVIEW`, and `NOT_APPLICABLE` describe access. A blocked required source remains in the required denominator. Verification does not authorize automation.
+
+Readiness selects three source-run concepts independently: latest activity, latest eligible `FULL_SOURCE`, and latest health evidence. A later targeted diagnostic does not erase full-source completeness, while a later outage or degraded run changes current health. Collector completeness reuses the GATE-007 equality contract across listing, in-scope, detail, observation, and green-assessment counters. A healthy complete zero-job snapshot remains valid.
+
+Frozen research provides neither a numeric Day-0 threshold nor a source freshness limit. These are separate versioned authorization-policy dimensions and remain `PENDING`; Day-0 cannot be authorized while either is pending. Geographic source coverage is `NOT_COMPUTABLE` until source scopes have governed administrative identities; free-text `coverage_scope` values are not used as a denominator.
+
+Run-scoped readiness evidence and fingerprints include the source universe, authorization policy, latest full-source run, latest health/activity evidence, exact review sets, and aligned dedup, premium, and dashboard inputs. Historical assessments remain immutable. Primary status precedence is policy pending, access blocked, data quality blocked, then threshold evaluation, while every concurrent blocker remains explicitly persisted.

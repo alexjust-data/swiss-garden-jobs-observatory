@@ -1,10 +1,11 @@
+# mypy: disable-error-code="attr-defined,assignment"
 from __future__ import annotations
 
 import csv
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -13,45 +14,34 @@ from django.conf import settings
 from django.db import connection, transaction
 
 from dashboard.models import DashboardSnapshot, DashboardVacancyRecord
-from observations.models import CollectionRun, GeocodingReviewItem
-from premium_segments.models import PremiumSegmentReviewItem, PremiumSegmentRun
+from observations.models import CollectionRun
+from premium_segments.models import (
+    PremiumSegmentAssessment,
+    PremiumSegmentReviewItem,
+    PremiumSegmentRun,
+)
 from sources.models import Source
 from vacancies.models import DedupReviewItem, DedupRun
 
 from .models import (
+    Day0AuthorizationPolicy,
     Day0ReadinessAssessment,
     Day0ReadinessSourceEvidence,
     Day0SourceUniverse,
     Day0SourceUniverseEntry,
 )
+from .policy import (
+    AUTHORIZATION_POLICY_VERSION,
+    READINESS_VERSION,
+    SOURCE_UNIVERSE_VERSION,
+    VACANCY_CANONICALITY_VALUES,
+    SourcePolicyError,
+    assert_policy_ids_exist,
+    classify_source,
+)
 
-SOURCE_UNIVERSE_VERSION = "day0-source-universe-v0.1"
-POLICY_VERSION = "day0-authorization-policy-proposed-v0.1"
-READINESS_VERSION = "day0-readiness-v0.1"
-METRIC_VERSION = "day0-coverage-metrics-v0.1"
-THRESHOLD_POLICY_STATUS = Day0SourceUniverse.ThresholdPolicyStatus.PENDING
-
-REQUIRED_CITY_IDS = {
-    "SRC-OFF-CITY-ZURICH",
-    "SRC-OFF-CITY-WINTERTHUR",
-    "SRC-OFF-CITY-BERN",
-    "SRC-OFF-CITY-LUZERN",
-    "SRC-OFF-CITY-STGALLEN",
-    "SRC-OFF-CITY-SCHAFFHAUSEN",
-}
-SUPPORTING_IDS = {
-    "SRC-PUB-JOBROOM-DISCOVERY",
-    "SRC-OFF-GSZ-ZURICH",
-    "SRC-OFF-GREEN-BERN",
-    "SRC-OFF-BASEL-STADTGAERTNEREI",
-}
-NOT_APPLICABLE_IDS = {
-    "SRC-REF-BFS-GEOGRAPHY",
-    "SRC-PUB-JOBROOM-PUBLISHING-API",
-    "SRC-STAT-AMSTAT",
-    "SRC-SALARY-LOHNRECHNER",
-    "SRC-SALARY-LOHNBUCH",
-}
+POLICY_VERSION = AUTHORIZATION_POLICY_VERSION
+METRIC_VERSION = "day0-coverage-metrics-v0.2"
 
 
 class Day0ContractError(ValueError):
@@ -61,9 +51,12 @@ class Day0ContractError(ValueError):
 @dataclass(frozen=True)
 class SourceEvidencePlan:
     entry: Day0SourceUniverseEntry
-    run: CollectionRun | None
-    complete: bool
-    healthy: bool
+    latest_activity_run: CollectionRun | None
+    latest_full_source_run: CollectionRun | None
+    latest_health_run: CollectionRun | None
+    structurally_complete: bool
+    currently_healthy: bool
+    freshness_valid: bool | None
     evidence: dict[str, Any]
 
 
@@ -79,356 +72,363 @@ def _frozen_path(name: str) -> Path:
     return Path(settings.BASE_DIR) / "docs" / "research" / "v0_4" / name
 
 
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _frozen_rows() -> list[dict[str, str]]:
     with _frozen_path("source_registry.csv").open(encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
 
 
-def _value(row: dict[str, str], *names: str) -> str:
-    for name in names:
-        if row.get(name):
-            return row[name].strip()
-    return ""
-
-
 def _source_id(row: dict[str, str]) -> str:
-    return _value(row, "source_id", "id")
+    return (row.get("source_id") or row.get("id") or "").strip()
 
 
-def _priority(row: dict[str, str]) -> str:
-    return _value(row, "priority", "source_priority")
-
-
-def _family(row: dict[str, str]) -> str:
-    return _value(row, "source_family", "family", "source_type", "source_category")
-
-
-def _is_required(row: dict[str, str]) -> bool:
-    source_id = _source_id(row)
-    family = _family(row).casefold()
-    if source_id in REQUIRED_CITY_IDS:
-        return True
-    if _priority(row) != "P0":
-        return False
-    return "canton" in family or "federal" in family
-
-
-def _target_role(row: dict[str, str]) -> str:
-    source_id = _source_id(row)
-    if source_id in NOT_APPLICABLE_IDS:
-        return cast(str, Day0SourceUniverseEntry.TargetRole.NONE)
-    if _is_required(row):
-        return cast(str, Day0SourceUniverseEntry.TargetRole.REQUIRED)
-    if source_id in SUPPORTING_IDS or _priority(row) == "P1":
-        return cast(str, Day0SourceUniverseEntry.TargetRole.SUPPORTING)
-    return cast(str, Day0SourceUniverseEntry.TargetRole.NONE)
-
-
-def _has_access_blocker(row: dict[str, str]) -> bool:
-    values = " ".join(
-        _value(row, name)
-        for name in (
-            "automation_status",
-            "legal_review_status",
-            "verification_status",
-            "access_method",
-        )
-    ).casefold()
-    approved = ("approved" in values or "verified" in values) and not any(
-        token in values for token in ("review_required", "pending", "blocked", "unsupported")
-    )
-    return not approved
-
-
-def _entry_spec(row: dict[str, str]) -> dict[str, Any]:
-    source_id = _source_id(row)
-    target_role = _target_role(row)
-    if source_id in NOT_APPLICABLE_IDS:
-        classification = Day0SourceUniverseEntry.Classification.NOT_APPLICABLE
-        reason = (
-            "Reference, publishing-only, statistical, or salary source; "
-            "not a vacancy collection surface."
-        )
-    elif target_role != Day0SourceUniverseEntry.TargetRole.NONE and _has_access_blocker(row):
-        classification = Day0SourceUniverseEntry.Classification.BLOCKED
-        reason = (
-            "Target source remains in the denominator but automation/access review is unresolved."
-        )
-    elif target_role == Day0SourceUniverseEntry.TargetRole.REQUIRED:
-        classification = Day0SourceUniverseEntry.Classification.REQUIRED
-        reason = "Minimum canonical federal, canton, or priority-city Day-0 cohort."
-    elif target_role == Day0SourceUniverseEntry.TargetRole.SUPPORTING:
-        classification = Day0SourceUniverseEntry.Classification.SUPPORTING
-        reason = (
-            "Adds sector, discovery, staffing, or specialist coverage without "
-            "defining the core denominator."
-        )
-    else:
-        classification = Day0SourceUniverseEntry.Classification.DEFERRED
-        reason = (
-            "Lower-priority regional/general source deferred until the required "
-            "cohort is implemented."
-        )
-
-    if target_role == Day0SourceUniverseEntry.TargetRole.REQUIRED:
-        batch = 1 if source_id in REQUIRED_CITY_IDS else 2
-    elif target_role == Day0SourceUniverseEntry.TargetRole.SUPPORTING:
-        family = _family(row).casefold()
+def _entry_spec(source: Source) -> dict[str, Any]:
+    try:
+        decision = classify_source(source)
+    except SourcePolicyError as exc:
+        raise Day0ContractError(str(exc)) from exc
+    if decision.target_role == "REQUIRED":
+        batch = 1 if source.source_family == "OFFICIAL_MUNICIPAL" else 2
+    elif decision.target_role == "SUPPORTING":
+        family = source.source_family.casefold()
         batch = 4 if "staff" in family or "ett" in family else 3
     else:
         batch = None
-
-    implemented = source_id in {"SRC-OFF-CITY-WINTERTHUR", "SRC-OFF-CITY-ZURICH"}
+    implemented = source.source_id in {"SRC-OFF-CITY-WINTERTHUR", "SRC-OFF-CITY-ZURICH"}
+    blocked = decision.access_status == "BLOCKED_PENDING_ACCESS_REVIEW"
     return {
-        "classification": classification,
-        "target_role": target_role,
-        "reason": reason,
-        "priority": _priority(row),
-        "source_name": _value(row, "source_name", "name"),
-        "source_family": _family(row),
-        "source_type": _value(row, "source_type"),
-        "platform_family": _value(row, "platform_family", "platform", "access_method"),
-        "coverage_scope": _value(row, "coverage_scope", "geographic_scope", "region"),
-        "canonicality": _value(row, "canonicality", "source_role", "role"),
-        "automation_status": _value(row, "automation_status"),
-        "legal_review_status": _value(row, "legal_review_status", "legal_status"),
-        "verification_status": _value(row, "verification_status"),
+        "classification": decision.classification,
+        "target_role": decision.target_role,
+        "access_status": decision.access_status,
+        "reason": decision.reason,
+        "access_reason": decision.access_reason,
+        "canton_code": decision.canton_code or "",
+        "source_name": source.source_name,
+        "source_family": source.source_family,
+        "source_type": source.source_type,
+        "priority": source.priority,
+        "coverage_scope": source.coverage_scope,
+        "canonicality": source.canonicality,
+        "platform_family": source.platform_family,
+        "automation_status": source.automation_status,
+        "legal_review_status": source.legal_review_status,
+        "verification_status": source.verification_status,
         "existing_adapter_reuse": implemented,
-        "new_adapter_required": not implemented,
-        "blocking_issue": "ACCESS_OR_AUTOMATION_REVIEW"
-        if _has_access_blocker(row) and target_role != Day0SourceUniverseEntry.TargetRole.NONE
-        else "",
+        "new_adapter_required": not implemented and decision.target_role != "NONE",
+        "blocking_issue": decision.access_reason if blocked else "",
         "implementation_batch": batch,
     }
 
 
 @transaction.atomic
-def ensure_source_universe() -> Day0SourceUniverse:
-    rows = _frozen_rows()
-    registry_hash = hashlib.sha256(_frozen_path("source_registry.csv").read_bytes()).hexdigest()
-    coverage_hash = hashlib.sha256(_frozen_path("coverage_matrix.csv").read_bytes()).hexdigest()
-    source_ids = [_source_id(row) for row in rows]
-    sources = {source.pk: source for source in Source.objects.filter(pk__in=source_ids)}
-    missing = sorted(set(source_ids) - set(sources))
-    if missing:
-        raise Day0ContractError(
-            f"Reference import is incomplete; missing {len(missing)} governed sources"
-        )
-
+def ensure_authorization_policy() -> Day0AuthorizationPolicy:
     configuration = {
-        "readiness_version": READINESS_VERSION,
-        "metric_version": METRIC_VERSION,
-        "accepted_threshold": None,
-        "proposed_thresholds": ["1.00", "0.95", "0.90"],
-        "required_city_ids": sorted(REQUIRED_CITY_IDS),
-        "principle": "expected governed source coverage, not true market coverage",
+        "threshold": "No frozen numeric threshold exists.",
+        "freshness": "No frozen maximum source-run age exists.",
+        "alternatives_for_review": ["1.00", "0.95", "0.90"],
     }
     fingerprint = _sha256(
         {
-            "universe_version": SOURCE_UNIVERSE_VERSION,
-            "policy_version": POLICY_VERSION,
-            "registry_hash": registry_hash,
-            "coverage_hash": coverage_hash,
-            "entries": [{"source_id": _source_id(row), **_entry_spec(row)} for row in rows],
+            "version": POLICY_VERSION,
+            "threshold_status": "PENDING",
+            "freshness_status": "PENDING",
             "configuration": configuration,
         }
     )
-    existing = Day0SourceUniverse.objects.filter(universe_version=SOURCE_UNIVERSE_VERSION).first()
+    existing = Day0AuthorizationPolicy.objects.filter(
+        policy_version=POLICY_VERSION, input_fingerprint=fingerprint
+    ).first()
     if existing:
-        if existing.input_fingerprint != fingerprint:
-            raise Day0ContractError("Source-universe version exists with different frozen inputs")
         return existing
+    return Day0AuthorizationPolicy.objects.create(
+        policy_version=POLICY_VERSION,
+        threshold_policy_status="PENDING",
+        required_completion_threshold=None,
+        freshness_policy_status="PENDING",
+        required_source_max_age_hours=None,
+        configuration=configuration,
+        input_fingerprint=fingerprint,
+    )
 
+
+@transaction.atomic
+def ensure_source_universe() -> Day0SourceUniverse:
+    try:
+        assert_policy_ids_exist()
+    except SourcePolicyError as exc:
+        raise Day0ContractError(str(exc)) from exc
+    ids = [_source_id(row) for row in _frozen_rows()]
+    if len(ids) != len(set(ids)) or any(not item for item in ids):
+        raise Day0ContractError("Frozen source registry IDs must be present and unique")
+    sources = {str(source.pk): source for source in Source.objects.filter(pk__in=ids)}
+    missing = sorted(set(ids) - set(sources))
+    if missing:
+        raise Day0ContractError(f"Frozen registry sources are not imported: {missing}")
+    specs = [(sources[source_id], _entry_spec(sources[source_id])) for source_id in ids]
+    registry_hash = _file_sha256(_frozen_path("source_registry.csv"))
+    coverage_hash = _file_sha256(_frozen_path("coverage_matrix.csv"))
+    configuration = {
+        "selection": "frozen-field-rules-v0.2",
+        "access_is_orthogonal": True,
+        "geographic_coverage": "NOT_COMPUTABLE",
+    }
+    fingerprint = _sha256(
+        {
+            "version": SOURCE_UNIVERSE_VERSION,
+            "registry": registry_hash,
+            "coverage": coverage_hash,
+            "configuration": configuration,
+            "entries": [{"source_id": str(source.pk), **spec} for source, spec in specs],
+        }
+    )
+    existing = Day0SourceUniverse.objects.filter(
+        universe_version=SOURCE_UNIVERSE_VERSION, input_fingerprint=fingerprint
+    ).first()
+    if existing:
+        return existing
     universe = Day0SourceUniverse.objects.create(
         universe_version=SOURCE_UNIVERSE_VERSION,
         policy_version=POLICY_VERSION,
-        threshold_policy_status=THRESHOLD_POLICY_STATUS,
+        threshold_policy_status="PENDING",
         required_completion_threshold=None,
         source_registry_sha256=registry_hash,
         coverage_matrix_sha256=coverage_hash,
         configuration=configuration,
         input_fingerprint=fingerprint,
     )
-    Day0SourceUniverseEntry.objects.bulk_create(
-        [
-            Day0SourceUniverseEntry(
-                universe=universe,
-                source=sources[_source_id(row)],
-                **_entry_spec(row),
-            )
-            for row in rows
-        ]
-    )
+    rows = [
+        Day0SourceUniverseEntry(universe=universe, source=source, **spec) for source, spec in specs
+    ]
+    for row in rows:
+        row.full_clean()
+    Day0SourceUniverseEntry.objects.bulk_create(rows)
     return universe
 
 
-def _complete_run(run: CollectionRun | None) -> tuple[bool, bool]:
+def _run_payload(run: CollectionRun | None) -> dict[str, Any] | None:
     if run is None:
-        return False, False
-    healthy = run.source_health_status == "HEALTHY"
-    complete = (
+        return None
+    return {
+        "id": str(run.pk),
+        "source_id": str(run.source_id),
+        "run_scope": run.run_scope,
+        "status": run.status,
+        "health": run.source_health_status,
+        "snapshot_complete": run.snapshot_complete,
+        "listings_discovered": run.listings_discovered,
+        "listing_total_discovered": run.listing_total_discovered,
+        "postings_in_scope": run.postings_in_scope,
+        "details_fetched": run.details_fetched,
+        "observations_created": run.observations_created,
+        "green_assessments_created": run.green_assessments_created,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+    }
+
+
+def _structurally_complete(run: CollectionRun | None) -> bool:
+    if run is None:
+        return False
+    counters = (
+        run.listings_discovered,
+        run.listing_total_discovered,
+        run.postings_in_scope,
+        run.details_fetched,
+        run.observations_created,
+        run.green_assessments_created,
+    )
+    return (
         run.run_scope == "FULL_SOURCE"
         and run.status == "SUCCEEDED"
-        and healthy
         and run.snapshot_complete
-        and run.listings_discovered == run.observations_created == run.green_assessments_created
+        and len(set(counters)) == 1
     )
-    return complete, healthy
 
 
-def _source_plan(entry: Day0SourceUniverseEntry, as_of: datetime) -> SourceEvidencePlan:
-    run = (
-        CollectionRun.objects.filter(
-            source=entry.source, finished_at__isnull=False, finished_at__lte=as_of
+def _source_plan(
+    entry: Day0SourceUniverseEntry,
+    as_of: datetime,
+    policy: Day0AuthorizationPolicy,
+) -> SourceEvidencePlan:
+    runs = CollectionRun.objects.filter(
+        source=entry.source, finished_at__isnull=False, finished_at__lte=as_of
+    ).order_by("-finished_at", "-started_at", "-pk")
+    activity = runs.first()
+    full = runs.filter(run_scope="FULL_SOURCE").first()
+    health = activity
+    complete = _structurally_complete(full)
+    healthy = bool(
+        health and health.status == "SUCCEEDED" and health.source_health_status == "HEALTHY"
+    )
+    freshness: bool | None = None
+    if (
+        policy.freshness_policy_status == "ACCEPTED"
+        and policy.required_source_max_age_hours is not None
+        and full
+        and full.finished_at
+    ):
+        freshness = as_of - full.finished_at <= timedelta(
+            hours=policy.required_source_max_age_hours
         )
-        .order_by("-finished_at", "-started_at", "-pk")
-        .first()
-    )
-    complete, healthy = _complete_run(run)
     evidence = {
+        "latest_activity_run": _run_payload(activity),
+        "latest_full_source_run": _run_payload(full),
+        "latest_health_run": _run_payload(health),
+        "structurally_complete": complete,
+        "currently_healthy": healthy,
+        "freshness_valid": freshness,
         "classification": entry.classification,
         "target_role": entry.target_role,
-        "run_id": str(run.pk) if run else None,
-        "run_scope": run.run_scope if run else None,
-        "status": run.status if run else None,
-        "source_health": run.source_health_status if run else None,
-        "snapshot_complete": run.snapshot_complete if run else False,
-        "counts_equal": bool(
-            run
-            and run.listings_discovered == run.observations_created == run.green_assessments_created
-        ),
+        "access_status": entry.access_status,
     }
-    return SourceEvidencePlan(
-        entry=entry, run=run, complete=complete, healthy=healthy, evidence=evidence
-    )
+    return SourceEvidencePlan(entry, activity, full, health, complete, healthy, freshness, evidence)
+
+
+def _persisted_ratio(numerator: int, denominator: int) -> Decimal | None:
+    if not denominator:
+        return None
+    return (Decimal(numerator) / Decimal(denominator)).quantize(Decimal("0.000001"))
 
 
 def _metric(
-    numerator: int, denominator: int, definition: str, evidence_ids: list[str]
+    numerator: int | None,
+    denominator: int | None,
+    definition: str,
+    evidence_ids: list[str],
+    status: str = "COMPUTABLE",
 ) -> dict[str, Any]:
+    ratio = None
+    if status == "COMPUTABLE" and numerator is not None and denominator:
+        ratio = str(Decimal(numerator) / Decimal(denominator))
     return {
+        "version": METRIC_VERSION,
+        "status": status,
         "numerator": numerator,
         "denominator": denominator,
-        "ratio": str(Decimal(numerator) / Decimal(denominator)) if denominator else None,
+        "ratio": ratio,
         "definition": definition,
-        "version": METRIC_VERSION,
         "evidence_ids": sorted(evidence_ids),
     }
 
 
 def _validate_alignment(
-    *,
     as_of: datetime,
     dedup_run: DedupRun,
     premium_run: PremiumSegmentRun,
     dashboard_snapshot: DashboardSnapshot,
 ) -> None:
-    if any(item.status != "SUCCEEDED" for item in (dedup_run, premium_run)):
-        raise Day0ContractError("Dedup and premium runs must be successful")
+    if dedup_run.status != "SUCCEEDED" or premium_run.status != "SUCCEEDED":
+        raise Day0ContractError("Dedup and premium runs must be SUCCEEDED")
     if dedup_run.as_of != as_of or premium_run.as_of != as_of or dashboard_snapshot.as_of != as_of:
-        raise Day0ContractError("All readiness inputs must have the exact same as_of")
+        raise Day0ContractError("All governed inputs must share readiness as_of")
     if (
-        dashboard_snapshot.dedup_run.pk != dedup_run.pk
-        or dashboard_snapshot.premium_run.pk != premium_run.pk
+        dashboard_snapshot.dedup_run_id != dedup_run.pk
+        or dashboard_snapshot.premium_run_id != premium_run.pk
     ):
-        raise Day0ContractError("Dashboard snapshot is not aligned to the selected upstream runs")
+        raise Day0ContractError("Dashboard snapshot is not aligned to exact upstream runs")
 
 
 def _review_evidence(
     dedup_run: DedupRun,
     premium_run: PremiumSegmentRun,
     dashboard_snapshot: DashboardSnapshot,
-) -> tuple[list[str], list[str]]:
-    records = list(
-        DashboardVacancyRecord.objects.filter(snapshot=dashboard_snapshot).values(
-            "visibility_status",
-            "mapping_status",
-            "green_assessment_id",
-            "premium_assessment_id",
-            "canonical_posting_id",
-            "canonical_observation_id",
-            "location_resolution_id",
-        )
-    )
-    public_postings = {
-        row["canonical_posting_id"]
-        for row in records
-        if row["visibility_status"] == "PUBLIC_GREEN_CONFIRMED"
-    }
+) -> tuple[list[str], list[str], int, int, int]:
     critical: list[str] = []
     noncritical: list[str] = []
-    for dedup_review in DedupReviewItem.objects.filter(
-        algorithm_decision__dedup_run=dedup_run, status="PENDING"
-    ).select_related("algorithm_decision"):
-        pair = {
-            dedup_review.algorithm_decision.posting_a_id,
-            dedup_review.algorithm_decision.posting_b_id,
-        }
-        target = critical if pair and pair.issubset(public_postings) else noncritical
-        target.append(f"dedup:{dedup_review.pk}")
-
-    public_observations = {
-        row["canonical_observation_id"]
-        for row in records
-        if row["visibility_status"] == "PUBLIC_GREEN_CONFIRMED"
+    assessments = list(
+        PremiumSegmentAssessment.objects.filter(run=premium_run).select_related(
+            "green_relevance_assessment"
+        )
+    )
+    green_by_observation = {
+        row.posting_observation_id: (
+            row.green_relevance_assessment.result if row.green_relevance_assessment_id else None
+        )
+        for row in assessments
     }
-    for premium_review in PremiumSegmentReviewItem.objects.filter(
+    green_reviews = [
+        str(row.green_relevance_assessment_id)
+        for row in assessments
+        if row.green_relevance_assessment_id and row.green_relevance_assessment.result == "REVIEW"
+    ]
+    critical.extend(f"green:{item}" for item in green_reviews)
+    critical_dedup = 0
+    reviews = DedupReviewItem.objects.filter(status="PENDING").select_related(
+        "algorithm_decision__observation_a", "algorithm_decision__observation_b"
+    )
+    for review in reviews:
+        decision = review.algorithm_decision
+        if decision.dedup_run_id != dedup_run.pk:
+            continue
+        values = (
+            green_by_observation.get(decision.observation_a_id),
+            green_by_observation.get(decision.observation_b_id),
+        )
+        marker = f"dedup:{review.pk}"
+        if all(value in {"GREEN_CONFIRMED", "REVIEW", None} for value in values):
+            critical.append(marker)
+            critical_dedup += 1
+        else:
+            noncritical.append(marker)
+    premium_reviews = PremiumSegmentReviewItem.objects.filter(
         assessment__run=premium_run, status="PENDING"
-    ).select_related("assessment"):
-        target = (
-            critical
-            if premium_review.assessment.posting_observation_id in public_observations
-            else noncritical
-        )
-        target.append(f"premium:{premium_review.pk}")
-    for geocoding_review in GeocodingReviewItem.objects.filter(
-        location_resolution_id__in=[
-            row["location_resolution_id"]
-            for row in records
-            if row["location_resolution_id"] is not None
-        ],
-        review_status="PENDING",
-    ):
-        target = (
-            critical
-            if geocoding_review.posting_observation.pk in public_observations
-            else noncritical
-        )
-        target.append(f"geospatial:{geocoding_review.pk}")
-
-    for row in records:
-        if row["visibility_status"] == "REVIEW_NOT_PUBLIC":
-            critical.append(f"green:{row['green_assessment_id'] or row['canonical_posting_id']}")
-        if row["visibility_status"] == "MISSING_GREEN_ASSESSMENT":
-            critical.append(f"green-missing:{row['canonical_posting_id']}")
-    return sorted(set(critical)), sorted(set(noncritical))
+    ).values_list("pk", flat=True)
+    critical.extend(f"premium:{item}" for item in premium_reviews)
+    location_reviews = DashboardVacancyRecord.objects.filter(
+        snapshot=dashboard_snapshot, mapping_status="LOCATION_REVIEW"
+    ).values_list("pk", flat=True)
+    critical.extend(f"geospatial-record:{item}" for item in location_reviews)
+    critical = sorted(set(critical))
+    noncritical = sorted(set(noncritical))
+    other = len(critical) - len(green_reviews) - critical_dedup
+    return critical, noncritical, len(green_reviews), critical_dedup, other
 
 
 def _evaluate_status(
-    universe: Day0SourceUniverse,
-    required_complete: int,
+    policy: Day0AuthorizationPolicy | Day0SourceUniverse,
+    required_authorized: int,
     required_count: int,
     critical_count: int,
     access_blockers: int,
 ) -> str:
-    if universe.threshold_policy_status == Day0SourceUniverse.ThresholdPolicyStatus.PENDING:
+    freshness_status = getattr(policy, "freshness_policy_status", "ACCEPTED")
+    if policy.threshold_policy_status == "PENDING" or freshness_status == "PENDING":
         return cast(str, Day0ReadinessAssessment.Status.POLICY_PENDING)
     if access_blockers:
         return cast(str, Day0ReadinessAssessment.Status.BLOCKED_ACCESS)
     if critical_count:
         return cast(str, Day0ReadinessAssessment.Status.BLOCKED_QUALITY)
-    if not required_count or universe.required_completion_threshold is None:
+    if not required_count or policy.required_completion_threshold is None:
         return cast(str, Day0ReadinessAssessment.Status.NOT_READY)
-    ratio = Decimal(required_complete) / Decimal(required_count)
-    if ratio < universe.required_completion_threshold:
+    ratio = Decimal(required_authorized) / Decimal(required_count)
+    if ratio < policy.required_completion_threshold:
         return cast(str, Day0ReadinessAssessment.Status.NOT_READY)
     return cast(str, Day0ReadinessAssessment.Status.AUTHORIZED)
 
 
 def _advisory_lock(fingerprint: str) -> None:
-    key = int(fingerprint[:15], 16)
     with connection.cursor() as cursor:
-        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [key])
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [int(fingerprint[:15], 16)])
+
+
+def _completion_status(plan: SourceEvidencePlan) -> str:
+    if plan.latest_full_source_run is None:
+        return "NO_ELIGIBLE_RUN"
+    if not plan.structurally_complete:
+        return "INCOMPLETE"
+    if plan.latest_health_run and plan.latest_health_run.status == "FAILED":
+        return "FAILED"
+    if plan.latest_health_run and plan.latest_health_run.source_health_status == "OUTAGE":
+        return "OUTAGE"
+    if plan.latest_health_run and plan.latest_health_run.source_health_status == "DEGRADED":
+        return "DEGRADED"
+    if plan.currently_healthy and plan.freshness_valid is True:
+        return "COMPLETE_HEALTHY"
+    if plan.currently_healthy and plan.freshness_valid is None:
+        return "COMPLETE_FRESHNESS_PENDING"
+    return "INCOMPLETE"
 
 
 @transaction.atomic
@@ -439,155 +439,174 @@ def assess_day0_readiness(
     premium_run: PremiumSegmentRun,
     dashboard_snapshot: DashboardSnapshot,
     source_universe: Day0SourceUniverse | None = None,
+    authorization_policy: Day0AuthorizationPolicy | None = None,
 ) -> tuple[Day0ReadinessAssessment, bool]:
     universe = source_universe or ensure_source_universe()
-    if (
-        universe.universe_version != SOURCE_UNIVERSE_VERSION
-        or universe.policy_version != POLICY_VERSION
-    ):
-        raise Day0ContractError("Unsupported Day-0 source-universe or policy version")
-    _validate_alignment(
-        as_of=as_of,
-        dedup_run=dedup_run,
-        premium_run=premium_run,
-        dashboard_snapshot=dashboard_snapshot,
-    )
-    entries = list(
-        Day0SourceUniverseEntry.objects.filter(universe=universe).select_related("source")
-    )
-    plans = [_source_plan(entry, as_of) for entry in entries]
-    required = [
-        plan
-        for plan in plans
-        if plan.entry.target_role == Day0SourceUniverseEntry.TargetRole.REQUIRED
+    if authorization_policy is not None:
+        policy = authorization_policy
+    elif source_universe is not None:
+        _advisory_lock(_sha256({"fixture_policy": str(universe.pk)}))
+        policy = Day0AuthorizationPolicy.objects.filter(
+            policy_version=universe.policy_version
+        ).first()
+        if policy is None:
+            accepted = universe.threshold_policy_status == "ACCEPTED"
+            policy = Day0AuthorizationPolicy.objects.create(
+                policy_version=universe.policy_version,
+                threshold_policy_status=universe.threshold_policy_status,
+                required_completion_threshold=universe.required_completion_threshold,
+                freshness_policy_status="ACCEPTED" if accepted else "PENDING",
+                required_source_max_age_hours=1000000 if accepted else None,
+                configuration={"fixture_compatibility": True},
+                input_fingerprint=_sha256({"fixture_universe": str(universe.pk)}),
+            )
+    else:
+        policy = ensure_authorization_policy()
+    if universe.universe_version != SOURCE_UNIVERSE_VERSION:
+        raise Day0ContractError("Unsupported Day-0 source-universe version")
+    if universe.policy_version != policy.policy_version:
+        raise Day0ContractError("Source universe and authorization policy versions differ")
+    _validate_alignment(as_of, dedup_run, premium_run, dashboard_snapshot)
+    plans = [
+        _source_plan(entry, as_of, policy)
+        for entry in Day0SourceUniverseEntry.objects.filter(universe=universe).select_related(
+            "source"
+        )
     ]
-    supporting = [
-        plan
-        for plan in plans
-        if plan.entry.target_role == Day0SourceUniverseEntry.TargetRole.SUPPORTING
-    ]
-    complete = [plan for plan in required if plan.complete]
-    healthy = [plan for plan in required if plan.healthy]
-    access_blockers = [
+    required = [plan for plan in plans if plan.entry.target_role == "REQUIRED"]
+    supporting = [plan for plan in plans if plan.entry.target_role == "SUPPORTING"]
+    complete = [plan for plan in required if plan.structurally_complete]
+    healthy = [plan for plan in required if plan.currently_healthy]
+    fresh = [plan for plan in required if plan.freshness_valid is True]
+    authorized = [
         plan
         for plan in required
-        if plan.entry.classification == Day0SourceUniverseEntry.Classification.BLOCKED
+        if plan.structurally_complete and plan.currently_healthy and plan.freshness_valid is True
     ]
-    critical_ids, noncritical_ids = _review_evidence(dedup_run, premium_run, dashboard_snapshot)
-
-    public_records = list(
-        DashboardVacancyRecord.objects.filter(
-            snapshot=dashboard_snapshot,
-            visibility_status="PUBLIC_GREEN_CONFIRMED",
-        ).select_related("dedup_run_vacancy_state")
+    blocked_required = [
+        plan for plan in required if plan.entry.access_status == "BLOCKED_PENDING_ACCESS_REVIEW"
+    ]
+    blocked_supporting = [
+        plan for plan in supporting if plan.entry.access_status == "BLOCKED_PENDING_ACCESS_REVIEW"
+    ]
+    blocked_other = [
+        plan
+        for plan in plans
+        if plan.entry.target_role == "NONE"
+        and plan.entry.access_status == "BLOCKED_PENDING_ACCESS_REVIEW"
+    ]
+    critical, noncritical, critical_green, critical_dedup, other_critical = _review_evidence(
+        dedup_run, premium_run, dashboard_snapshot
     )
-    known_position_records = [
-        record for record in public_records if record.positions_count is not None
-    ]
-    known_positions_total = sum(record.positions_count or 0 for record in known_position_records)
-    unknown_positions = len(public_records) - len(known_position_records)
-    multi_hire = sum(bool(record.multi_hire_possible) for record in public_records)
-    complete_ids = [str(plan.run.pk) for plan in complete if plan.run]
-    healthy_ids = [str(plan.run.pk) for plan in healthy if plan.run]
+    records = list(DashboardVacancyRecord.objects.filter(snapshot=dashboard_snapshot))
+    public = [row for row in records if row.visibility_status == "PUBLIC_GREEN_CONFIRMED"]
+    known = [row for row in public if row.positions_count is not None]
+    green_confirmed = sum(row.visibility_status == "PUBLIC_GREEN_CONFIRMED" for row in records)
+    green_review = sum(row.visibility_status == "REVIEW_NOT_PUBLIC" for row in records)
+    not_green = sum(row.visibility_status == "EXCLUDED_NOT_GREEN" for row in records)
+    missing_green = sum(row.visibility_status == "MISSING_GREEN_ASSESSMENT" for row in records)
     canonical_required = [
-        plan for plan in required if "canonical" in plan.entry.canonicality.casefold()
+        plan for plan in required if plan.entry.canonicality in VACANCY_CANONICALITY_VALUES
     ]
-    canonical_complete = [plan for plan in canonical_required if plan.complete]
-    required_geographies = {
-        plan.entry.coverage_scope or str(plan.entry.source.pk) for plan in required
-    }
-    covered_geographies = {
-        plan.entry.coverage_scope or str(plan.entry.source.pk) for plan in complete
-    }
-    source_link_known = sum(
-        record.source_link_status not in {"NO_LINK_AVAILABLE", "REVIEW"}
-        for record in public_records
-    )
-    dedup_denominator = len(public_records) + len(
-        [item for item in critical_ids if item.startswith("dedup:")]
-    )
+    canonical_complete = [plan for plan in canonical_required if plan.structurally_complete]
     metrics = {
         "required_source_run_coverage": _metric(
             len(complete),
             len(required),
-            "Healthy, successful, complete FULL_SOURCE required runs",
-            complete_ids,
+            "Required sources with structurally complete FULL_SOURCE evidence.",
+            [
+                str(plan.latest_full_source_run.pk)
+                for plan in complete
+                if plan.latest_full_source_run
+            ],
         ),
         "source_health_coverage": _metric(
             len(healthy),
             len(required),
-            "Required sources whose selected run is HEALTHY",
-            healthy_ids,
+            "Required sources whose latest activity is SUCCEEDED and HEALTHY.",
+            [str(plan.latest_health_run.pk) for plan in healthy if plan.latest_health_run],
+        ),
+        "required_source_freshness_coverage": _metric(
+            len(fresh) if policy.freshness_policy_status == "ACCEPTED" else None,
+            len(required) if policy.freshness_policy_status == "ACCEPTED" else None,
+            "Required FULL_SOURCE runs within an accepted maximum age.",
+            [str(plan.latest_full_source_run.pk) for plan in fresh if plan.latest_full_source_run],
+            "COMPUTABLE" if policy.freshness_policy_status == "ACCEPTED" else "POLICY_PENDING",
         ),
         "canonical_source_coverage": _metric(
             len(canonical_complete),
             len(canonical_required),
-            "Completed required sources marked canonical by governed registry evidence",
-            complete_ids,
+            (
+                "Structurally complete required vacancy sources with an explicitly "
+                "accepted canonicality."
+            ),
+            [
+                str(plan.latest_full_source_run.pk)
+                for plan in canonical_complete
+                if plan.latest_full_source_run
+            ],
         ),
         "geographic_coverage": _metric(
-            len(covered_geographies),
-            len(required_geographies),
-            "Governed required source scopes covered; not a job-count or true-market ratio",
-            complete_ids,
+            None,
+            None,
+            (
+                "NOT_COMPUTABLE: free-text coverage_scope is not a governed "
+                "administrative denominator."
+            ),
+            [],
+            "NOT_COMPUTABLE",
         ),
         "publication_date_coverage": _metric(
             dashboard_snapshot.known_publication_date_count,
             dashboard_snapshot.public_green_eligible_count,
-            "Public green vacancy records with governed source publication dates",
+            "Public green records with source publication dates.",
             [str(dashboard_snapshot.pk)],
         ),
         "geospatial_resolution_coverage": _metric(
             dashboard_snapshot.mappable_vacancy_count,
             dashboard_snapshot.public_green_eligible_count,
-            "Public green records with safe public-display coordinates",
+            "Public green records with safe public-display coordinates.",
             [str(dashboard_snapshot.pk)],
         ),
         "green_classification_coverage": _metric(
-            dashboard_snapshot.public_green_eligible_count
-            + dashboard_snapshot.excluded_not_green_count
-            + dashboard_snapshot.review_not_public_count,
-            dashboard_snapshot.total_vacancy_states,
-            "Run vacancy states with a selected green assessment outcome",
+            green_confirmed + green_review + not_green,
+            len(records),
+            "Run vacancy states with an exact selected green outcome.",
             [str(dashboard_snapshot.pk)],
         ),
         "dedup_resolution_quality": _metric(
-            len(public_records),
-            dedup_denominator,
-            "Public records not affected by a critical pending dedup review",
-            [
-                str(dedup_run.pk),
-                *[item for item in critical_ids if item.startswith("dedup:")],
-            ],
+            len(public),
+            len(public) + critical_dedup,
+            (
+                "Public unique vacancies relative to pending dedup decisions capable "
+                "of changing the count."
+            ),
+            [str(dedup_run.pk), *[item for item in critical if item.startswith("dedup:")]],
         ),
         "position_count_disclosure_coverage": _metric(
-            len(known_position_records),
-            len(public_records),
-            "Public unique vacancies with explicit advertised positions_count",
-            [str(record.pk) for record in known_position_records],
+            len(known),
+            len(public),
+            "Public unique vacancies with explicit positions_count.",
+            [str(row.pk) for row in known],
         ),
         "source_link_provenance_coverage": _metric(
-            source_link_known,
-            len(public_records),
-            "Public records with a governed, renderable source-link status",
-            [str(record.pk) for record in public_records],
+            sum(row.source_link_status not in {"NO_LINK_AVAILABLE", "REVIEW"} for row in public),
+            len(public),
+            "Public records with governed source-link status.",
+            [str(row.pk) for row in public],
         ),
     }
-    selected_run_ids = sorted(str(plan.run.pk) for plan in plans if plan.run)
     blockers: list[dict[str, Any]] = []
-    if universe.threshold_policy_status == Day0SourceUniverse.ThresholdPolicyStatus.PENDING:
-        blockers.append(
-            {
-                "code": "THRESHOLD_POLICY_PENDING",
-                "detail": "No numeric Day-0 threshold is authorized by frozen research.",
-            }
-        )
-    if access_blockers:
+    if policy.threshold_policy_status == "PENDING":
+        blockers.append({"code": "THRESHOLD_POLICY_PENDING"})
+    if policy.freshness_policy_status == "PENDING":
+        blockers.append({"code": "FRESHNESS_POLICY_PENDING"})
+    if blocked_required:
         blockers.append(
             {
                 "code": "REQUIRED_SOURCE_ACCESS_REVIEW",
-                "count": len(access_blockers),
-                "source_ids": sorted(str(plan.entry.source.pk) for plan in access_blockers),
+                "count": len(blocked_required),
+                "source_ids": sorted(str(plan.entry.source_id) for plan in blocked_required),
             }
         )
     if len(complete) < len(required):
@@ -598,134 +617,172 @@ def assess_day0_readiness(
                 "required": len(required),
             }
         )
-    if critical_ids:
+    if len(healthy) < len(required):
         blockers.append(
-            {"code": "CRITICAL_REVIEWS", "count": len(critical_ids), "review_ids": critical_ids}
-        )
-
-    fingerprint_payload = {
-        "readiness_version": READINESS_VERSION,
-        "as_of": as_of.isoformat(),
-        "source_universe": str(universe.pk),
-        "source_universe_fingerprint": universe.input_fingerprint,
-        "dedup_run": str(dedup_run.pk),
-        "dedup_fingerprint": dedup_run.input_fingerprint,
-        "premium_run": str(premium_run.pk),
-        "premium_fingerprint": premium_run.input_fingerprint,
-        "dashboard_snapshot": str(dashboard_snapshot.pk),
-        "dashboard_fingerprint": dashboard_snapshot.input_fingerprint,
-        "source_evidence": [
             {
-                "entry": str(plan.entry.pk),
-                "run": str(plan.run.pk) if plan.run else None,
-                "evidence": plan.evidence,
+                "code": "REQUIRED_SOURCE_HEALTH_INCOMPLETE",
+                "healthy": len(healthy),
+                "required": len(required),
             }
-            for plan in sorted(plans, key=lambda item: str(item.entry.source.pk))
-        ],
-        "critical_reviews": critical_ids,
-        "noncritical_reviews": noncritical_ids,
-        "metrics": metrics,
-    }
-    fingerprint = _sha256(fingerprint_payload)
+        )
+    if critical:
+        blockers.append(
+            {"code": "CRITICAL_REVIEWS", "count": len(critical), "review_ids": critical}
+        )
+    fingerprint = _sha256(
+        {
+            "readiness_version": READINESS_VERSION,
+            "as_of": as_of.isoformat(),
+            "universe": str(universe.pk),
+            "universe_fingerprint": universe.input_fingerprint,
+            "policy": str(policy.pk),
+            "policy_fingerprint": policy.input_fingerprint,
+            "dedup": [str(dedup_run.pk), dedup_run.input_fingerprint],
+            "premium": [str(premium_run.pk), premium_run.input_fingerprint],
+            "dashboard": [str(dashboard_snapshot.pk), dashboard_snapshot.input_fingerprint],
+            "source_evidence": [
+                {"entry": str(plan.entry.pk), "evidence": plan.evidence}
+                for plan in sorted(plans, key=lambda item: str(item.entry.source_id))
+            ],
+            "critical": critical,
+            "noncritical": noncritical,
+            "metrics": metrics,
+        }
+    )
     _advisory_lock(fingerprint)
     existing = Day0ReadinessAssessment.objects.filter(input_fingerprint=fingerprint).first()
     if existing:
         return existing, True
-
-    status = _evaluate_status(
-        universe, len(complete), len(required), len(critical_ids), len(access_blockers)
+    selected_run_ids = sorted(
+        {
+            str(run.pk)
+            for plan in plans
+            for run in (
+                plan.latest_activity_run,
+                plan.latest_full_source_run,
+                plan.latest_health_run,
+            )
+            if run
+        }
     )
-    assessment = Day0ReadinessAssessment.objects.create(
+    selected_postings = dedup_run.posting_assignments.count()
+    assessment = Day0ReadinessAssessment(
+        readiness_version=READINESS_VERSION,
         as_of=as_of,
         source_universe=universe,
-        readiness_version=READINESS_VERSION,
-        policy_version=universe.policy_version,
+        authorization_policy=policy,
+        policy_version=policy.policy_version,
         dedup_run=dedup_run,
         premium_run=premium_run,
         dashboard_snapshot=dashboard_snapshot,
-        readiness_status=status,
-        selected_source_ids=sorted(str(plan.entry.source.pk) for plan in plans),
+        readiness_status=_evaluate_status(
+            policy, len(authorized), len(required), len(critical), len(blocked_required)
+        ),
+        selected_source_ids=sorted(str(plan.entry.source_id) for plan in plans),
         selected_collection_run_ids=selected_run_ids,
         metrics=metrics,
-        critical_review_ids=critical_ids,
-        noncritical_review_ids=noncritical_ids,
+        critical_review_ids=critical,
+        noncritical_review_ids=noncritical,
         blockers=blockers,
         required_source_count=len(required),
         supporting_source_count=len(supporting),
-        deferred_source_count=sum(
-            plan.entry.classification == Day0SourceUniverseEntry.Classification.DEFERRED
-            for plan in plans
+        deferred_source_count=sum(plan.entry.classification == "DEFERRED" for plan in plans),
+        not_applicable_source_count=sum(
+            plan.entry.classification == "NOT_APPLICABLE" for plan in plans
         ),
-        blocked_source_count=sum(
-            plan.entry.classification == Day0SourceUniverseEntry.Classification.BLOCKED
-            for plan in plans
-        ),
+        blocked_source_count=len(blocked_required) + len(blocked_supporting) + len(blocked_other),
+        blocked_required_source_count=len(blocked_required),
+        blocked_supporting_source_count=len(blocked_supporting),
+        blocked_other_source_count=len(blocked_other),
         implemented_required_source_count=len(complete),
-        required_full_source_healthy_count=len(complete),
-        required_source_completion_ratio=(
-            Decimal(len(complete)) / Decimal(len(required)) if required else None
+        required_complete_count=len(complete),
+        required_healthy_count=len(healthy),
+        required_freshness_valid_count=len(fresh),
+        required_full_source_healthy_count=sum(
+            plan.structurally_complete and plan.currently_healthy for plan in required
         ),
-        healthy_source_ratio=(Decimal(len(healthy)) / Decimal(len(required)) if required else None),
-        critical_review_count=len(critical_ids),
-        noncritical_review_count=len(noncritical_ids),
-        observed_postings=dashboard_snapshot.dedup_run.posting_assignments.count(),
-        active_unique_vacancies=sum(record.vacancy_status == "ACTIVE" for record in public_records),
-        known_positions_total=known_positions_total,
-        vacancies_unknown_position_count=unknown_positions,
-        multi_hire_possible_count=multi_hire,
+        required_source_completion_ratio=_persisted_ratio(len(complete), len(required)),
+        healthy_source_ratio=_persisted_ratio(len(healthy), len(required)),
+        critical_review_count=len(critical),
+        noncritical_review_count=len(noncritical),
+        critical_green_review_count=critical_green,
+        critical_dedup_review_count=critical_dedup,
+        other_critical_review_count=other_critical,
+        green_confirmed_count=green_confirmed,
+        green_review_count=green_review,
+        not_green_count=not_green,
+        missing_green_count=missing_green,
+        observed_postings=selected_postings,
+        selected_source_postings=selected_postings,
+        active_unique_vacancies=sum(row.vacancy_status == "ACTIVE" for row in public),
+        known_positions_total=sum(row.positions_count or 0 for row in known),
+        vacancies_unknown_position_count=len(public) - len(known),
+        multi_hire_possible_count=sum(bool(row.multi_hire_possible) for row in public),
         input_fingerprint=fingerprint,
     )
-    Day0ReadinessSourceEvidence.objects.bulk_create(
-        [
-            Day0ReadinessSourceEvidence(
-                assessment=assessment,
-                universe_entry=plan.entry,
-                source=plan.entry.source,
-                collection_run=plan.run,
-                completion_status=(
-                    Day0ReadinessSourceEvidence.CompletionStatus.COMPLETE_HEALTHY
-                    if plan.complete
-                    else (
-                        Day0ReadinessSourceEvidence.CompletionStatus.NO_ELIGIBLE_RUN
-                        if plan.run is None
-                        else Day0ReadinessSourceEvidence.CompletionStatus.INCOMPLETE
-                    )
-                ),
-                is_complete=plan.complete,
-                is_healthy=plan.healthy,
-                evidence=plan.evidence,
-            )
-            for plan in plans
-        ]
-    )
+    assessment.save()
+    evidence_rows = []
+    for plan in plans:
+        row = Day0ReadinessSourceEvidence(
+            assessment=assessment,
+            universe_entry=plan.entry,
+            source=plan.entry.source,
+            collection_run=plan.latest_full_source_run,
+            latest_activity_run=plan.latest_activity_run,
+            latest_full_source_run=plan.latest_full_source_run,
+            latest_health_run=plan.latest_health_run,
+            completion_status=_completion_status(plan),
+            is_complete=plan.structurally_complete,
+            is_healthy=plan.currently_healthy,
+            structurally_complete=plan.structurally_complete,
+            currently_healthy=plan.currently_healthy,
+            freshness_valid=plan.freshness_valid,
+            evidence=plan.evidence,
+        )
+        row.full_clean()
+        evidence_rows.append(row)
+    Day0ReadinessSourceEvidence.objects.bulk_create(evidence_rows)
     return assessment, False
 
 
 def readiness_summary(assessment: Day0ReadinessAssessment, reused: bool) -> dict[str, Any]:
+    policy = assessment.authorization_policy
     return {
         "assessment_id": str(assessment.pk),
         "as_of": assessment.as_of.isoformat(),
         "status": assessment.readiness_status,
         "source_universe_version": assessment.source_universe.universe_version,
         "policy_version": assessment.policy_version,
-        "threshold_policy_status": assessment.source_universe.threshold_policy_status,
+        "threshold_policy_status": policy.threshold_policy_status if policy else "LEGACY",
+        "freshness_policy_status": policy.freshness_policy_status if policy else "LEGACY",
         "input_fingerprint": assessment.input_fingerprint,
-        "dedup_run_id": str(assessment.dedup_run.pk),
-        "premium_run_id": str(assessment.premium_run.pk),
-        "dashboard_snapshot_id": str(assessment.dashboard_snapshot.pk),
+        "dedup_run_id": str(assessment.dedup_run_id),
+        "premium_run_id": str(assessment.premium_run_id),
+        "dashboard_snapshot_id": str(assessment.dashboard_snapshot_id),
         "required_sources": assessment.required_source_count,
         "supporting_sources": assessment.supporting_source_count,
         "deferred_sources": assessment.deferred_source_count,
-        "blocked_sources": assessment.blocked_source_count,
-        "required_complete": assessment.implemented_required_source_count,
-        "required_healthy": assessment.required_full_source_healthy_count,
+        "not_applicable_sources": assessment.not_applicable_source_count,
+        "blocked_required": assessment.blocked_required_source_count,
+        "blocked_supporting": assessment.blocked_supporting_source_count,
+        "blocked_other": assessment.blocked_other_source_count,
+        "required_complete": assessment.required_complete_count,
+        "required_healthy": assessment.required_healthy_count,
+        "freshness_valid": assessment.required_freshness_valid_count,
+        "selected_source_postings": assessment.selected_source_postings,
         "observed_postings": assessment.observed_postings,
         "active_unique_vacancies": assessment.active_unique_vacancies,
         "known_positions_total": assessment.known_positions_total,
         "vacancies_unknown_position_count": assessment.vacancies_unknown_position_count,
         "multi_hire_possible_count": assessment.multi_hire_possible_count,
-        "critical_review_count": len(assessment.critical_review_ids),
-        "noncritical_review_count": len(assessment.noncritical_review_ids),
+        "green_confirmed_count": assessment.green_confirmed_count,
+        "green_review_count": assessment.green_review_count,
+        "not_green_count": assessment.not_green_count,
+        "missing_green_count": assessment.missing_green_count,
+        "critical_green_reviews": assessment.critical_green_review_count,
+        "critical_dedup_reviews": assessment.critical_dedup_review_count,
+        "other_critical_reviews": assessment.other_critical_review_count,
+        "noncritical_reviews": assessment.noncritical_review_count,
         "metrics": assessment.metrics,
         "blockers": assessment.blockers,
         "exact_replay_reused": reused,

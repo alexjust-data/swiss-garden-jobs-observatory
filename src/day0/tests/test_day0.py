@@ -46,6 +46,9 @@ def complete_collection(data: dict[str, Any], *, jobs: int = 1) -> None:
     run.source_health_status = "HEALTHY"
     run.snapshot_complete = True
     run.listings_discovered = jobs
+    run.listing_total_discovered = jobs
+    run.postings_in_scope = jobs
+    run.details_fetched = jobs
     run.observations_created = jobs
     run.green_assessments_created = jobs
     run.save(
@@ -55,6 +58,9 @@ def complete_collection(data: dict[str, Any], *, jobs: int = 1) -> None:
             "source_health_status",
             "snapshot_complete",
             "listings_discovered",
+            "listing_total_discovered",
+            "postings_in_scope",
+            "details_fetched",
             "observations_created",
             "green_assessments_created",
         ]
@@ -88,6 +94,12 @@ def add_entry(
         classification=classification,
         target_role=target_role,
         reason="fixture governed reason",
+        access_status=(
+            "BLOCKED_PENDING_ACCESS_REVIEW"
+            if classification == "BLOCKED_PENDING_ACCESS_REVIEW"
+            else "READY_FOR_IMPLEMENTATION"
+        ),
+        access_reason="fixture access decision",
         source_name=source.source_name,
         source_family=source.source_family,
         source_type=source.source_type,
@@ -185,7 +197,10 @@ def test_unhealthy_failed_or_incomplete_required_source_does_not_count(
     add_entry(source_universe, data["source"])
     result, _ = assess(data, snapshot, source_universe)
     assert result.readiness_status == "DAY_0_NOT_READY"
-    assert result.implemented_required_source_count == 0
+    assert result.required_complete_count == (1 if complete and status == "SUCCEEDED" else 0)
+    assert result.required_healthy_count == (
+        1 if health == "HEALTHY" and status == "SUCCEEDED" else 0
+    )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -301,7 +316,8 @@ def test_source_denominators_and_unknown_positions_are_explicit() -> None:
     source_universe = universe()
     add_entry(source_universe, data["source"])
     result, _ = assess(data, snapshot, source_universe)
-    assert result.metrics["geographic_coverage"]["denominator"] == 1
+    assert result.metrics["geographic_coverage"]["status"] == "NOT_COMPUTABLE"
+    assert result.metrics["geographic_coverage"]["denominator"] is None
     assert result.metrics["position_count_disclosure_coverage"]["denominator"] == 1
     assert result.metrics["position_count_disclosure_coverage"]["numerator"] == 0
     assert result.known_positions_total == 0
@@ -382,9 +398,9 @@ def test_green_review_is_critical_and_unrelated_dedup_review_is_noncritical() ->
     source_universe = universe(accepted=True, threshold=Decimal("1.0"))
     add_entry(source_universe, data["source"])
     result, _ = assess(data, snapshot, source_universe)
-    assert result.critical_review_count == 0
-    assert result.noncritical_review_count == 1
-    assert result.noncritical_review_ids == [f"dedup:{review.pk}"]
+    assert result.critical_review_count == 1
+    assert result.critical_dedup_review_count == 1
+    assert result.critical_review_ids == [f"dedup:{review.pk}"]
 
 
 @pytest.mark.django_db(transaction=True)
