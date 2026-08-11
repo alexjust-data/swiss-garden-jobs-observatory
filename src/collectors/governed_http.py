@@ -306,6 +306,37 @@ def ensure_default_endpoints(source: Source) -> None:
                 "https://stellenmarkt.bs.ch/kbs/job/details/",
             ),
         ),
+        "SRC-OFF-CANTON-GR": (
+            ("LANDING", "CANTON_GR_PORTAL", "stellen.gr.ch", "https://stellen.gr.ch/"),
+            (
+                "LISTING",
+                "CANTON_GR_PORTAL",
+                "apply.refline.ch",
+                "https://apply.refline.ch/514915/search.html",
+            ),
+            (
+                "LISTING",
+                "CANTON_GR_PORTAL",
+                "apply.refline.ch",
+                "https://apply.refline.ch/514915/apprentice.html",
+            ),
+            ("DETAIL", "CANTON_GR_PORTAL", "apply.refline.ch", "https://apply.refline.ch/514915/"),
+        ),
+        "SRC-OFF-CANTON-SO": (
+            ("LANDING", "CANTON_SO_PORTAL", "job.so.ch", "https://job.so.ch/"),
+            ("LISTING", "CANTON_SO_PORTAL", "job.so.ch", "https://job.so.ch/"),
+            ("DETAIL", "CANTON_SO_PORTAL", "job.so.ch", "https://job.so.ch/offene-stellen/"),
+        ),
+        "SRC-OFF-CANTON-SZ": (
+            ("LANDING", "CANTON_SZ_PORTAL", "jobs.sz.ch", "https://jobs.sz.ch/"),
+            ("LISTING", "CANTON_SZ_PORTAL", "jobs.sz.ch", "https://jobs.sz.ch/"),
+            ("DETAIL", "CANTON_SZ_PORTAL", "jobs.sz.ch", "https://jobs.sz.ch/offene-stellen/"),
+        ),
+    }
+    gate_011c3 = str(source.pk) in {
+        "SRC-OFF-CANTON-GR",
+        "SRC-OFF-CANTON-SO",
+        "SRC-OFF-CANTON-SZ",
     }
     gate_011c2 = str(source.pk) in {
         "SRC-OFF-JOBS-ADMIN",
@@ -323,7 +354,9 @@ def ensure_default_endpoints(source: Source) -> None:
         "SRC-OFF-CITY-SCHAFFHAUSEN",
     }
     decision = (
-        "docs/decisions/0010-gate-011c2-major-required-sources.md"
+        "docs/decisions/0011-gate-011c3-remaining-required-cantons.md"
+        if gate_011c3
+        else "docs/decisions/0010-gate-011c2-major-required-sources.md"
         if gate_011c2
         else "docs/decisions/0009-gate-011c1-canton-platform-reuse.md"
         if gate_011c1
@@ -332,7 +365,9 @@ def ensure_default_endpoints(source: Source) -> None:
         else "docs/decisions/0003-gate-007-incremental-platform-reuse.md"
     )
     verification = (
-        "GATE-011C-2 live technical reconnaissance"
+        "GATE-011C-3 live technical reconnaissance"
+        if gate_011c3
+        else "GATE-011C-2 live technical reconnaissance"
         if gate_011c2
         else "GATE-011C-1 live technical reconnaissance"
         if gate_011c1
@@ -340,6 +375,12 @@ def ensure_default_endpoints(source: Source) -> None:
         if gate_011b
         else "GATE-007 live technical reconnaissance"
     )
+    if str(source.pk) == "SRC-OFF-CANTON-GR":
+        SourceEndpoint.objects.filter(
+            source=source,
+            endpoint_role="LISTING",
+            base_url="https://apply.refline.ch/514915/stage.html",
+        ).delete()
     for role, family, host, base_url in definitions.get(str(source.pk), ()):
         endpoint, _ = SourceEndpoint.objects.get_or_create(
             source=source,
