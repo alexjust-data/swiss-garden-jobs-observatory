@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from html import unescape
 from html.parser import HTMLParser
 from typing import cast
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 from collectors.platforms import (
     FetchedPage,
@@ -54,43 +54,54 @@ def _unix_datetime(value: object) -> datetime | None:
 
 class ZurichCantonSoliqueAdapter:
     platform_family = "SOLIQUE_LINKED"
+    api_url = ZURICH_CANTON_API
+    base_url = ZURICH_CANTON_BASE
+    source_format = "SOLIQUE_KTZH_API_V1"
+    contract_label = "Zurich canton"
 
     def initial_listing_request(self, source: Source) -> FetchRequest:
-        return FetchRequest(ZURICH_CANTON_API, "application/json", "LISTING_PAGE")
+        return FetchRequest(self.api_url, "application/json", "LISTING_PAGE")
 
     def parse_listing_page(
         self, page: FetchedPage, request: FetchRequest, source: Source
     ) -> ListingPage:
         if page.content_type != "application/json":
-            raise PlatformAdapterError("Zurich canton Solique listing must be JSON")
+            raise PlatformAdapterError(f"{self.contract_label} Solique listing must be JSON")
         try:
             payload = json.loads(page.body)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise PlatformAdapterError(
-                "Zurich canton Solique listing contains invalid JSON"
+                f"{self.contract_label} Solique listing contains invalid JSON"
             ) from exc
         if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
-            raise PlatformAdapterError("Zurich canton Solique listing lacks jobs")
+            raise PlatformAdapterError(f"{self.contract_label} Solique listing lacks jobs")
         jobs = cast(list[object], payload["jobs"])
         entries: list[ListingEntry] = []
         for raw in jobs:
             if not isinstance(raw, dict):
-                raise PlatformAdapterError("Zurich canton Solique job must be an object")
+                raise PlatformAdapterError(f"{self.contract_label} Solique job must be an object")
             title_value = raw.get("title")
             source_id = _object_text(title_value, "id")
             title = _object_text(title_value)
             link = _text(raw.get("link"))
             if not source_id or not title or not link:
-                raise PlatformAdapterError("Zurich canton Solique job lacks id/title/link")
-            detail_url = urljoin(ZURICH_CANTON_BASE, link)
+                raise PlatformAdapterError(
+                    f"{self.contract_label} Solique job lacks id/title/link"
+                )
+            normalized_link = re.sub(r"\s+", "", link)
+            detail_url = urljoin(self.base_url, quote(normalized_link, safe="/:?=&%#"))
             if urlsplit(detail_url).hostname != "live.solique.ch":
-                raise PlatformAdapterError("Zurich canton Solique detail is outside verified host")
+                raise PlatformAdapterError(
+                    f"{self.contract_label} Solique detail is outside verified host"
+                )
             entries.append(ListingEntry(source_id, detail_url, title, {"api_job": raw}))
         filters = payload.get("filters")
         position = filters.get("position") if isinstance(filters, dict) else None
         reported = position.get("count") if isinstance(position, dict) else None
         if reported is not None and (not isinstance(reported, int) or reported < 0):
-            raise PlatformAdapterError("Zurich canton Solique reported count is invalid")
+            raise PlatformAdapterError(
+                f"{self.contract_label} Solique reported count is invalid"
+            )
         total = cast(int | None, reported)
         return ListingPage(entries, None, True, total)
 
@@ -102,13 +113,15 @@ class ZurichCantonSoliqueAdapter:
     ) -> ParsedSourcePosting:
         item = entry.listing_metadata.get("api_job")
         if not isinstance(item, dict):
-            raise PlatformAdapterError("Zurich canton detail lost Solique API evidence")
+            raise PlatformAdapterError(
+                f"{self.contract_label} detail lost Solique API evidence"
+            )
         if entry.source_posting_id not in urlsplit(page.final_url).path:
-            raise PlatformAdapterError("Zurich canton detail identity mismatch")
+            raise PlatformAdapterError(f"{self.contract_label} detail identity mismatch")
         html_content = _text(item.get("htmlContent"))
         title = _object_text(item.get("title"))
         if not html_content or title != entry.title:
-            raise PlatformAdapterError("Zurich canton detail evidence is incomplete")
+            raise PlatformAdapterError(f"{self.contract_label} detail evidence is incomplete")
         location = _object_text(item.get("location"))
         organization = _object_text(item.get("organization"))
         office = _object_text(item.get("office"))
@@ -132,7 +145,7 @@ class ZurichCantonSoliqueAdapter:
             location_region="",
             location_postal_code="",
             location_country="CH",
-            structured_payload={"source_format": "SOLIQUE_KTZH_API_V1", "api_job": item},
+            structured_payload={"source_format": self.source_format, "api_job": item},
             source_updated_at=updated_at,
             published_at_precision="UNKNOWN",
             published_at_parse_method="MISSING",
