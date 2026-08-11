@@ -15,7 +15,15 @@ Phase A establishes these terminal results:
 - LU, SG canton and TG: `ACCEPTED_IMPLEMENTED`.
 - AI, JU and NW: `ACCEPTED_BLOCKED`.
 
-LU's complete vacancy universe is its administration and cantonal-school/teacher Refline lists. The `lehre.lu` map contains training profiles and availability metadata rather than stable vacancy publications and is a `NON_VACANCY_SOURCE_SURFACE`.
+LU's complete vacancy universe has three mandatory surfaces: administration Refline,
+cantonal-school/teacher Refline, and the mixed `lehre.lu` apprenticeship API. The
+apprenticeship host is not globally non-vacancy. A profile is admitted only while the
+complete feed marks it `free=true` and its detail exposes a tenant-891537 Refline
+application action. The evergreen profile URL is the canonical source URL permitted by
+the frozen Posting contract; the explicit application code is retained as evidence.
+Inactive profiles and Schnupper/orientation content are not promoted. Reopening the same
+profile is represented by the existing VacancyEpisode semantics rather than an invented
+identity model.
 
 SG canton's official Umantis search is one unified actual-vacancy surface. Its governed employer set contains ordinary, teacher, apprenticeship, practicum and entry-role publications with stable numeric IDs. Informational training pages and orientation offerings are non-vacancy. Stadt St. Gallen remains a separate blocked Source.
 
@@ -27,7 +35,10 @@ AI remains blocked because the required Abacus tenant contract is not publicly i
 
 Adapters only translate source evidence. `SharedCollectionPipeline` remains sole authority for governed HTTP, immutable RAW/SHA evidence, identity reconciliation, append-only observations, green classification, lifecycle, health and FULL_SOURCE promotion.
 
-Adapter authorization remains exact-source plus verified platform. LU uses an exact Refline adapter, SG an exact Umantis adapter, and TG an exact Govis/Prospective boundary adapter. Vendor similarity cannot activate another Source.
+Adapter authorization remains exact-source plus verified platform. LU uses one exact
+multi-contract adapter for Refline and the official server-readable Nuxt JSON API, SG an
+exact Umantis adapter, and TG an exact Govis/Prospective boundary adapter. Vendor
+similarity cannot activate another Source.
 
 Every required surface must finish. Repeated native ID plus one canonical detail collapses; a conflicting detail fails closed. A malformed or unavailable mandatory surface yields an incomplete/failed run and no negative lifecycle evidence. A healthy complete zero-posting source is valid.
 

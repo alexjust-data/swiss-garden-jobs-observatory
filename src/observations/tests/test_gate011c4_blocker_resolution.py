@@ -107,6 +107,38 @@ def luzern_listing(*entries: tuple[str, str, str], empty: bool = False) -> bytes
     return f"<div>Kanton Luzern Stelle Pensum</div>{links}{empty_text}".encode()
 
 
+def luzern_apprenticeship_listing(*rows: dict[str, object]) -> bytes:
+    return json.dumps({"total": len(rows), "rows": rows}).encode()
+
+
+def luzern_apprenticeship_detail(
+    profile_id: str,
+    *,
+    free: bool,
+    trial: bool,
+    link_job: str | None,
+    title: str = "Gärtner/in EFZ",
+) -> bytes:
+    return json.dumps(
+        {
+            "id": profile_id,
+            "free": free,
+            "trial": trial,
+            "link_job": link_job,
+            "description": "Pflege von Garten- und Grünanlagen",
+            "updated_at": "2026-08-06T11:55:01.000000Z",
+            "type": {"id": 1, "title": title},
+            "location": {
+                "id": 1,
+                "title": "Dienststelle Landwirtschaft und Wald",
+                "zip": 6210,
+                "city": "Sursee",
+            },
+        },
+        ensure_ascii=False,
+    ).encode()
+
+
 def umantis_listing(
     page_number: int,
     total: int | None,
@@ -218,7 +250,7 @@ class Gate011C4Tests(TestCase):
             SourceEndpoint.objects.filter(source_id="SRC-OFF-CANTON-LU").values_list(
                 "host", flat=True
             )
-        ) == {"stellen.lu.ch", "apply.refline.ch"}
+        ) == {"stellen.lu.ch", "apply.refline.ch", "lehre.lu"}
         assert set(
             SourceEndpoint.objects.filter(source_id="SRC-OFF-CANTON-SG").values_list(
                 "host", flat=True
@@ -229,7 +261,6 @@ class Gate011C4Tests(TestCase):
                 "host", flat=True
             )
         ) == {"stellen.tg.ch", "ohws.prospective.ch"}
-        assert not SourceEndpoint.objects.filter(host="lehre.lu").exists()
         assert not SourceEndpoint.objects.filter(host="lernende.tg.ch").exists()
         for blocked in (
             "SRC-OFF-CANTON-AI",
@@ -249,10 +280,12 @@ class Gate011C4Tests(TestCase):
         ):
             assert not SourceEndpoint.objects.filter(source_id=blocked).exists()
 
-    def test_luzern_full_source_unifies_surfaces_and_excludes_training_profiles(self) -> None:
+    def test_luzern_full_source_admits_open_apprenticeship_only(self) -> None:
         registered = source("SRC-OFF-CANTON-LU", "CANTON_LU_PORTAL")
         ordinary_url = "https://apply.refline.ch/891537/7001/pub/1/index.html"
-        apprentice_url = "https://apply.refline.ch/891537/7002/pub/1/index.html"
+        teacher_url = "https://apply.refline.ch/891537/7002/pub/1/index.html"
+        open_profile = "gaertner-in-efz-101"
+        open_detail = f"{LUZERN_CANTON_SURFACES[2][1]}/{open_profile}"
         pages = {
             ("GET", LUZERN_CANTON_SURFACES[0][1]): FetchedPage(
                 LUZERN_CANTON_SURFACES[0][1],
@@ -266,7 +299,27 @@ class Gate011C4Tests(TestCase):
                 LUZERN_CANTON_SURFACES[1][1],
                 200,
                 "text/html",
-                luzern_listing(("7002", "1", "Lehrstelle Gärtner/in EFZ")),
+                luzern_listing(("7002", "1", "Lehrperson Sekundarstufe")),
+            ),
+            ("GET", LUZERN_CANTON_SURFACES[2][1]): FetchedPage(
+                LUZERN_CANTON_SURFACES[2][1],
+                LUZERN_CANTON_SURFACES[2][1],
+                200,
+                "application/json",
+                luzern_apprenticeship_listing(
+                    {"id": open_profile, "title": "Gärtner/in EFZ", "free": True},
+                    {
+                        "id": "evergreen-inactive-102",
+                        "title": "Gärtner/in EFZ",
+                        "free": False,
+                    },
+                    {
+                        "id": "schnupper-only-103",
+                        "title": "Gärtner/in EFZ",
+                        "free": False,
+                        "trial": True,
+                    },
+                ),
             ),
             ("GET", ordinary_url): FetchedPage(
                 ordinary_url,
@@ -275,14 +328,23 @@ class Gate011C4Tests(TestCase):
                 "text/html",
                 job_detail("Sachbearbeiter/in"),
             ),
-            ("GET", apprentice_url): FetchedPage(
-                apprentice_url,
-                apprentice_url,
+            ("GET", teacher_url): FetchedPage(
+                teacher_url,
+                teacher_url,
                 200,
                 "text/html",
-                job_detail(
-                    "Lehrstelle Gärtner/in EFZ",
-                    description="Pflege von Garten- und Grünanlagen",
+                job_detail("Lehrperson Sekundarstufe"),
+            ),
+            ("GET", open_detail): FetchedPage(
+                open_detail,
+                open_detail,
+                200,
+                "application/json",
+                luzern_apprenticeship_detail(
+                    open_profile,
+                    free=True,
+                    trial=True,
+                    link_job="https://apply.refline.ch/891537/0306/",
                 ),
             ),
         }
@@ -296,8 +358,8 @@ class Gate011C4Tests(TestCase):
                 clock=lambda: datetime(2026, 8, 11, 10, tzinfo=UTC),
             ).collect(full_snapshot=True, acknowledge_automation_review=True)
         assert run.snapshot_complete and run.status == "SUCCEEDED"
-        assert run.listing_total_discovered == run.details_fetched == 2
-        assert run.observations_created == run.green_assessments_created == 2
+        assert run.listing_total_discovered == run.details_fetched == 3
+        assert run.observations_created == run.green_assessments_created == 3
         assert (
             GreenRelevanceAssessment.objects.filter(
                 posting_observation__collection_run=run,
@@ -305,7 +367,24 @@ class Gate011C4Tests(TestCase):
             ).count()
             == 1
         )
-        assert all("lehre.lu" not in request.url for request in fetcher.requests)
+        assert Posting.objects.filter(
+            source=registered,
+            source_posting_id=f"lehre:{open_profile}",
+        ).exists()
+        assert not Posting.objects.filter(source_posting_id__contains="inactive").exists()
+        assert not Posting.objects.filter(source_posting_id__contains="schnupper").exists()
+        apprenticeship = PostingObservation.objects.get(
+            posting__source_posting_id=f"lehre:{open_profile}"
+        )
+        assert apprenticeship.canonical_url == f"https://lehre.lu/map/{open_profile}"
+        assert apprenticeship.contract_payload["source_published_at"] is None
+        assert apprenticeship.contract_payload["source_updated_at"].startswith("2026-08-06")
+        assert apprenticeship.structured_payload["vacancy_boundary"] == {
+            "active": True,
+            "application_id": "0306",
+            "profile_is_evergreen": True,
+            "schnupper_content_promoted": False,
+        }
 
     def test_luzern_secondary_failure_has_no_negative_lifecycle(self) -> None:
         registered = source("SRC-OFF-CANTON-LU", "CANTON_LU_PORTAL")
@@ -322,12 +401,19 @@ class Gate011C4Tests(TestCase):
                 LUZERN_CANTON_SURFACES[1][1],
                 200,
                 "text/html",
-                b"<html>broken</html>",
+                luzern_listing(empty=True),
+            ),
+            ("GET", LUZERN_CANTON_SURFACES[2][1]): FetchedPage(
+                LUZERN_CANTON_SURFACES[2][1],
+                LUZERN_CANTON_SURFACES[2][1],
+                200,
+                "application/json",
+                b"{broken",
             ),
         }
         with (
             TemporaryDirectory() as raw,
-            pytest.raises(PlatformAdapterError, match="contract marker"),
+            pytest.raises(PlatformAdapterError, match="invalid JSON"),
         ):
             SharedCollectionPipeline(
                 source_id=registered.pk,
@@ -358,6 +444,13 @@ class Gate011C4Tests(TestCase):
                 luzern_listing(("7001", "1", "Shared")),
             ),
             ("GET", detail): FetchedPage(detail, detail, 200, "text/html", job_detail("Shared")),
+            ("GET", LUZERN_CANTON_SURFACES[2][1]): FetchedPage(
+                LUZERN_CANTON_SURFACES[2][1],
+                LUZERN_CANTON_SURFACES[2][1],
+                200,
+                "application/json",
+                luzern_apprenticeship_listing(),
+            ),
         }
         with TemporaryDirectory() as raw:
             run = SharedCollectionPipeline(
@@ -576,10 +669,18 @@ class Gate011C4Tests(TestCase):
                         listing_url,
                         listing_url,
                         200,
-                        "text/html",
-                        luzern_listing(empty=True),
+                        (
+                            "application/json"
+                            if surface_name == "apprenticeships"
+                            else "text/html"
+                        ),
+                        (
+                            luzern_apprenticeship_listing()
+                            if surface_name == "apprenticeships"
+                            else luzern_listing(empty=True)
+                        ),
                     )
-                    for _, listing_url in LUZERN_CANTON_SURFACES
+                    for surface_name, listing_url in LUZERN_CANTON_SURFACES
                 },
             ),
             (

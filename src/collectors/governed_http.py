@@ -347,6 +347,18 @@ def ensure_default_endpoints(source: Source) -> None:
                 "https://apply.refline.ch/891537/positions_lehrpersonen.html",
             ),
             (
+                "API",
+                "CANTON_LU_PORTAL",
+                "lehre.lu",
+                "https://lehre.lu/api/web/jobs",
+            ),
+            (
+                "DETAIL",
+                "CANTON_LU_PORTAL",
+                "lehre.lu",
+                "https://lehre.lu/map/",
+            ),
+            (
                 "DETAIL",
                 "CANTON_LU_PORTAL",
                 "apply.refline.ch",

@@ -11,7 +11,9 @@ Observed on 2026-08-11. Live counts and availability are time-bound evidence, ne
 | AI | broad apprenticeship directory | Plone / multiple employers | `SEPARATE_EMPLOYER_SOURCE` | directory includes private and public employers outside the canton-employer boundary | exclude |
 | LU | administration, `https://apply.refline.ch/891537/positions_verwaltung.html` | Refline / Kanton LU | `VACANCY_SOURCE_SURFACE` | numeric ID; `/891537/<id>/pub/<channel>/index.html`; complete in-memory list or explicit empty marker | include |
 | LU | cantonal schools/teachers, `positions_lehrpersonen.html?businessUnit=lehrpersonal` | Refline / Kanton LU | `VACANCY_SOURCE_SURFACE` | same tenant identity; second mandatory complete list | include |
-| LU | `https://lehre.lu.ch/` | Nuxt profiles / training information | `NON_VACANCY_SOURCE_SURFACE` | profession/location/free/updated_at describe profiles and availability, not vacancy publications | exclude before Posting |
+| LU | `https://lehre.lu/api/web/jobs` and `/api/web/jobs/<profile>` | Nuxt JSON / Kanton LU | mixed surface: open profile = `VACANCY_SOURCE_SURFACE` | complete feed reports 83 profiles at observation time; 29 `free=true`; admitted detail must expose canonical profile plus tenant-891537 `link_job` application action | include active opportunities |
+| LU | inactive evergreen profile on `https://lehre.lu/map/<profile>` | Nuxt profile / Kanton LU | `NON_VACANCY_SOURCE_SURFACE` state | `free=false`; profile remains published without a current application opportunity | exclude before Posting |
+| LU | Schnupper action/content on an apprenticeship profile | orientation mechanism / Kanton LU | `NON_VACANCY_SOURCE_SURFACE` aspect | trial request is distinct from the real Lehrstelle application; never creates a second Posting | exclude before Posting |
 | LU | higher-education practica information | official HTML / Kanton LU | `NON_VACANCY_SOURCE_SURFACE` | page says advertised practica appear in the ordinary Stellenmarkt | no extra seed |
 | LU | municipal/music-school jobs | external local employers | `SEPARATE_EMPLOYER_SOURCE` | independent employer publications | exclude |
 | SG | governed `recruitingapp-2800.umantis.com/Jobs/All` CompanyID set | Umantis / Kanton SG units | `VACANCY_SOURCE_SURFACE` | numeric `/Vacancies/<id>/Description/1`; 25-row monotonic pages; stable total; terminal range equality | include |
@@ -38,7 +40,7 @@ Observed on 2026-08-11. Live counts and availability are time-bound evidence, ne
 | Source | Verified platform | Source-universe conclusion | Cluster | Terminal state |
 |---|---|---|---|---|
 | `SRC-OFF-CANTON-AI` | Plone + Abacus | ordinary API and apprenticeship publication identity unresolved | blocked | `ACCEPTED_BLOCKED` |
-| `SRC-OFF-CANTON-LU` | Refline tenant 891537 | administration + cantonal schools/teachers; profile surface excluded | Refline | `ACCEPTED_IMPLEMENTED` |
+| `SRC-OFF-CANTON-LU` | Refline tenant 891537 + official Nuxt JSON | administration + cantonal schools/teachers + active in-scope apprenticeships; inactive/profile/Schnupper content excluded | Refline + Nuxt API | `ACCEPTED_IMPLEMENTED` |
 | `SRC-OFF-CANTON-SG` | Umantis | unified actual-vacancy feed includes ordinary, teachers, apprenticeships and practica | Umantis | `ACCEPTED_IMPLEMENTED` |
 | `SRC-OFF-CANTON-JU` | Jura CMS | teaching/other completeness or employer boundary unresolved | blocked | `ACCEPTED_BLOCKED` |
 | `SRC-OFF-CANTON-NW` | WordPress/Solique + profiles | training availability lacks stable vacancy publications | blocked | `ACCEPTED_BLOCKED` |
@@ -46,9 +48,16 @@ Observed on 2026-08-11. Live counts and availability are time-bound evidence, ne
 
 ## Verified implementation clusters
 
-### Refline — Luzern
+### Refline + Nuxt JSON — Luzern
 
-The exact-source tenant 891537 adapter has two mandatory in-memory listing surfaces. Identical native ID/detail pairs collapse; conflicting details fail closed. `lehre.lu` remains reconnaissance evidence and receives no production endpoint.
+The exact-source adapter has three mandatory complete listing surfaces. The two Refline
+lists preserve their numeric publication identities. The official JSON feed proves its
+profile total before filtering; only `free=true` rows become candidates, and every
+candidate detail must still be open and expose a governed tenant-891537 application
+action. Its evergreen `/map/<profile>` URL supplies the frozen canonical-URL identity
+fallback. Profile `updated_at` is stored only as update evidence. Identical Refline
+native ID/detail pairs collapse and conflicts fail closed. Failure of any of the three
+surfaces fails the FULL_SOURCE run.
 
 ### Umantis — St. Gallen canton
 
@@ -60,7 +69,8 @@ The Govis list is broader than the frozen direct-public-employer Source and expl
 
 ## Access, identity and semantic safeguards
 
-- LU Refline paths are server-readable and not prohibited by the applicable robots evidence.
+- LU Refline and `lehre.lu/api/web/jobs` paths are server-readable and not prohibited
+  by the applicable robots evidence. No browser execution is used in production.
 - SG Umantis robots restrictions do not prohibit the public `Jobs`/`Vacancies` paths.
 - TG robots excludes `/route/`, not the governed listing; the Prospective public detail contract is readable.
 - AI's mandatory API required authentication, so no endpoint or run was promoted.
@@ -74,10 +84,17 @@ AI, JU and NW receive no C-4 adapter, endpoint or authoritative run. AG, BE, FR,
 
 | Source | Run | Listing requests | Reconciliation | IDs / details / observations / green | Green distribution | Publication | Municipality | Result |
 |---|---|---|---|---|---|---|---|---|
-| LU | `7c05bffe-1ace-4a8c-874d-ad61a63d191e` | administration 1; cantonal schools 1 | 42 + 2, no cross-surface duplicate | 44 / 44 / 44 / 44 | 0 confirmed; 0 review; 44 not green | 44 `EXACT_DATETIME/STRUCTURED_DATA` | 42 exact; 2 unresolved | `SUCCEEDED/HEALTHY/complete` |
+| LU | `edaa2996-9395-41e0-9674-78b40179d1f8` | administration 1; cantonal schools 1; apprenticeship API 1 | 42 + 2 + 29 open; 54 inactive profiles excluded; Schnupper creates no Posting | 73 / 73 / 73 / 73 | 0 confirmed; 0 review; 73 not green | 44 `EXACT_DATETIME/STRUCTURED_DATA`; 29 `UNKNOWN/MISSING` with update evidence separate | 71 exact; 2 unresolved | `SUCCEEDED/HEALTHY/complete` |
 | SG | `95bc8a59-3b12-4852-a469-607432eb700b` | unified 4 | reported total 79 | 79 / 79 / 79 / 79 | 0 confirmed; 6 review; 73 not green | 79 `UNKNOWN/MISSING` | 28 exact; 51 unresolved | `SUCCEEDED/HEALTHY/complete` |
 | TG | `846a4c5c-7b79-4708-afe6-81d13b4de161` | unified 2; external employers 1 | unified 40; external 5; 35 promoted | 35 / 35 / 35 / 35 | 0 confirmed; 1 review; 34 not green | 35 `EXACT_DATE/STRUCTURED_DATA` | 0 exact; 35 unresolved | `SUCCEEDED/HEALTHY/complete` |
 
-All 158 accepted observations produced exactly one green assessment and one `NEW` lifecycle event. Negative lifecycle evidence was zero.
+The corrected final runs contain 187 accepted observations and exactly one green
+assessment per observation. LU records 29 `NEW` apprenticeship Postings and 44
+`STILL_ACTIVE` Refline Postings; SG/TG retain their accepted lifecycle evidence.
+Negative lifecycle evidence is zero.
+
+The earlier LU run `7c05bffe-1ace-4a8c-874d-ad61a63d191e` remains immutable
+experimental evidence but is superseded for C-4 acceptance because it omitted the
+mandatory apprenticeship surface.
 
 The first SG attempt, `4a6eeb0f-2e60-4933-a4eb-9b635a33be64`, remains immutable failed evidence. It exposed that the first Umantis page serializes pagination values as JSON numbers while later pages serialize the same non-negative decimal values as strings. The accepted parser normalizes only those two proven representations and still enforces exact page progression, stable total and terminal range equality. The failed run has `snapshot_complete=false` and created no observations or lifecycle truth.

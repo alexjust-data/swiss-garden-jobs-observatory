@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from datetime import UTC, datetime
 from html import escape
 from html.parser import HTMLParser
 from typing import cast
@@ -21,12 +22,15 @@ from collectors.remaining_canton_adapters import _parse_new_json_ld_detail
 from sources.models import Source
 
 LUZERN_TENANT = "https://apply.refline.ch/891537"
+LUZERN_APPRENTICESHIP_API = "https://lehre.lu/api/web/jobs"
+LUZERN_APPRENTICESHIP_PROFILE = "https://lehre.lu/map"
 LUZERN_CANTON_SURFACES = (
     ("administration", f"{LUZERN_TENANT}/positions_verwaltung.html"),
     (
         "cantonal_schools",
         f"{LUZERN_TENANT}/positions_lehrpersonen.html?businessUnit=lehrpersonal",
     ),
+    ("apprenticeships", LUZERN_APPRENTICESHIP_API),
 )
 
 ST_GALLEN_COMPANY_IDS = (
@@ -48,6 +52,7 @@ THURGAU_EXTERNAL_LABEL = "Externe Institutionen"
 _REFLINE_LU_DETAIL = re.compile(
     r"^/891537/(?P<id>\d+)/pub/(?P<channel>\d+)/index\.html$", re.IGNORECASE
 )
+_REFLINE_LU_APPLICATION = re.compile(r"^/891537/(?P<id>\d+)/?$", re.IGNORECASE)
 _UMANTIS_DETAIL = re.compile(r"^/Vacancies/(?P<id>\d+)/Description/1/?$", re.IGNORECASE)
 _TG_DETAIL = re.compile(
     r"^/public/v1/jobs/(?P<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
@@ -123,6 +128,15 @@ class LuzernCantonReflineAdapter:
     def parse_listing_page(
         self, page: FetchedPage, request: FetchRequest, source: Source
     ) -> ListingPage:
+        surface_index = cast(int, request.context.get("surface_index", 0))
+        surface_name = cast(str, request.context.get("surface_name", ""))
+        next_request = (
+            self._request(surface_index + 1)
+            if surface_index + 1 < len(LUZERN_CANTON_SURFACES)
+            else None
+        )
+        if surface_name == "apprenticeships":
+            return self._parse_apprenticeship_listing(page, next_request)
         if page.content_type != "text/html":
             raise PlatformAdapterError("Luzern canton Refline listing must be HTML")
         parser = _LuzernReflineListingParser()
@@ -137,8 +151,6 @@ class LuzernCantonReflineAdapter:
             raise PlatformAdapterError(
                 "Luzern canton Refline surface lacks entries or empty marker"
             )
-        surface_index = cast(int, request.context.get("surface_index", 0))
-        surface_name = cast(str, request.context.get("surface_name", ""))
         entries = [
             ListingEntry(
                 item.source_posting_id,
@@ -148,30 +160,159 @@ class LuzernCantonReflineAdapter:
             )
             for item in parser.entries
         ]
-        next_request = (
-            self._request(surface_index + 1)
-            if surface_index + 1 < len(LUZERN_CANTON_SURFACES)
-            else None
-        )
+        return ListingPage(entries, next_request, next_request is None)
+
+    def _parse_apprenticeship_listing(
+        self, page: FetchedPage, next_request: FetchRequest | None
+    ) -> ListingPage:
+        if page.content_type != "application/json":
+            raise PlatformAdapterError("Luzern apprenticeship listing must be JSON")
+        try:
+            payload = json.loads(page.body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PlatformAdapterError("Luzern apprenticeship listing is invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise PlatformAdapterError("Luzern apprenticeship listing must be an object")
+        total, rows = payload.get("total"), payload.get("rows")
+        if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+            raise PlatformAdapterError("Luzern apprenticeship profile total is invalid")
+        if not isinstance(rows, list) or len(rows) != total:
+            raise PlatformAdapterError("Luzern apprenticeship profile total changed")
+        entries: list[ListingEntry] = []
+        seen: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise PlatformAdapterError("Luzern apprenticeship profile is invalid")
+            profile_id, free = row.get("id"), row.get("free")
+            if not isinstance(profile_id, str) or not profile_id or not isinstance(free, bool):
+                raise PlatformAdapterError(
+                    "Luzern apprenticeship profile identity/state is invalid"
+                )
+            if profile_id in seen:
+                raise PlatformAdapterError("Luzern apprenticeship profile ID is duplicated")
+            seen.add(profile_id)
+            if not free:
+                continue
+            title = row.get("title")
+            entries.append(
+                ListingEntry(
+                    f"lehre:{profile_id}",
+                    f"{LUZERN_APPRENTICESHIP_API}/{profile_id}",
+                    title if isinstance(title, str) else "",
+                    {"surface_name": "apprenticeships", "profile_id": profile_id},
+                )
+            )
         return ListingPage(entries, next_request, next_request is None)
 
     def detail_request(self, entry: ListingEntry, source: Source) -> FetchRequest:
+        surface_name = entry.listing_metadata.get("surface_name", "")
         return FetchRequest(
             entry.detail_url,
-            "text/html",
+            "application/json" if surface_name == "apprenticeships" else "text/html",
             "DETAIL",
-            context={"surface_name": entry.listing_metadata.get("surface_name", "")},
+            context={"surface_name": surface_name},
         )
 
     def parse_detail(
         self, page: FetchedPage, entry: ListingEntry, source: Source
     ) -> ParsedSourcePosting:
+        if entry.listing_metadata.get("surface_name") == "apprenticeships":
+            return self._parse_apprenticeship_detail(page, entry)
         expected = urlsplit(entry.detail_url).path.rstrip("/")
         final = urlsplit(page.final_url).path.rstrip("/")
         match = _REFLINE_LU_DETAIL.fullmatch(final)
         if match is None or match.group("id") != entry.source_posting_id or final != expected:
             raise PlatformAdapterError("Luzern canton Refline detail identity mismatch")
         return _parse_new_json_ld_detail(page, entry, source_format="REFLINE_JOBPOSTING_V1")
+
+    def _parse_apprenticeship_detail(
+        self, page: FetchedPage, entry: ListingEntry
+    ) -> ParsedSourcePosting:
+        if page.content_type != "application/json" or page.final_url != entry.detail_url:
+            raise PlatformAdapterError("Luzern apprenticeship detail identity mismatch")
+        try:
+            payload = json.loads(page.body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PlatformAdapterError("Luzern apprenticeship detail is invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise PlatformAdapterError("Luzern apprenticeship detail must be an object")
+        profile_id = entry.listing_metadata.get("profile_id")
+        if payload.get("id") != profile_id or payload.get("free") is not True:
+            raise PlatformAdapterError("Luzern apprenticeship is not an active opportunity")
+        application_url = payload.get("link_job")
+        parsed_application = urlsplit(application_url if isinstance(application_url, str) else "")
+        application_match = _REFLINE_LU_APPLICATION.fullmatch(parsed_application.path)
+        if (
+            parsed_application.scheme != "https"
+            or parsed_application.hostname != "apply.refline.ch"
+            or application_match is None
+        ):
+            raise PlatformAdapterError(
+                "Luzern active apprenticeship lacks a governed application identity"
+            )
+        type_data = payload.get("type")
+        location_data = payload.get("location")
+        if not isinstance(type_data, dict) or not isinstance(location_data, dict):
+            raise PlatformAdapterError("Luzern apprenticeship detail lacks type/location")
+        title, location = type_data.get("title"), location_data.get("title")
+        if not isinstance(title, str) or not title or not isinstance(location, str) or not location:
+            raise PlatformAdapterError("Luzern apprenticeship detail lacks title/location")
+        locality = location_data.get("city")
+        postal_code = location_data.get("zip")
+        description = payload.get("description")
+        updated_at = payload.get("updated_at")
+        source_updated_at: datetime | None = None
+        if isinstance(updated_at, str):
+            try:
+                source_updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+            except ValueError:
+                source_updated_at = None
+            if source_updated_at is not None and source_updated_at.tzinfo is None:
+                source_updated_at = source_updated_at.replace(tzinfo=UTC)
+        structured = dict(payload)
+        structured["vacancy_boundary"] = {
+            "active": True,
+            "application_id": application_match.group("id"),
+            "profile_is_evergreen": True,
+            "schnupper_content_promoted": False,
+        }
+        raw_location = ", ".join(
+            value
+            for value in (
+                location,
+                str(postal_code) if isinstance(postal_code, str | int) else "",
+                locality if isinstance(locality, str) else "",
+            )
+            if value
+        )
+        description_html = description if isinstance(description, str) else ""
+        return ParsedSourcePosting(
+            source_posting_id=entry.source_posting_id,
+            canonical_url=f"{LUZERN_APPRENTICESHIP_PROFILE}/{profile_id}",
+            title=f"Lehrstelle {title}",
+            published_at_raw=None,
+            date_posted=None,
+            valid_through=None,
+            employment_type="Lehrstelle",
+            hiring_organization="Kanton Luzern",
+            description_html=description_html,
+            responsibilities_html="",
+            qualifications_html="",
+            benefits_html="",
+            raw_location=raw_location,
+            location_street="",
+            location_locality=locality if isinstance(locality, str) else "",
+            location_region="LU",
+            location_postal_code=(
+                str(postal_code) if isinstance(postal_code, str | int) else ""
+            ),
+            location_country="CH",
+            structured_payload=structured,
+            source_updated_at=source_updated_at,
+            published_at_precision="UNKNOWN",
+            published_at_parse_method="MISSING",
+            contract_raw_text=" ".join((title, location, description_html)),
+        )
 
 
 class _StGallenListingParser(HTMLParser):
