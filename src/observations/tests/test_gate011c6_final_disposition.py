@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TypedDict
+
 import pytest
 from django.test import TestCase
 
@@ -18,6 +20,52 @@ FINAL_BLOCKED = (
     ("SRC-OFF-CANTON-OW", "OFFICIAL_WEB"),
     ("SRC-OFF-CANTON-UR", "OFFICIAL_WEB"),
     ("SRC-OFF-CANTON-VS", "OFFICIAL_WEB"),
+)
+
+
+class NWTrainingObject(TypedDict):
+    label: str
+    canonical_url: str
+    application_id: str
+    availability: dict[str, str]
+    classification: str
+
+
+NW_TRAINING_OBJECTS: tuple[NWTrainingObject, ...] = (
+    {
+        "label": "Kauffrau / Kaufmann EFZ",
+        "canonical_url": "https://jobs.nw.ch/kauffrau-kaufmann-efz/",
+        "application_id": "NW-1430",
+        "availability": {"2026": "besetzt", "2027": "freie Stelle(n)"},
+        "classification": "STATEFUL_RECURRING_VACANCY",
+    },
+    {
+        "label": "Automobil EFZ",
+        "canonical_url": (
+            "https://jobs.nw.ch/automobilfachfrau-fachmann-efz-oder-"
+            "automobilmechatroniker-mechatronikerin-efz/"
+        ),
+        "application_id": "NW-1433",
+        "availability": {"2026": "besetzt", "2027": "besetzt"},
+        "classification": "STATEFUL_RECURRING_VACANCY",
+    },
+    {
+        "label": "Fachfrau / Fachmann Betriebsunterhalt EFZ",
+        "canonical_url": ("https://jobs.nw.ch/fachfrau-fachmann-betriebsunterhalt-efz/"),
+        "application_id": "NW-1432",
+        "availability": {"2026": "besetzt", "2027": "besetzt"},
+        "classification": "STATEFUL_RECURRING_VACANCY",
+    },
+    {
+        "label": "Kaufmännisches Praktikum",
+        "canonical_url": "https://jobs.nw.ch/praktika/",
+        "application_id": "NW-1616",
+        "availability": {
+            "2026": "freie Stellen auf Anfrage",
+            "2027": "freie Stellen auf Anfrage",
+        },
+        "classification": "UNRESOLVED",
+    },
 )
 
 
@@ -66,3 +114,31 @@ class Gate011C6FinalDispositionTests(TestCase):
             "SRC-OFF-CANTON-UR",
             "SRC-OFF-CANTON-VS",
         }
+
+    def test_nidwalden_profiles_have_real_identity_but_concurrent_cohorts_block(self) -> None:
+        by_id = {item["application_id"]: item for item in NW_TRAINING_OBJECTS}
+
+        assert len(by_id) == 4
+        assert all(item["canonical_url"] for item in NW_TRAINING_OBJECTS)
+        assert by_id["NW-1430"]["classification"] == "STATEFUL_RECURRING_VACANCY"
+        assert by_id["NW-1430"]["availability"] == {
+            "2026": "besetzt",
+            "2027": "freie Stelle(n)",
+        }
+        assert set(by_id["NW-1432"]["availability"].values()) == {"besetzt"}
+        assert set(by_id["NW-1433"]["availability"].values()) == {"besetzt"}
+
+        practicum = by_id["NW-1616"]
+        active_cohorts = {
+            year
+            for year, state in practicum["availability"].items()
+            if state == "freie Stellen auf Anfrage"
+        }
+        assert active_cohorts == {"2026", "2027"}
+        assert practicum["classification"] == "UNRESOLVED"
+
+        blocked = source("SRC-OFF-CANTON-NW", "CANTON_NW_PORTAL")
+        with pytest.raises(UnsupportedPlatformError, match="explicitly blocked"):
+            get_adapter(blocked)
+        ensure_default_endpoints(blocked)
+        assert not SourceEndpoint.objects.filter(source=blocked).exists()

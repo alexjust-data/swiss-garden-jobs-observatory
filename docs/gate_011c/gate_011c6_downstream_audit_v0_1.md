@@ -3,6 +3,11 @@
 C-6 admitted no new source collection. The correct causal cutoff is therefore
 the accepted C-5 cutoff, and all four derived artifacts are exact reuses.
 
+The final Nidwalden correction changed its evidence-supported blocker rationale,
+not its terminal state: stable occupation/application identities were proven,
+but the mandatory `NW-1616` Praktikum object retains concurrent-cohort identity
+ambiguity. No adapter, endpoint, collection evidence or PIT input changed.
+
 - `as_of`: `2026-08-11T19:18:11.999868+00:00`
 - DedupRun: `0529ad0c-ac03-41e6-a14c-035125ab3f2b`
 - Dedup fingerprint: `51f96a3caa202d141fada638fa0ad6b2e7b126482bbfa1cc0aed941d866fa0b5`

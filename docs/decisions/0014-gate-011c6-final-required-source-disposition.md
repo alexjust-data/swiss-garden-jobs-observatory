@@ -48,7 +48,7 @@ governed GET/POST. A working subset never establishes FULL_SOURCE.
 | BE | `ACCEPTED_BLOCKED` | `MULTI_SURFACE_BLOCKED` | official hub still requires ordinary, training, teacher and substitute channels; mandatory teaching acquisition is not reliable/exhaustible |
 | FR | `ACCEPTED_BLOCKED` | `MULTI_SURFACE_BLOCKED` | official SuccessFactors page still declares an active partial migration and links remaining positions elsewhere |
 | JU | `ACCEPTED_BLOCKED` | `SOURCE_UNIVERSE_BLOCKED` | teaching lacks explicit list/zero contract and `Autres` employer ownership remains unresolved |
-| NW | `ACCEPTED_BLOCKED` | `SEMANTIC_IDENTITY_BLOCKED` | evergreen multi-year training page has current availability but no stable opportunity-level publication identity |
+| NW | `ACCEPTED_BLOCKED` | `SEMANTIC_IDENTITY_BLOCKED` | stable occupation pages and application IDs exist, but the mandatory `NW-1616` Praktikum object simultaneously covers 2026 and 2027 availability plus several routes without cohort-level source identity; one standing opportunity versus concurrent economic opportunities is unresolved |
 | OW | `ACCEPTED_BLOCKED` | `POLICY_BLOCKED` | mandatory Zentraljob tenant still publishes `Disallow: /` and no complete alternate origin |
 | UR | `ACCEPTED_BLOCKED` | `TECHNICAL_RELIABILITY_BLOCKED` | bounded checks were inconsistent after two prior failed complete runs; reproducible complete detail delivery is unproven |
 | VS | `ACCEPTED_BLOCKED` | `MULTI_SURFACE_BLOCKED` | e-recruitment, official-gazette teaching and training channels still lack one deterministic ownership/identity/exhaustion contract |
