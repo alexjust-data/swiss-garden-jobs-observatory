@@ -302,7 +302,7 @@ class LuzernCantonReflineAdapter:
             raw_location=raw_location,
             location_street="",
             location_locality=locality if isinstance(locality, str) else "",
-            location_region="LU",
+            location_region="",
             location_postal_code=(
                 str(postal_code) if isinstance(postal_code, str | int) else ""
             ),

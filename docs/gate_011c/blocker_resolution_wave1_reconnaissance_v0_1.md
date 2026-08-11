@@ -54,10 +54,13 @@ The exact-source adapter has three mandatory complete listing surfaces. The two 
 lists preserve their numeric publication identities. The official JSON feed proves its
 profile total before filtering; only `free=true` rows become candidates, and every
 candidate detail must still be open and expose a governed tenant-891537 application
-action. Its evergreen `/map/<profile>` URL supplies the frozen canonical-URL identity
-fallback. Profile `updated_at` is stored only as update evidence. Identical Refline
-native ID/detail pairs collapse and conflicts fail closed. Failure of any of the three
-surfaces fails the FULL_SOURCE run.
+action. Source-native identity is `lehre:<profile_id>`; the evergreen
+`/map/<profile_id>` page is its corroborating canonical URL and the Refline application
+code proves current application state. Profile `updated_at` is stored only as update
+evidence. The API exposes location title, city and postal code but no canton field, so
+raw `location_region` is empty and governed geography resolves downstream. Identical
+Refline native ID/detail pairs collapse and conflicts fail closed. Failure of any of the
+three surfaces fails the FULL_SOURCE run.
 
 ### Umantis — St. Gallen canton
 
@@ -76,7 +79,16 @@ The Govis list is broader than the frozen direct-public-employer Source and expl
 - AI's mandatory API required authentication, so no endpoint or run was promoted.
 - JU/NW readability does not cure their identity and universe blockers.
 
-Production uses governed GET/POST only. Profession, year, row, category and profile IDs are never fabricated into vacancy identity. Profile `updated_at` is not publication time. Municipality comes only from vacancy evidence. Non-vacancy exclusion occurs before Posting and green classification.
+Production uses governed GET/POST only. Profession, year, row and category are never
+fabricated into vacancy identity. LU's API-provided stable profile ID is preserved as
+`lehre:<profile_id>`; it is not derived from title or position. Profile `updated_at`
+is not publication time. Raw region is never inferred from the canton employer Source.
+Municipality comes only from published city/postcode evidence through governed
+resolution. Non-vacancy exclusion occurs before Posting and green classification.
+
+Recurrence is covered by the closed GATE-008 regression
+`test_same_posting_reappearance_creates_one_new_episode`: stable Posting, governed
+close, same Vacancy on reappearance, Episode 2 and one `REAPPEARED` event.
 
 AI, JU and NW receive no C-4 adapter, endpoint or authoritative run. AG, BE, FR, GL, OW, SH, UR, VS, Stadt SG, Job-Room and Job-Room API remain outside scope and inactive. Threshold/freshness remain `PENDING` and Day-0 remains unauthorized.
 
@@ -84,17 +96,20 @@ AI, JU and NW receive no C-4 adapter, endpoint or authoritative run. AG, BE, FR,
 
 | Source | Run | Listing requests | Reconciliation | IDs / details / observations / green | Green distribution | Publication | Municipality | Result |
 |---|---|---|---|---|---|---|---|---|
-| LU | `edaa2996-9395-41e0-9674-78b40179d1f8` | administration 1; cantonal schools 1; apprenticeship API 1 | 42 + 2 + 29 open; 54 inactive profiles excluded; Schnupper creates no Posting | 73 / 73 / 73 / 73 | 0 confirmed; 0 review; 73 not green | 44 `EXACT_DATETIME/STRUCTURED_DATA`; 29 `UNKNOWN/MISSING` with update evidence separate | 71 exact; 2 unresolved | `SUCCEEDED/HEALTHY/complete` |
+| LU | `90cfcdf2-06f0-459e-aebd-e9867f2d335d` | administration 1; cantonal schools 1; apprenticeship API 1 | 43 + 2 + 29 open; 54 inactive profiles excluded; Schnupper creates no Posting | 74 / 74 / 74 / 74 | 0 confirmed; 0 review; 74 not green | 45 `EXACT_DATETIME/STRUCTURED_DATA`; 29 `UNKNOWN/MISSING` with update evidence separate | 72 exact; 2 unresolved | `SUCCEEDED/HEALTHY/complete` |
 | SG | `95bc8a59-3b12-4852-a469-607432eb700b` | unified 4 | reported total 79 | 79 / 79 / 79 / 79 | 0 confirmed; 6 review; 73 not green | 79 `UNKNOWN/MISSING` | 28 exact; 51 unresolved | `SUCCEEDED/HEALTHY/complete` |
 | TG | `846a4c5c-7b79-4708-afe6-81d13b4de161` | unified 2; external employers 1 | unified 40; external 5; 35 promoted | 35 / 35 / 35 / 35 | 0 confirmed; 1 review; 34 not green | 35 `EXACT_DATE/STRUCTURED_DATA` | 0 exact; 35 unresolved | `SUCCEEDED/HEALTHY/complete` |
 
-The corrected final runs contain 187 accepted observations and exactly one green
-assessment per observation. LU records 29 `NEW` apprenticeship Postings and 44
-`STILL_ACTIVE` Refline Postings; SG/TG retain their accepted lifecycle evidence.
+The corrected final runs contain 188 accepted observations and exactly one green
+assessment per observation. The latest LU run records one `NEW` Posting and 73
+`STILL_ACTIVE` Postings; SG/TG retain their accepted lifecycle evidence.
 Negative lifecycle evidence is zero.
 
-The earlier LU run `7c05bffe-1ace-4a8c-874d-ad61a63d191e` remains immutable
-experimental evidence but is superseded for C-4 acceptance because it omitted the
-mandatory apprenticeship surface.
+The earlier LU runs remain immutable superseded evidence. Run
+`7c05bffe-1ace-4a8c-874d-ad61a63d191e` omitted the mandatory apprenticeship surface;
+run `edaa2996-9395-41e0-9674-78b40179d1f8` admitted that surface but populated raw
+`location_region=LU` without source canton evidence. The authoritative run above keeps
+all 29 apprenticeship regions empty while resolving all 29 municipalities from explicit
+city/postcode evidence.
 
 The first SG attempt, `4a6eeb0f-2e60-4933-a4eb-9b635a33be64`, remains immutable failed evidence. It exposed that the first Umantis page serializes pagination values as JSON numbers while later pages serialize the same non-negative decimal values as strings. The accepted parser normalizes only those two proven representations and still enforces exact page progression, stable total and terminal range equality. The failed run has `snapshot_complete=false` and created no observations or lifecycle truth.

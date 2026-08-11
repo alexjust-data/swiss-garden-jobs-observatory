@@ -377,6 +377,11 @@ class Gate011C4Tests(TestCase):
             posting__source_posting_id=f"lehre:{open_profile}"
         )
         assert apprenticeship.canonical_url == f"https://lehre.lu/map/{open_profile}"
+        assert apprenticeship.source_posting_id == f"lehre:{open_profile}"
+        assert apprenticeship.location_locality == "Sursee"
+        assert apprenticeship.location_postal_code == "6210"
+        assert apprenticeship.location_region == ""
+        assert apprenticeship.location_country == "CH"
         assert apprenticeship.contract_payload["source_published_at"] is None
         assert apprenticeship.contract_payload["source_updated_at"].startswith("2026-08-06")
         assert apprenticeship.structured_payload["vacancy_boundary"] == {

@@ -19,11 +19,17 @@ LU's complete vacancy universe has three mandatory surfaces: administration Refl
 cantonal-school/teacher Refline, and the mixed `lehre.lu` apprenticeship API. The
 apprenticeship host is not globally non-vacancy. A profile is admitted only while the
 complete feed marks it `free=true` and its detail exposes a tenant-891537 Refline
-application action. The evergreen profile URL is the canonical source URL permitted by
-the frozen Posting contract; the explicit application code is retained as evidence.
-Inactive profiles and Schnupper/orientation content are not promoted. Reopening the same
-profile is represented by the existing VacancyEpisode semantics rather than an invented
-identity model.
+application action. Its source-native Posting identity is
+`lehre:<profile_id>`; `https://lehre.lu/map/<profile_id>` is the corroborating
+canonical source URL, and the Refline application code is retained as active-opportunity
+evidence. Inactive profiles and Schnupper/orientation content are not promoted.
+Reopening the same profile preserves Posting/Vacancy identity and creates the next
+VacancyEpisode under the existing frozen recurrence semantics.
+
+The apprenticeship API publishes location title, city and postal code but no governed
+canton field. Therefore raw `location_region` remains empty. No canton is inferred from
+the Source identity, employer name or host; municipality/canton resolution remains
+downstream governed geography.
 
 SG canton's official Umantis search is one unified actual-vacancy surface. Its governed employer set contains ordinary, teacher, apprenticeship, practicum and entry-role publications with stable numeric IDs. Informational training pages and orientation offerings are non-vacancy. Stadt St. Gallen remains a separate blocked Source.
 
@@ -47,6 +53,11 @@ Only actual vacancy acquisition origins receive production endpoints. Non-vacanc
 ## Unchanged contracts and consequences
 
 Publication, update and first-seen timestamps remain distinct. Profile update timestamps are not vacancy publication dates. Municipality derives only from source-published workplace evidence. Green relevance and dedup remain downstream and unchanged.
+
+The closed GATE-008 regression
+`src/vacancies/tests/test_gate008.py::Gate008Tests::test_same_posting_reappearance_creates_one_new_episode`
+proves stable Posting identity through healthy absence, `CLOSED_OBSERVED`, reappearance,
+the same Vacancy, Episode 2 and exactly one `REAPPEARED` event.
 
 Graubünden `stage.html` remains a `NON_VACANCY_SOURCE_SURFACE`: Schnupperlehre is not requested or promoted. AG, BE, FR, GL, OW, SH, UR, VS, Stadt St. Gallen, Job-Room and Job-Room API are outside this gate.
 
