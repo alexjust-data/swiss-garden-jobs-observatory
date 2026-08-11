@@ -320,12 +320,6 @@ def ensure_default_endpoints(source: Source) -> None:
                 "apply.refline.ch",
                 "https://apply.refline.ch/514915/apprentice.html",
             ),
-            (
-                "LISTING",
-                "CANTON_GR_PORTAL",
-                "apply.refline.ch",
-                "https://apply.refline.ch/514915/stage.html",
-            ),
             ("DETAIL", "CANTON_GR_PORTAL", "apply.refline.ch", "https://apply.refline.ch/514915/"),
         ),
         "SRC-OFF-CANTON-SO": (
@@ -381,6 +375,12 @@ def ensure_default_endpoints(source: Source) -> None:
         if gate_011b
         else "GATE-007 live technical reconnaissance"
     )
+    if str(source.pk) == "SRC-OFF-CANTON-GR":
+        SourceEndpoint.objects.filter(
+            source=source,
+            endpoint_role="LISTING",
+            base_url="https://apply.refline.ch/514915/stage.html",
+        ).delete()
     for role, family, host, base_url in definitions.get(str(source.pk), ()):
         endpoint, _ = SourceEndpoint.objects.get_or_create(
             source=source,

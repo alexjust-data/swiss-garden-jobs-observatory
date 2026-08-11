@@ -17,6 +17,7 @@ from collectors.platforms import (
     UnsupportedPlatformError,
 )
 from collectors.remaining_canton_adapters import (
+    GRAUBUENDEN_NON_VACANCY_STAGE,
     GRAUBUENDEN_SURFACES,
     SCHWYZ_LISTING,
     SOLOTHURN_LISTING,
@@ -165,6 +166,7 @@ class Gate011C3Tests(TestCase):
         registered = source("SRC-OFF-CANTON-GR", "CANTON_GR_PORTAL")
         ordinary_url = "https://apply.refline.ch/514915/1001/pub/1/index.html"
         apprentice_url = "https://apply.refline.ch/514915/1002/pub/1/index.html"
+        trial_url = "https://apply.refline.ch/514915/1003/pub/1/index.html"
         pages = {
             ("GET", GRAUBUENDEN_SURFACES[0][1]): FetchedPage(
                 GRAUBUENDEN_SURFACES[0][1],
@@ -180,12 +182,12 @@ class Gate011C3Tests(TestCase):
                 "text/html",
                 refline_listing(("1002", "1", "Lehrstelle Gärtner/in EFZ")),
             ),
-            ("GET", GRAUBUENDEN_SURFACES[2][1]): FetchedPage(
-                GRAUBUENDEN_SURFACES[2][1],
-                GRAUBUENDEN_SURFACES[2][1],
+            ("GET", GRAUBUENDEN_NON_VACANCY_STAGE): FetchedPage(
+                GRAUBUENDEN_NON_VACANCY_STAGE,
+                GRAUBUENDEN_NON_VACANCY_STAGE,
                 200,
                 "text/html",
-                refline_listing(empty=True),
+                refline_listing(("1003", "1", "Schnupperlehre Gärtner/in EFZ")),
             ),
             ("GET", ordinary_url): FetchedPage(
                 ordinary_url,
@@ -224,7 +226,20 @@ class Gate011C3Tests(TestCase):
             request.context["surface_name"]
             for request in fetcher.requests
             if request.role == "LISTING_PAGE"
-        ] == ["ordinary", "apprenticeships", "trial_apprenticeships"]
+        ] == ["ordinary", "apprenticeships"]
+        assert all(request.url != GRAUBUENDEN_NON_VACANCY_STAGE for request in fetcher.requests)
+        assert not Posting.objects.filter(source=registered, source_posting_id="1003").exists()
+        assert not PostingObservation.objects.filter(
+            source=registered, source_posting_id="1003"
+        ).exists()
+        assert not GreenRelevanceAssessment.objects.filter(
+            posting_observation__source=registered,
+            posting_observation__source_posting_id="1003",
+        ).exists()
+        assert trial_url not in {
+            observation.canonical_url
+            for observation in PostingObservation.objects.filter(source=registered)
+        }
         first = PostingObservation.objects.get(source_posting_id="1001")
         assert first.contract_payload["published_at_precision"] == "EXACT_DATETIME"
 
@@ -277,13 +292,6 @@ class Gate011C3Tests(TestCase):
                 200,
                 "text/html",
                 refline_listing(("1001", "1", "Shared")),
-            ),
-            ("GET", GRAUBUENDEN_SURFACES[2][1]): FetchedPage(
-                GRAUBUENDEN_SURFACES[2][1],
-                GRAUBUENDEN_SURFACES[2][1],
-                200,
-                "text/html",
-                refline_listing(empty=True),
             ),
             ("GET", detail): FetchedPage(detail, detail, 200, "text/html", job_detail("Shared")),
         }
@@ -499,9 +507,18 @@ class Gate011C3Tests(TestCase):
             ("SRC-OFF-CANTON-SZ", "CANTON_SZ_PORTAL", {"jobs.sz.ch"}),
         ):
             row = source(source_id, platform)
+            if source_id == "SRC-OFF-CANTON-GR":
+                SourceEndpoint.objects.create(
+                    source=row,
+                    endpoint_role="LISTING",
+                    platform_family=platform,
+                    host="apply.refline.ch",
+                    base_url=GRAUBUENDEN_NON_VACANCY_STAGE,
+                )
             ensure_default_endpoints(row)
             endpoints = SourceEndpoint.objects.filter(source=row)
             assert set(endpoints.values_list("host", flat=True)) == hosts
+            assert not endpoints.filter(base_url=GRAUBUENDEN_NON_VACANCY_STAGE).exists()
             assert all(
                 endpoint.evidence["verification"] == "GATE-011C-3 live technical reconnaissance"
                 for endpoint in endpoints

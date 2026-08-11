@@ -9,7 +9,7 @@ Observed on 2026-08-11. Live counts are evidence only and are never production c
 | `SRC-OFF-CANTON-AI` | `OFFICIAL_WEB` | Plone landing plus Abacus Jobportal | ordinary jobs; canton-employer apprenticeships | origins readable, complete cross-surface vacancy identity unresolved | blocked | `ACCEPTED_BLOCKED` |
 | `SRC-OFF-CANTON-FR` | `FR_MIGRATION_PORTAL` | SAP SuccessFactors plus legacy ProRecrute and separate education surfaces | ordinary/police; legacy vacancies; apprenticeships/practica; teaching | public pages readable, complete multi-platform universe unresolved | blocked | `ACCEPTED_BLOCKED` |
 | `SRC-OFF-CANTON-GL` | `UMANTIS_LINKED` | Umantis plus official static pages/PDF | ordinary; apprenticeships; practica/standing legal internship | public evidence readable, no unified publication identity/exhaustion contract | blocked | `ACCEPTED_BLOCKED` |
-| `SRC-OFF-CANTON-GR` | `CANTON_GR_PORTAL` | Refline tenant `514915` | ordinary; apprenticeships; trial apprenticeships | robots permits tenant; static GET contract | Refline | `ACCEPTED_IMPLEMENTED` |
+| `SRC-OFF-CANTON-GR` | `CANTON_GR_PORTAL` | Refline tenant `514915` | vacancy: ordinary + apprenticeships; observed non-vacancy: Schnupperlehre | robots permits tenant; static GET contract | Refline | `ACCEPTED_IMPLEMENTED` |
 | `SRC-OFF-CANTON-JU` | `OFFICIAL_WEB` | Jura custom CMS lists | administration; teaching; magistracy; other; apprenticeships/stages; teacher replacements | public lists readable, complete category/replacement contract unresolved | blocked | `ACCEPTED_BLOCKED` |
 | `SRC-OFF-CANTON-NW` | `CANTON_NW_PORTAL` | WordPress/Elementor custom content | ordinary; police; apprenticeships/practicum | robots permits; training pages expose profiles/availability rather than stable vacancy publications | blocked | `ACCEPTED_BLOCKED` |
 | `SRC-OFF-CANTON-OW` | `OFFICIAL_WEB` | i-web CMS plus separate recruiting surfaces | ordinary; vocational training/practicum; police | mandatory surfaces visible, complete stable publication contract unresolved | blocked | `ACCEPTED_BLOCKED` |
@@ -25,9 +25,10 @@ Observed on 2026-08-11. Live counts are evidence only and are never production c
 ### Refline
 
 - Sources: `SRC-OFF-CANTON-GR`.
-- Common contract: tenant-scoped, complete in-memory HTML listings with stable numeric publication IDs and canonical Refline details carrying `JobPosting` JSON-LD.
-- Shared implementation: `GraubuendenReflineAdapter`, configured with the exact tenant and all three governed surfaces.
-- Source-specific configuration: tenant `514915`; `search.html`, `apprentice.html`, and `stage.html`.
+- Common contract: tenant-scoped, complete in-memory HTML vacancy listings with stable numeric publication IDs and canonical Refline details carrying `JobPosting` JSON-LD.
+- Shared implementation: `GraubuendenReflineAdapter`, configured with the exact tenant and the two governed vacancy surfaces.
+- Source-specific configuration: tenant `514915`; `search.html` and `apprentice.html`.
+- Observed exclusion: `stage.html` is recorded as `NON_VACANCY_SOURCE_SURFACE`, not as a production listing endpoint.
 
 ### Prospective configured legacy
 
@@ -46,7 +47,8 @@ The remaining ten sources are not promoted. No adapter, `SourceEndpoint`, or pro
 
 - Official landing: `https://stellen.gr.ch/`, redirecting to `https://apply.refline.ch/514915/search.html`.
 - Listing/detail origin: `apply.refline.ch`; assets on `cdn.refline.ch` are not required for collection.
-- Surfaces: ordinary (`search.html`), apprenticeships (`apprentice.html`), trial apprenticeships (`stage.html`).
+- Vacancy surfaces: ordinary (`search.html`) and actual apprenticeships (`apprentice.html`).
+- Observed non-vacancy surface: `stage.html` publishes `Schnupperlehre`, short trial/orientation experiences of approximately 1--5 days. Under `04_OBSERVATION_CONTRACT.md` these are not underlying employment opportunities and therefore never enter Posting, PostingObservation or Vacancy evidence.
 - Native identity: the stable numeric Refline publication component immediately after tenant `514915`.
 - Canonical detail: `/514915/<publication-id>/pub/<publication-channel>/index.html`.
 - Exhaustion: every surface is a complete server-rendered table; absence text is an explicit empty terminal state.
@@ -96,8 +98,17 @@ Previously blocked AG, BE, LU, SG canton and Stadt St. Gallen were not revisited
 
 | Source | Run | Listing requests | Unique IDs / details / observations / green | Green distribution | Publication | Municipality | Result |
 |---|---|---|---|---|---|---|---|
-| GR | `cebbd705-9cc6-4f40-89a7-aa3b274c7d1a` | ordinary 1; apprenticeships 1; trial apprenticeships 1 | 40 / 40 / 40 / 40 | 0 confirmed; 4 review; 36 not green | 40 `EXACT_DATETIME/STRUCTURED_DATA` | 36 exact; 4 unresolved | `SUCCEEDED/HEALTHY/complete` |
+| GR | `5f30202b-819f-4d85-a0de-cc6c429d37bb` | ordinary 1; apprenticeships 1; Schnupperlehre 0 | 40 / 40 / 40 / 40 | 0 confirmed; 4 review; 36 not green | 40 `EXACT_DATETIME/STRUCTURED_DATA` | 36 exact; 4 unresolved | `SUCCEEDED/HEALTHY/complete` |
 | SO | `aa7f3fd5-aa9d-4fb1-808b-ebe42f637302` | unified 1 | 27 / 27 / 27 / 27 | 0 confirmed; 2 review; 25 not green | 27 `EXACT_DATE/STRUCTURED_DATA` | 0 exact; 27 unresolved | `SUCCEEDED/HEALTHY/complete` |
 | SZ | `2a18933d-35b2-433d-842d-89375540b901` | unified 4 | 27 / 27 / 27 / 27 | 0 confirmed; 0 review; 27 not green | 27 `EXACT_DATE/STRUCTURED_DATA` | 0 exact; 27 unresolved | `SUCCEEDED/HEALTHY/complete` |
 
 All 94 observations produced one green assessment and one `NEW` lifecycle event. Cross-surface duplicates were zero. Negative lifecycle evidence was zero. A first SO attempt failed closed before observation creation because live title markup differed from the inherited parser; the accepted run above uses the source-specific observed contract and preserves that failed run as historical evidence.
+
+The superseded GR run `cebbd705-9cc6-4f40-89a7-aa3b274c7d1a` remains immutable
+experimental evidence but is not GATE-011C-3 acceptance evidence because it requested
+`stage.html`. The corrected run was produced in a separate reproducible acceptance
+database cloned from the local evidence store, with all experimental GR source truth
+and all downstream derived artifacts removed before recollection. SO/SZ and pre-C3
+source evidence were retained. The old and corrected runs happened to yield the same
+40 unique IDs because the live trial surface contributed no additional unique ID;
+that count coincidence does not make the superseded three-surface contract valid.

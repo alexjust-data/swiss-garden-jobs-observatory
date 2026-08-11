@@ -8,15 +8,21 @@
 
 GATE-011C-3 evaluates exactly AI, FR, GL, GR, JU, NW, OW, SH, SO, SZ, TG, UR and VS under their frozen `SRC-OFF-CANTON-*` identities. Reconnaissance precedes implementation and live technical evidence, rather than frozen platform labels, determines clustering.
 
-`FULL_SOURCE` means all observable vacancy surfaces belonging to the canonical canton-employer identity. Apprenticeships, practica, teaching and temporary categories cannot be omitted merely because they use another presentation or are unlikely to be green.
+`FULL_SOURCE` means all observable vacancy surfaces belonging to the canonical canton-employer identity. Apprenticeships, practica, teaching and temporary categories cannot be omitted merely because they use another presentation or are unlikely to be green. A careers-portal publication is not automatically a vacancy: the frozen observation contract requires an underlying employment opportunity.
 
 The verified implementation clusters are:
 
-- Refline: GR, with ordinary, apprenticeship and trial-apprenticeship surfaces.
+- Refline: GR, with ordinary-employment and actual-apprenticeship vacancy surfaces.
 - Configured Prospective: SO and SZ, each exact-source authorized and using its own frozen platform family.
 - Blocked: AI, FR, GL, JU, NW, OW, SH, TG, UR and VS.
 
 Every source therefore has one terminal result: GR/SO/SZ are `ACCEPTED_IMPLEMENTED`; the other ten are `ACCEPTED_BLOCKED`. Blocked sources receive no production adapter, endpoint or collection run and remain required in the Day-0 denominator.
+
+For GR, Refline `stage.html` is an observed `NON_VACANCY_SOURCE_SURFACE`. Its
+`Schnupperlehre` publications describe short trial/orientation experiences, not
+underlying employment opportunities. They are excluded before Posting promotion;
+this is an entity-boundary decision, not a green-classification rule. Genuine
+`Lehrstelle` publications on `apprentice.html` remain in scope.
 
 ## Architecture and invariants
 

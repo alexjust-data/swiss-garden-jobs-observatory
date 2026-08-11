@@ -26,8 +26,8 @@ GRAUBUENDEN_TENANT = "https://apply.refline.ch/514915"
 GRAUBUENDEN_SURFACES = (
     ("ordinary", f"{GRAUBUENDEN_TENANT}/search.html"),
     ("apprenticeships", f"{GRAUBUENDEN_TENANT}/apprentice.html"),
-    ("trial_apprenticeships", f"{GRAUBUENDEN_TENANT}/stage.html"),
 )
+GRAUBUENDEN_NON_VACANCY_STAGE = f"{GRAUBUENDEN_TENANT}/stage.html"
 SOLOTHURN_LISTING = "https://job.so.ch/"
 SCHWYZ_LISTING = "https://jobs.sz.ch/"
 _REFLINE_DETAIL = re.compile(
