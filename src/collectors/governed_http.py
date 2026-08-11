@@ -414,6 +414,18 @@ def ensure_default_endpoints(source: Source) -> None:
                 "recruitingapp-2910.umantis.com",
                 "https://recruitingapp-2910.umantis.com/Vacancies/",
             ),
+            (
+                "LISTING",
+                "UMANTIS_LINKED",
+                "www.gl.ch",
+                "https://www.gl.ch/rechtspflege/gerichte/offene-stellen-der-gerichte.html/4714",
+            ),
+            (
+                "DETAIL",
+                "UMANTIS_LINKED",
+                "www.gl.ch",
+                "https://www.gl.ch/public/upload/assets/",
+            ),
         ),
         "SRC-OFF-CANTON-SH": (
             (

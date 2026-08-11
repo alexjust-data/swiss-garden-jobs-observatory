@@ -47,7 +47,7 @@ not authorization.
 | AG | `ACCEPTED_BLOCKED` | complete proxy path is robots-prohibited; no complete independent official origin |
 | BE | `ACCEPTED_BLOCKED` | mandatory teaching/substitute surfaces remain inaccessible/incomplete |
 | FR | `ACCEPTED_BLOCKED` | active migration and mandatory multi-platform universe remain unreconciled |
-| GL | `ACCEPTED_IMPLEMENTED` | official public Umantis unified feed with numeric IDs and total exhaustion |
+| GL | `ACCEPTED_IMPLEMENTED` | mandatory public Umantis surface plus official court openings HTML/PDF; both exhaust deterministically |
 | OW | `ACCEPTED_BLOCKED` | required Zentraljob tenant publishes `Disallow: /` |
 | SH | `ACCEPTED_IMPLEMENTED` | official public Umantis unified feed with allowed listing/details and total exhaustion |
 | UR | `ACCEPTED_BLOCKED` | two controlled runs timed out on mandatory official details; no healthy complete acceptance |
@@ -56,8 +56,20 @@ not authorization.
 
 ## Vacancy and employer boundaries
 
-- GL and SH static career/training information is not promoted; actual current
-  apprenticeship/practicum publications occur in the unified Umantis feed.
+- SH static career/training information is not promoted; actual current
+  apprenticeship/practicum publications occur in its unified Umantis feed.
+- GL is not a one-surface Source. Tenant 2910 exhausts its Umantis surface.
+  The central canton employment page also publishes court openings, and court
+  staff remain canton employees under the governed employer boundary. The
+  current specific 100% court Praktikum is therefore a mandatory
+  `VACANCY_SOURCE_SURFACE` publication under GL. Its official CMS asset ID and
+  canonical PDF supply identity. The year-round, two-week unpaid Volontariat
+  is orientation content and is excluded before Posting promotion.
+- GL's Lehrstellen/BZGS and current police/school vacancy links are duplicate
+  presentations of tenant-2910 publications. Standing career/Praktika
+  information is non-vacancy. GIB and glarnerSach have independent
+  employer/recruitment authority and are `SEPARATE_EMPLOYER_SOURCE`; C-5 does
+  not create new Sources for them.
 - UR standing profession/capacity material is non-vacancy information; actual
   openings must occur as stable rows in `/stellen`, but the source remains
   blocked because detail acquisition did not complete reliably.
@@ -71,7 +83,9 @@ not authorization.
 ## Implementation
 
 - A configured public-Umantis translation contract serves exact GL and SH
-  sources without globally authorizing Umantis.
+  sources without globally authorizing Umantis. GL adds a source-specific
+  mandatory official court HTML/PDF surface after Umantis exhaustion; failure
+  of that surface fails the entire GL FULL_SOURCE run before partial truth.
 - The modern Solique translation contract is parameterized without changing
   Zürich's accepted wire semantics, then activated only for exact Stadt SG.
 - SharedCollectionPipeline remains sole owner of RAW/SHA, identity,

@@ -10,6 +10,7 @@ from django.test import TestCase
 from collectors.adapters import get_adapter
 from collectors.governed_http import ensure_default_endpoints
 from collectors.hard_blocker_adapters import (
+    GLARUS_COURT_LISTING,
     GLARUS_LISTING,
     SCHAFFHAUSEN_CANTON_LISTING,
     ST_GALLEN_CITY_API,
@@ -119,6 +120,54 @@ def umantis_detail(title: str) -> bytes:
     ).encode()
 
 
+def pdf_fixture(text: str) -> bytes:
+    backslash = chr(92)
+    escaped = text.replace("(", f"{backslash}(").replace(")", f"{backslash})")
+    stream = f"BT /F1 10 Tf 40 740 Td ({escaped}) Tj ET".encode("ascii")
+    objects = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n"
+        + stream
+        + b"\nendstream",
+    )
+    body = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for number, value in enumerate(objects, start=1):
+        offsets.append(len(body))
+        body.extend(f"{number} 0 obj\n".encode("ascii"))
+        body.extend(value)
+        body.extend(b"\nendobj\n")
+    xref = len(body)
+    body.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    body.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        body.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    body.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    return bytes(body)
+
+
+def glarus_court_listing() -> bytes:
+    return (
+        "<h1>Offene Stellen der Gerichte</h1>"
+        "<p>Zurzeit sind folgende Stellen an den Gerichten des Kantons Glarus offen:</p>"
+        '<a href="/public/upload/assets/70001/Praktikum.pdf?fp=1">'
+        "Praktikant/in [pdf]</a>"
+        '<a href="/public/upload/assets/70002/Volontariat.pdf?fp=1">'
+        "Volont\u00e4r/in [pdf]</a>"
+    ).encode()
+
+
 
 
 class Gate011C5HardBlockerTests(TestCase):
@@ -201,28 +250,97 @@ class Gate011C5HardBlockerTests(TestCase):
                     total=2,
                     entries=entries,
                 ),
-            )
+            ),
+            ("GET", GLARUS_COURT_LISTING): FetchedPage(
+                GLARUS_COURT_LISTING,
+                GLARUS_COURT_LISTING,
+                200,
+                "text/html",
+                glarus_court_listing(),
+            ),
         }
         for posting_id, title in entries:
             detail = f"https://recruitingapp-2910.umantis.com/Vacancies/{posting_id}/Description/1"
             pages[("GET", detail)] = FetchedPage(
                 detail, detail, 200, "text/html", umantis_detail(title)
             )
+        court_detail = "https://www.gl.ch/public/upload/assets/70001/Praktikum.pdf?fp=1"
+        pages[("GET", court_detail)] = FetchedPage(
+            court_detail,
+            court_detail,
+            200,
+            "application/pdf",
+            pdf_fixture(
+                "Wir suchen eine Praktikantin oder einen Praktikanten. "
+                "Pensum 100 Prozent. Arbeitsort Glarus, Stellenantritt nach Vereinbarung. "
+                "Kantonale Anstellungsbedingungen. Bewerbung an kantonsgericht@gl.ch."
+            ),
+        )
+        fetcher = Fetcher(pages)
         with TemporaryDirectory() as raw:
             run = SharedCollectionPipeline(
                 source_id=registered.pk,
-                fetcher=Fetcher(pages),
+                fetcher=fetcher,
                 raw_store=RawObjectStore(raw),
                 delay_seconds=0,
             ).collect(full_snapshot=True, acknowledge_automation_review=True)
         assert run.status == "SUCCEEDED" and run.snapshot_complete
-        assert run.listing_total_discovered == run.details_fetched == 2
-        assert run.observations_created == run.green_assessments_created == 2
+        assert run.listing_total_discovered == run.details_fetched == 3
+        assert run.observations_created == run.green_assessments_created == 3
+        assert Posting.objects.filter(
+            source=registered, source_posting_id="court:70001"
+        ).exists()
+        assert not Posting.objects.filter(
+            source=registered, source_posting_id="court:70002"
+        ).exists()
+        requested_urls = {request.url for request in fetcher.requests}
+        assert GLARUS_COURT_LISTING in requested_urls
+        assert court_detail in requested_urls
+        assert not any("70002" in url for url in requested_urls)
         assert GreenRelevanceAssessment.objects.filter(
             posting_observation__collection_run=run,
             posting_observation__source_posting_id="102",
             result="GREEN_CONFIRMED",
         ).exists()
+
+    def test_glarus_court_surface_failure_fails_without_partial_truth(self) -> None:
+        registered = source("SRC-OFF-CANTON-GL", "UMANTIS_LINKED")
+        pages = {
+            ("GET", GLARUS_LISTING): FetchedPage(
+                GLARUS_LISTING,
+                GLARUS_LISTING,
+                200,
+                "text/html",
+                umantis_listing(
+                    origin="https://recruitingapp-2910.umantis.com",
+                    table_number="1152481",
+                    page_size=25,
+                    page_number=1,
+                    total=1,
+                    entries=[("101", "Sachbearbeiter/in")],
+                ),
+            ),
+            ("GET", GLARUS_COURT_LISTING): FetchedPage(
+                GLARUS_COURT_LISTING,
+                GLARUS_COURT_LISTING,
+                200,
+                "text/html",
+                b"<html><body>layout changed</body></html>",
+            ),
+        }
+        with TemporaryDirectory() as raw, pytest.raises(
+            PlatformAdapterError, match="court listing contract"
+        ):
+            SharedCollectionPipeline(
+                source_id=registered.pk,
+                fetcher=Fetcher(pages),
+                raw_store=RawObjectStore(raw),
+                delay_seconds=0,
+            ).collect(full_snapshot=True, acknowledge_automation_review=True)
+        run = CollectionRun.objects.get(source=registered)
+        assert run.status == "FAILED" and not run.snapshot_complete
+        assert not Posting.objects.filter(source=registered).exists()
+        assert not PostingLifecycleEvent.objects.filter(posting__source=registered).exists()
 
     def test_schaffhausen_pagination_skip_fails_without_partial_truth(self) -> None:
         registered = source("SRC-OFF-CANTON-SH", "OFFICIAL_WEB")

@@ -6,8 +6,12 @@ import re
 from datetime import UTC, datetime
 from html import escape
 from html.parser import HTMLParser
+from io import BytesIO
 from typing import cast
 from urllib.parse import urljoin, urlsplit
+
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 from collectors.platforms import (
     FetchedPage,
@@ -22,12 +26,20 @@ from collectors.required_canton_adapters import ZurichCantonSoliqueAdapter
 from sources.models import Source
 
 GLARUS_LISTING = "https://recruitingapp-2910.umantis.com/Jobs/All?CompanyID=1"
+GLARUS_COURT_LISTING = (
+    "https://www.gl.ch/rechtspflege/gerichte/"
+    "offene-stellen-der-gerichte.html/4714"
+)
 SCHAFFHAUSEN_CANTON_LISTING = (
     "https://recruitingapp-2876.umantis.com/Jobs/1?lang=ger&Reset=G"
 )
 ST_GALLEN_CITY_API = "https://live.solique.ch/STSG/de/api/v1/data/"
 
 _UMANTIS_DETAIL = re.compile(r"^/Vacancies/(?P<id>\d+)/Description/1/?$", re.I)
+_GLARUS_COURT_ASSET = re.compile(
+    r"^/public/upload/assets/(?P<id>\d+)/[^/]+\.pdf$",
+    re.I,
+)
 
 
 def _nonnegative_integer(value: object, field: str, label: str) -> int:
@@ -134,6 +146,64 @@ class _PublicUmantisDetailParser(HTMLParser):
     @property
     def text(self) -> str:
         return " ".join(" ".join(self.text_chunks).split())
+
+
+class _GlarusCourtListingParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.entries: list[ListingEntry] = []
+        self.non_vacancy_urls: list[str] = []
+        self._text_chunks: list[str] = []
+        self._anchor: tuple[str, list[str]] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a":
+            return
+        href = dict(attrs).get("href") or ""
+        parsed = urlsplit(href)
+        if parsed.hostname not in {None, "www.gl.ch"}:
+            return
+        if _GLARUS_COURT_ASSET.fullmatch(parsed.path) is None:
+            return
+        self._anchor = (href, [])
+
+    def handle_data(self, data: str) -> None:
+        self._text_chunks.append(data)
+        if self._anchor is not None:
+            self._anchor[1].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "a" or self._anchor is None:
+            return
+        href, chunks = self._anchor
+        self._anchor = None
+        parsed = urlsplit(href)
+        match = _GLARUS_COURT_ASSET.fullmatch(parsed.path)
+        if match is None:
+            return
+        title = " ".join(" ".join(chunks).split())
+        title = re.sub(r"\s*\[pdf.*$", "", title, flags=re.I).strip()
+        if not title:
+            raise PlatformAdapterError("Glarus court publication lacks a title")
+        canonical_url = urljoin(GLARUS_COURT_LISTING, href)
+        if "volont" in _normalized_title(title):
+            self.non_vacancy_urls.append(canonical_url)
+            return
+        self.entries.append(
+            ListingEntry(
+                f"court:{match.group('id')}",
+                canonical_url,
+                title,
+                {
+                    "surface_name": "courts",
+                    "court_asset_id": match.group("id"),
+                },
+            )
+        )
+
+    @property
+    def text(self) -> str:
+        return " ".join(" ".join(self._text_chunks).split())
 
 
 class _ConfiguredPublicUmantisAdapter:
@@ -306,6 +376,165 @@ class GlarusUmantisAdapter(_ConfiguredPublicUmantisAdapter):
     origin = "https://recruitingapp-2910.umantis.com"
     contract_label = "Glarus canton"
     source_format = "UMANTIS_GL_PUBLIC_HTML_V1"
+
+    def initial_listing_request(self, source: Source) -> FetchRequest:
+        request = super().initial_listing_request(source)
+        request.context["surface_name"] = "umantis"
+        return request
+
+    def parse_listing_page(
+        self, page: FetchedPage, request: FetchRequest, source: Source
+    ) -> ListingPage:
+        if request.context.get("surface_name") == "courts":
+            return self._parse_court_listing(page, request)
+        parsed = super().parse_listing_page(page, request, source)
+        if parsed.next_request is not None:
+            parsed.next_request.context["surface_name"] = "umantis"
+            return parsed
+        if not parsed.discovery_complete or parsed.total_reported is None:
+            raise PlatformAdapterError("Glarus Umantis surface did not prove completeness")
+        court_request = FetchRequest(
+            GLARUS_COURT_LISTING,
+            "text/html",
+            "LISTING_PAGE",
+            context={
+                "surface_name": "courts",
+                "umantis_total": parsed.total_reported,
+            },
+        )
+        return ListingPage(parsed.entries, court_request, False)
+
+    def _parse_court_listing(
+        self, page: FetchedPage, request: FetchRequest
+    ) -> ListingPage:
+        if page.content_type != "text/html":
+            raise PlatformAdapterError("Glarus court listing must be HTML")
+        parser = _GlarusCourtListingParser()
+        try:
+            parser.feed(page.body.decode("utf-8"))
+            parser.close()
+        except UnicodeDecodeError as exc:
+            raise PlatformAdapterError("Glarus court listing is not UTF-8") from exc
+        normalized = _normalized_title(parser.text)
+        heading_seen = "offene stellen der gerichte" in normalized
+        open_contract = "zurzeit sind folgende stellen" in normalized and "offen" in normalized
+        empty_contract = (
+            "zurzeit sind keine stellen" in normalized
+            or "keine offenen stellen" in normalized
+        )
+        if not heading_seen or not (open_contract or empty_contract):
+            raise PlatformAdapterError("Glarus court listing contract is missing")
+        if open_contract and not parser.entries and not parser.non_vacancy_urls:
+            raise PlatformAdapterError("Glarus court listing exposes no classified publications")
+        if empty_contract and (parser.entries or parser.non_vacancy_urls):
+            raise PlatformAdapterError("Glarus court empty state conflicts with publications")
+        umantis_total = request.context.get("umantis_total")
+        if isinstance(umantis_total, bool) or not isinstance(umantis_total, int):
+            raise PlatformAdapterError("Glarus court listing lost Umantis total evidence")
+        return ListingPage(
+            parser.entries,
+            None,
+            True,
+            umantis_total + len(parser.entries),
+        )
+
+    def detail_request(self, entry: ListingEntry, source: Source) -> FetchRequest:
+        if entry.listing_metadata.get("surface_name") == "courts":
+            return FetchRequest(
+                entry.detail_url,
+                "application/pdf",
+                "DETAIL",
+                context={"surface_name": "courts"},
+            )
+        return FetchRequest(
+            entry.detail_url,
+            "text/html",
+            "DETAIL",
+            context={"surface_name": "umantis"},
+        )
+
+    def parse_detail(
+        self, page: FetchedPage, entry: ListingEntry, source: Source
+    ) -> ParsedSourcePosting:
+        if entry.listing_metadata.get("surface_name") == "courts":
+            return self._parse_court_detail(page, entry)
+        return super().parse_detail(page, entry, source)
+
+    def _parse_court_detail(
+        self, page: FetchedPage, entry: ListingEntry
+    ) -> ParsedSourcePosting:
+        parsed = urlsplit(page.final_url)
+        match = _GLARUS_COURT_ASSET.fullmatch(parsed.path)
+        asset_id = entry.listing_metadata.get("court_asset_id")
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "www.gl.ch"
+            or match is None
+            or match.group("id") != asset_id
+            or entry.source_posting_id != f"court:{asset_id}"
+        ):
+            raise PlatformAdapterError("Glarus court detail identity mismatch")
+        if page.content_type != "application/pdf" or not page.body.startswith(b"%PDF-"):
+            raise PlatformAdapterError("Glarus court detail must be PDF")
+        try:
+            reader = PdfReader(BytesIO(page.body))
+            text = " ".join(
+                " ".join((pdf_page.extract_text() or "").split())
+                for pdf_page in reader.pages
+            ).strip()
+        except (PdfReadError, OSError, ValueError) as exc:
+            raise PlatformAdapterError("Glarus court PDF is malformed") from exc
+        normalized = _normalized_title(text)
+        if (
+            "wir suchen" not in normalized
+            or "bewerbung" not in normalized
+            or not any(
+                marker in normalized
+                for marker in ("pensum", "stellenantritt", "anstellungsbedingungen")
+            )
+        ):
+            raise PlatformAdapterError("Glarus court PDF lacks vacancy evidence")
+        if (
+            "ganzjahrig" in normalized
+            and "ohne entlohnung" in normalized
+            and "zwei wochen" in normalized
+        ):
+            raise PlatformAdapterError("Glarus court non-vacancy reached detail promotion")
+        location_match = re.search(
+            r"Arbeitsort\s+([^,.]+?)(?:,|\.|\s+Stellenantritt)",
+            text,
+            flags=re.I,
+        )
+        locality = " ".join(location_match.group(1).split()) if location_match else ""
+        return ParsedSourcePosting(
+            source_posting_id=entry.source_posting_id,
+            canonical_url=page.final_url,
+            title=entry.title,
+            published_at_raw=None,
+            date_posted=None,
+            valid_through=None,
+            employment_type="Praktikum",
+            hiring_organization="Gerichte des Kantons Glarus",
+            description_html=f"<p>{escape(text)}</p>",
+            responsibilities_html="",
+            qualifications_html="",
+            benefits_html="",
+            raw_location=locality,
+            location_street="",
+            location_locality=locality,
+            location_region="",
+            location_postal_code="",
+            location_country="CH",
+            structured_payload={
+                "source_format": "GLARUS_COURT_PDF_V1",
+                "publication_id": entry.source_posting_id,
+                "court_asset_id": asset_id,
+                "surface_name": "courts",
+            },
+            published_at_precision="UNKNOWN",
+            published_at_parse_method="MISSING",
+            contract_raw_text=text,
+        )
 
 
 class SchaffhausenCantonUmantisAdapter(_ConfiguredPublicUmantisAdapter):

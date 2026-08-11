@@ -10,7 +10,7 @@ merged baseline is `bbd4ea637878fed1388c0f14d03ec5fba097f956`.
 | `SRC-OFF-CANTON-AG` | canton React component backed by Umantis proxy | administration, courts, police, canton schools, apprenticeships | `www.ag.ch`; observed `jobs.ag.ch` alternate returned an empty response | `www.ag.ch/robots.txt` explicitly disallows `/io/*`; no auth-free independent complete ATS listing was proven | proxy identity exists but complete feed cannot be requested under policy | school employers remain part of the official hub boundary | blocked | `ACCEPTED_BLOCKED` | `ROBOTS_BLOCKED`, `EXHAUSTION_UNPROVEN` |
 | `SRC-OFF-CANTON-BE` | Prospective plus KSML/STEZE teaching applications | ordinary, apprenticeships/practica, teachers, substitute teachers | `www.jobs.apps.be.ch`, `ksml.apps.be.ch`, `steze.apps.be.ch` | Prospective surfaces are public; KSML is a client shell and its robots request returned 403; STEZE returned 403 | Prospective UUIDs are strong, but mandatory teaching surfaces cannot be exhausted | all four channels are presented by the canton employer hub | blocked | `ACCEPTED_BLOCKED` | `HTTP_403`, `MULTI_SURFACE_INCOMPLETE` |
 | `SRC-OFF-CANTON-FR` | SuccessFactors migration plus legacy ProRecrute and separate teaching/training channels | current SPE/Police/SITel jobs, other administration jobs, teaching, initial training/stages | `jobs.fr.ch`, `adm.appls.fr.ch`, linked official teaching origins | public pages exist; no one authorized contract reconciles every mandatory surface | multilingual/migration identity and cross-platform exhaustion remain unproven | linked teaching/training channels require complete canton-employer reconciliation | blocked | `ACCEPTED_BLOCKED` | `PLATFORM_IDENTITY_UNRESOLVED`, `MULTI_SURFACE_INCOMPLETE`, `EXHAUSTION_UNPROVEN` |
-| `SRC-OFF-CANTON-GL` | public Umantis tenant 2910 | one unified list containing ordinary jobs, actual apprenticeships and training positions | `www.gl.ch`, `recruitingapp-2910.umantis.com` | canton robots allows the relevant page; Umantis listing/details are public and its robots response did not publish a prohibition of them | numeric `/Vacancies/<id>/Description/1`; `table-navigation` reported total and monotonic page state; observed total 20 | static profession/training pages are information; actual openings are present in unified Umantis | Umantis public HTML | `ACCEPTED_IMPLEMENTED` | none |
+| `SRC-OFF-CANTON-GL` | public Umantis tenant 2910 plus official court HTML/PDF | Umantis ordinary/apprenticeship/training vacancies; separate current court vacancies | `www.gl.ch`, `recruitingapp-2910.umantis.com` | canton and Umantis origins expose the required public GET surfaces without authentication or an applicable prohibition | Umantis numeric IDs plus stable court CMS asset IDs/canonical PDFs; Umantis total equality and explicit court open/empty state; observed 20 + 1 vacancy | court employees remain employees of the canton although the court is application authority; other linked channels are classified below | configured Umantis plus GL court HTML/PDF | `ACCEPTED_IMPLEMENTED` | none |
 | `SRC-OFF-CANTON-OW` | official i-web page embedding Zentraljob minisite 9 | ordinary, actual apprenticeships, police; separate training/profile information | `www.ow.ch`, `management.zentraljob.ch` | `management.zentraljob.ch/robots.txt` says `Disallow: /` | numeric detail IDs are visible, but the mandatory listing cannot be authorized | career/profile pages are not promoted; the blocked listing contains actual openings | blocked | `ACCEPTED_BLOCKED` | `ROBOTS_BLOCKED` |
 | `SRC-OFF-CANTON-SH` | official public Umantis tenant 2876 | unified ordinary, apprenticeship, police and practicum list | `sh.ch`, `recruitingapp-2876.umantis.com` | official page links the tenant; robots disallows only unrelated private/import/subscription paths | numeric `/Vacancies/<id>/Description/1`; reported total and monotonic table state; observed total 18 | canton portal is the authoritative employer surface; city Schaffhausen remains separate | Umantis public HTML | `ACCEPTED_IMPLEMENTED` | none |
 | `SRC-OFF-CANTON-UR` | i-web server-rendered localdynamic table and detail pages | unified current openings; apprenticeship/profile PDF is informational and current openings belong in the table | `www.ur.ch`, application action on `jobs.ur.ch` | robots is empty and no auth is required, but detail delivery repeatedly timed out during controlled acceptance | table embeds the complete row set and numeric identity, but the origin did not sustain a complete detail pass | table rows are canton employer openings; static profession capacity is not a vacancy | blocked | `ACCEPTED_BLOCKED` | `ORIGIN_UNAVAILABLE` |
@@ -38,6 +38,36 @@ server-rendered listing and detail; `table-navigation` stable total; page/range
 and next-token progression. Tenant URL, table number and page size remain live
 contract evidence rather than global Umantis authorization.
 
+Glarus adds one source-specific mandatory surface after Umantis exhaustion:
+the official court openings page. The shared pipeline still owns all truth
+promotion; a malformed/unavailable court surface fails the complete GL run and
+cannot provide lifecycle absence evidence.
+
+## Glarus source-universe reconciliation
+
+The central canton employment page is
+`https://www.gl.ch/verwaltung/finanzen-und-gesundheit/personal-und-organisation/stellenangebote.html/4705`.
+It presents both the Umantis market and court openings. The frozen Source is
+the canton employer, and cantonal employment law treats court staff as canton
+employees. The court's independent application authority therefore does not
+make the current court Praktikum a separate Source.
+
+| Channel | Classification | Evidence / acquisition consequence |
+|---|---|---|
+| tenant-2910 Umantis | `SAME_CANONICAL_SOURCE` | mandatory surface; 20 current rows; numeric native ID and stable total/range exhaustion |
+| Gerichte: Praktikant/in | `SAME_CANONICAL_SOURCE` + `VACANCY_SOURCE_SURFACE` | specific 100% employment/training opportunity, 10–14 months, workplace/start/application evidence; mandatory court HTML plus canonical PDF |
+| Gerichte: Volontär/in | `NON_VACANCY_SOURCE_SURFACE` | year-round two-week unpaid orientation/insight opportunity; classified on listing and never requested/promoted |
+| Lehrstellen / BZGS | `DUPLICATE_PRESENTATION_OF_UMANTIS` for current openings | vacancy-level application links resolve to tenant 2910; evergreen profession/profile content is non-vacancy |
+| Kantonspolizei / Kantonsschule | `DUPLICATE_PRESENTATION_OF_UMANTIS` for actual current openings | current vacancy publications are represented in tenant 2910; generic career material is non-vacancy |
+| central Praktika information | `NON_VACANCY_SOURCE_SURFACE` | standing program/application information without a vacancy publication identity or deterministic open state |
+| GIB | `SEPARATE_EMPLOYER_SOURCE` | own employer/recruitment presentation and current explicit zero state; no new Source created in C-5 |
+| glarnerSach | `SEPARATE_EMPLOYER_SOURCE` | legally/organizationally distinct public insurer and own recruitment authority; no new Source created in C-5 |
+
+The current court Praktikum is absent from the 20-row Umantis feed. No manual
+title merge is performed. Its source-native identity is `court:<CMS asset ID>`
+and its canonical source link is the immutable official PDF URL. The
+Volontariat decision is independent of the Praktikum decision.
+
 ### Solique modern API
 
 Source: Stadt St. Gallen.
@@ -48,8 +78,10 @@ practica, so category filtering is neither required nor permitted.
 
 ## Evidence notes
 
-- Glarus observed list: `20/20`, including specific apprenticeship and training
-  publications with per-vacancy application actions.
+- Glarus Umantis surface: `20/20`, including specific apprenticeship and
+  training publications with per-vacancy application actions. The court
+  surface separately exposed one admitted vacancy and one excluded
+  non-vacancy Volontariat.
 - Schaffhausen observed list: `18/18`, including an apprenticeship, a police
   school opening and a legal practicum.
 - Uri exposed ten stable numeric rows during reconnaissance, but two controlled
@@ -63,10 +95,14 @@ practica, so category filtering is neither required nor permitted.
 
 ## Controlled acceptance
 
-- Glarus run `3dcb6342-90af-47f6-8701-a18a0f250c29` is
-  `SUCCEEDED / HEALTHY / snapshot_complete=true`: one listing plus 20 detail
-  requests, `20/20/20/20` IDs/details/observations/green assessments, green
-  distribution `1/1/18` (`GREEN_CONFIRMED/REVIEW/NOT_GREEN`) and 20 `NEW`.
+- Glarus run `d6635c88-3e21-41e6-a9eb-81a31e186709` is the corrected
+  authoritative `SUCCEEDED / HEALTHY / snapshot_complete=true` evidence:
+  two mandatory listing requests (Umantis and Gerichte), 20 Umantis details
+  plus one court PDF, `21/21/21/21` IDs/details/observations/green
+  assessments, green distribution `1/1/19`
+  (`GREEN_CONFIRMED/REVIEW/NOT_GREEN`), 20 `STILL_ACTIVE` and one `NEW`.
+  The superseded run `3dcb6342-90af-47f6-8701-a18a0f250c29` remains immutable
+  evidence only for the previously incomplete Umantis-only boundary.
 - Schaffhausen run `47f65919-1f5b-4a4d-b4d7-f5d9d2472d45` is
   `SUCCEEDED / HEALTHY / snapshot_complete=true`: one listing plus 18 detail
   requests, `18/18/18/18`, green distribution `0/0/18` and 18 `NEW`.
@@ -78,9 +114,11 @@ practica, so category filtering is neither required nor permitted.
   `8ea56782-5d99-4773-b0c8-cb7086eecee8` are retained as
   `FAILED / DEGRADED / snapshot_complete=false` evidence. Current production
   state is zero endpoints and no adapter.
-- All 80 accepted C-5 observations use publication provenance `MISSING`,
-  preserve empty raw `location_region`, and remain municipality-unresolved.
-  No publication time or workplace geography is inferred from source identity.
+- All 81 accepted C-5 observations use publication provenance `MISSING` and
+  preserve empty raw `location_region`. The court PDF explicitly supplies
+  workplace Glarus, which the governed geography layer resolves exactly; the
+  other 80 remain municipality-unresolved. No publication time or workplace
+  canton is inferred from source identity.
 
 ## Isolation
 
