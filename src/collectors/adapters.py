@@ -25,6 +25,11 @@ from collectors.priority_city_adapters import (
     LuzernProspectiveLegacyAdapter,
     SchaffhausenUmantisLinkedAdapter,
 )
+from collectors.remaining_canton_adapters import (
+    GraubuendenReflineAdapter,
+    SchwyzProspectiveAdapter,
+    SolothurnProspectiveAdapter,
+)
 from collectors.required_canton_adapters import (
     AppenzellAusserrhodenSoliqueAdapter,
     BaselLandschaftProspectiveLegacyAdapter,
@@ -297,6 +302,22 @@ _SOURCE_ADAPTERS: dict[str, PlatformAdapter] = {
     "SRC-OFF-CANTON-AR": AppenzellAusserrhodenSoliqueAdapter(),
     "SRC-OFF-CANTON-ZG": ZugProspectiveLegacyAdapter(),
     "SRC-OFF-CANTON-BL": BaselLandschaftProspectiveLegacyAdapter(),
+    "SRC-OFF-CANTON-GR": GraubuendenReflineAdapter(),
+    "SRC-OFF-CANTON-SO": SolothurnProspectiveAdapter(),
+    "SRC-OFF-CANTON-SZ": SchwyzProspectiveAdapter(),
+}
+
+_BLOCKED_SOURCE_IDS = {
+    "SRC-OFF-CANTON-AI",
+    "SRC-OFF-CANTON-FR",
+    "SRC-OFF-CANTON-GL",
+    "SRC-OFF-CANTON-JU",
+    "SRC-OFF-CANTON-NW",
+    "SRC-OFF-CANTON-OW",
+    "SRC-OFF-CANTON-SH",
+    "SRC-OFF-CANTON-TG",
+    "SRC-OFF-CANTON-UR",
+    "SRC-OFF-CANTON-VS",
 }
 
 
@@ -309,6 +330,10 @@ def get_adapter(source: Source) -> PlatformAdapter:
                 f"verified platform {source_adapter.platform_family!r}"
             )
         return source_adapter
+    if str(source.pk) in _BLOCKED_SOURCE_IDS:
+        raise UnsupportedPlatformError(
+            f"source {source.pk} is explicitly blocked pending governed access review"
+        )
     try:
         return _ADAPTERS[source.platform_family]
     except KeyError as exc:
