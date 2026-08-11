@@ -133,43 +133,183 @@ def ensure_default_endpoints(source: Source) -> None:
             ),
         ),
         "SRC-OFF-CITY-BERN": (
-            ("LANDING", "JOBS_BERN_CH", "www.bern.ch", "https://www.bern.ch/themen/arbeiten-fuer-die-stadt-bern/offene-stellen"),
-            ("API", "JOBS_BERN_CH", "jobs.bern.ch", "https://jobs.bern.ch/public/v1/medium/1840/jobs"),
+            (
+                "LANDING",
+                "JOBS_BERN_CH",
+                "www.bern.ch",
+                "https://www.bern.ch/themen/arbeiten-fuer-die-stadt-bern/offene-stellen",
+            ),
+            (
+                "API",
+                "JOBS_BERN_CH",
+                "jobs.bern.ch",
+                "https://jobs.bern.ch/public/v1/medium/1840/jobs",
+            ),
             ("DETAIL", "JOBS_BERN_CH", "jobs.bern.ch", "https://jobs.bern.ch/offene-stellen/"),
         ),
         "SRC-OFF-CITY-LUZERN": (
-            ("LANDING", "CITY_LUZERN_PORTAL", "jobs.stadtluzern.ch", "https://jobs.stadtluzern.ch/stellen/offene-stellen-stadt-luzern/"),
-            ("LISTING", "CITY_LUZERN_PORTAL", "job.stadtluzern.ch", "https://job.stadtluzern.ch/stellen/stadtluzern/"),
-            ("DETAIL", "CITY_LUZERN_PORTAL", "job.stadtluzern.ch", "https://job.stadtluzern.ch/stellen/stadtluzern/offene-stellen/"),
+            (
+                "LANDING",
+                "CITY_LUZERN_PORTAL",
+                "jobs.stadtluzern.ch",
+                "https://jobs.stadtluzern.ch/stellen/offene-stellen-stadt-luzern/",
+            ),
+            (
+                "LISTING",
+                "CITY_LUZERN_PORTAL",
+                "job.stadtluzern.ch",
+                "https://job.stadtluzern.ch/stellen/stadtluzern/",
+            ),
+            (
+                "DETAIL",
+                "CITY_LUZERN_PORTAL",
+                "job.stadtluzern.ch",
+                "https://job.stadtluzern.ch/stellen/stadtluzern/offene-stellen/",
+            ),
         ),
         "SRC-OFF-CITY-SCHAFFHAUSEN": (
-            ("LANDING", "UMANTIS_LINKED", "jobs.stadt-schaffhausen.ch", "https://jobs.stadt-schaffhausen.ch/freie-stellen/"),
-            ("LISTING", "UMANTIS_LINKED", "jobs.stadt-schaffhausen.ch", "https://jobs.stadt-schaffhausen.ch/freie-stellen/"),
-            ("API", "UMANTIS_LINKED", "jobs.stadt-schaffhausen.ch", "https://jobs.stadt-schaffhausen.ch/wp-json/wp/v2/jobs"),
-            ("DETAIL", "UMANTIS_LINKED", "jobs.stadt-schaffhausen.ch", "https://jobs.stadt-schaffhausen.ch/jobs/"),
+            (
+                "LANDING",
+                "UMANTIS_LINKED",
+                "jobs.stadt-schaffhausen.ch",
+                "https://jobs.stadt-schaffhausen.ch/freie-stellen/",
+            ),
+            (
+                "LISTING",
+                "UMANTIS_LINKED",
+                "jobs.stadt-schaffhausen.ch",
+                "https://jobs.stadt-schaffhausen.ch/freie-stellen/",
+            ),
+            (
+                "API",
+                "UMANTIS_LINKED",
+                "jobs.stadt-schaffhausen.ch",
+                "https://jobs.stadt-schaffhausen.ch/wp-json/wp/v2/jobs",
+            ),
+            (
+                "DETAIL",
+                "UMANTIS_LINKED",
+                "jobs.stadt-schaffhausen.ch",
+                "https://jobs.stadt-schaffhausen.ch/jobs/",
+            ),
         ),
         "SRC-OFF-CANTON-ZH": (
-            ("LANDING", "SOLIQUE_LINKED", "www.zh.ch", "https://www.zh.ch/de/arbeiten-beim-kanton.html"),
-            ("API", "SOLIQUE_LINKED", "live.solique.ch", "https://live.solique.ch/KTZH/de/api/v1/data/"),
-            ("DETAIL", "SOLIQUE_LINKED", "live.solique.ch", "https://live.solique.ch/ktzh/job/details/"),
+            (
+                "LANDING",
+                "SOLIQUE_LINKED",
+                "www.zh.ch",
+                "https://www.zh.ch/de/arbeiten-beim-kanton.html",
+            ),
+            (
+                "API",
+                "SOLIQUE_LINKED",
+                "live.solique.ch",
+                "https://live.solique.ch/KTZH/de/api/v1/data/",
+            ),
+            (
+                "DETAIL",
+                "SOLIQUE_LINKED",
+                "live.solique.ch",
+                "https://live.solique.ch/ktzh/job/details/",
+            ),
         ),
         "SRC-OFF-CANTON-AR": (
-            ("LANDING", "SOLIQUE_EMBEDDED", "ar.ch", "https://ar.ch/verwaltung/departement-finanzen/personalamt/freie-stellen/"),
-            ("API", "SOLIQUE_EMBEDDED", "live.solique.ch", "https://live.solique.ch/kanton-appenzell-ausserrhoden/api/json/"),
-            ("DETAIL", "SOLIQUE_EMBEDDED", "live.solique.ch", "https://live.solique.ch/Microsites/showPublication/"),
+            (
+                "LANDING",
+                "SOLIQUE_EMBEDDED",
+                "ar.ch",
+                "https://ar.ch/verwaltung/departement-finanzen/personalamt/freie-stellen/",
+            ),
+            (
+                "API",
+                "SOLIQUE_EMBEDDED",
+                "live.solique.ch",
+                "https://live.solique.ch/kanton-appenzell-ausserrhoden/api/json/",
+            ),
+            (
+                "DETAIL",
+                "SOLIQUE_EMBEDDED",
+                "live.solique.ch",
+                "https://live.solique.ch/Microsites/showPublication/",
+            ),
         ),
         "SRC-OFF-CANTON-ZG": (
             ("LANDING", "PROSPECTIVE", "zg.ch", "https://zg.ch/de/offene-stellen"),
             ("LISTING", "PROSPECTIVE", "zg.prospective.ch", "https://zg.prospective.ch/"),
             ("LISTING", "PROSPECTIVE", "zg.prospective.ch", "https://zg.prospective.ch/lernende/"),
             ("DETAIL", "PROSPECTIVE", "www.zg.ch", "https://www.zg.ch/jobs/offene-stellen/"),
-            ("DETAIL", "PROSPECTIVE", "www.zg.ch", "https://www.zg.ch/jobs/lernende/offene-stellen/"),
+            (
+                "DETAIL",
+                "PROSPECTIVE",
+                "www.zg.ch",
+                "https://www.zg.ch/jobs/lernende/offene-stellen/",
+            ),
         ),
         "SRC-OFF-CANTON-BL": (
-            ("LANDING", "PROSPECTIVE_UMANTIS_LINKED", "www.baselland.ch", "https://www.baselland.ch/politik-und-behorden/direktionen/finanz-und-kirchendirektion/personalamt/jobs/offene-stellen"),
-            ("LISTING", "PROSPECTIVE_UMANTIS_LINKED", "ohws.prospective.ch", "https://ohws.prospective.ch/public/v1/careercenter/1571/"),
-            ("DETAIL", "PROSPECTIVE_UMANTIS_LINKED", "jobs.baselland.ch", "https://jobs.baselland.ch/offene-stellen/"),
+            (
+                "LANDING",
+                "PROSPECTIVE_UMANTIS_LINKED",
+                "www.baselland.ch",
+                "https://www.baselland.ch/politik-und-behorden/direktionen/finanz-und-kirchendirektion/personalamt/jobs/offene-stellen",
+            ),
+            (
+                "LISTING",
+                "PROSPECTIVE_UMANTIS_LINKED",
+                "ohws.prospective.ch",
+                "https://ohws.prospective.ch/public/v1/careercenter/1571/",
+            ),
+            (
+                "DETAIL",
+                "PROSPECTIVE_UMANTIS_LINKED",
+                "jobs.baselland.ch",
+                "https://jobs.baselland.ch/offene-stellen/",
+            ),
         ),
+        "SRC-OFF-JOBS-ADMIN": (
+            ("LANDING", "FEDERAL_JOB_PORTAL", "jobs.admin.ch", "https://jobs.admin.ch/"),
+            (
+                "API",
+                "FEDERAL_JOB_PORTAL",
+                "ohws.prospective.ch",
+                "https://ohws.prospective.ch/public/v1/medium/1000624/jobs",
+            ),
+            (
+                "DETAIL",
+                "FEDERAL_JOB_PORTAL",
+                "jobs.admin.ch",
+                "https://jobs.admin.ch/offene-stellen/",
+            ),
+        ),
+        "SRC-OFF-CANTON-BS": (
+            (
+                "LANDING",
+                "BS_EMPLOYER_PORTAL",
+                "www.bs.ch",
+                "https://www.bs.ch/themen/arbeit-und-steuern/stellenbesetzung-arbeitslosigkeit/offene-stellen/offene-stellen-beim-kanton-basel-stadt",
+            ),
+            (
+                "LISTING",
+                "BS_EMPLOYER_PORTAL",
+                "stellenmarkt.bs.ch",
+                "https://stellenmarkt.bs.ch/kbs/",
+            ),
+            (
+                "LISTING",
+                "BS_EMPLOYER_PORTAL",
+                "stellenmarkt.bs.ch",
+                "https://stellenmarkt.bs.ch/kbs/lehrstellen/",
+            ),
+            (
+                "DETAIL",
+                "BS_EMPLOYER_PORTAL",
+                "stellenmarkt.bs.ch",
+                "https://stellenmarkt.bs.ch/kbs/job/details/",
+            ),
+        ),
+    }
+    gate_011c2 = str(source.pk) in {
+        "SRC-OFF-JOBS-ADMIN",
+        "SRC-OFF-CANTON-BS",
     }
     gate_011c1 = str(source.pk) in {
         "SRC-OFF-CANTON-ZH",
@@ -183,14 +323,18 @@ def ensure_default_endpoints(source: Source) -> None:
         "SRC-OFF-CITY-SCHAFFHAUSEN",
     }
     decision = (
-        "docs/decisions/0009-gate-011c1-canton-platform-reuse.md"
+        "docs/decisions/0010-gate-011c2-major-required-sources.md"
+        if gate_011c2
+        else "docs/decisions/0009-gate-011c1-canton-platform-reuse.md"
         if gate_011c1
         else "docs/decisions/0008-gate-011b-priority-city-expansion.md"
         if gate_011b
         else "docs/decisions/0003-gate-007-incremental-platform-reuse.md"
     )
     verification = (
-        "GATE-011C-1 live technical reconnaissance"
+        "GATE-011C-2 live technical reconnaissance"
+        if gate_011c2
+        else "GATE-011C-1 live technical reconnaissance"
         if gate_011c1
         else "GATE-011B live technical reconnaissance"
         if gate_011b

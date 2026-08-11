@@ -232,6 +232,7 @@ class SharedCollectionPipeline:
                     evidence={
                         "request_method": request.method.upper(),
                         "form_data": list(request.form_data),
+                        "surface_name": request.context.get("surface_name"),
                     },
                 )
                 if ordinal == 0:
@@ -293,6 +294,8 @@ class SharedCollectionPipeline:
                     evidence={
                         "source_posting_id": current_id,
                         "request_method": detail_request.method.upper(),
+                        "surface_name": detail_request.context.get("surface_name")
+                        or entry.listing_metadata.get("surface_name"),
                     },
                 )
                 run.details_fetched += 1
