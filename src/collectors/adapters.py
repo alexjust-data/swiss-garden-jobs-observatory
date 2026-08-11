@@ -6,6 +6,10 @@ from datetime import date
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
+from collectors.federal_canton_adapters import (
+    BaselStadtSoliqueAdapter,
+    FederalProspectiveAdapter,
+)
 from collectors.platforms import (
     FetchedPage,
     FetchRequest,
@@ -287,6 +291,8 @@ _ADAPTERS: dict[str, PlatformAdapter] = {
 }
 
 _SOURCE_ADAPTERS: dict[str, PlatformAdapter] = {
+    "SRC-OFF-JOBS-ADMIN": FederalProspectiveAdapter(),
+    "SRC-OFF-CANTON-BS": BaselStadtSoliqueAdapter(),
     "SRC-OFF-CANTON-ZH": ZurichCantonSoliqueAdapter(),
     "SRC-OFF-CANTON-AR": AppenzellAusserrhodenSoliqueAdapter(),
     "SRC-OFF-CANTON-ZG": ZugProspectiveLegacyAdapter(),

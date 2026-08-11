@@ -143,6 +143,11 @@ def _organization(posting: dict[str, object]) -> str:
     return _text(organization.get("name")) if isinstance(organization, dict) else ""
 
 
+def _normalized_title(value: str) -> str:
+    quote_equivalents = str.maketrans({"«": '"', "»": '"', "“": '"', "”": '"', "„": '"'})
+    return " ".join(value.translate(quote_equivalents).split()).casefold()
+
+
 def _parsed_from_json_ld(
     *,
     page: FetchedPage,
@@ -159,11 +164,12 @@ def _parsed_from_json_ld(
     except UnicodeDecodeError as exc:
         raise PlatformAdapterError("detail is not UTF-8") from exc
     posting = parser.posting
-    title = _text(posting.get("title")) or entry.title
+    title = re.sub(r"<br\s*/?>", " ", _text(posting.get("title")), flags=re.IGNORECASE)
+    title = " ".join(title.split()) or entry.title
     if not title:
         raise PlatformAdapterError("detail title is missing")
-    normalized_title = " ".join(title.split()).casefold()
-    normalized_listing_title = " ".join(entry.title.split()).casefold()
+    normalized_title = _normalized_title(title)
+    normalized_listing_title = _normalized_title(entry.title)
     if entry.title and not (
         normalized_title == normalized_listing_title
         or normalized_title.startswith(f"{normalized_listing_title} - ")
