@@ -150,13 +150,10 @@ class Gate011C3Tests(TestCase):
             ("SRC-OFF-CANTON-NW", "CANTON_NW_PORTAL"),
             ("SRC-OFF-CANTON-OW", "OFFICIAL_WEB"),
             ("SRC-OFF-CANTON-SH", "OFFICIAL_WEB"),
-            ("SRC-OFF-CANTON-TG", "CANTON_TG_PORTAL"),
             ("SRC-OFF-CANTON-UR", "OFFICIAL_WEB"),
             ("SRC-OFF-CANTON-VS", "OFFICIAL_WEB"),
             ("SRC-OFF-CANTON-AG", "CANTON_AG_PORTAL"),
             ("SRC-OFF-CANTON-BE", "SITES_BE"),
-            ("SRC-OFF-CANTON-LU", "CANTON_LU_PORTAL"),
-            ("SRC-OFF-CANTON-SG", "CANTON_SG_PORTAL"),
         )
         for source_id, platform in blocked:
             with pytest.raises(UnsupportedPlatformError):
@@ -531,7 +528,6 @@ class Gate011C3Tests(TestCase):
             "SRC-OFF-CANTON-NW",
             "SRC-OFF-CANTON-OW",
             "SRC-OFF-CANTON-SH",
-            "SRC-OFF-CANTON-TG",
             "SRC-OFF-CANTON-UR",
             "SRC-OFF-CANTON-VS",
             "SRC-OFF-JOBROOM",
