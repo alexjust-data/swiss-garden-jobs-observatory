@@ -395,6 +395,71 @@ def ensure_default_endpoints(source: Source) -> None:
                 "https://ohws.prospective.ch/public/v1/jobs/",
             ),
         ),
+        "SRC-OFF-CANTON-GL": (
+            (
+                "LANDING",
+                "UMANTIS_LINKED",
+                "www.gl.ch",
+                "https://www.gl.ch/verwaltung/finanzen-und-gesundheit/personal-und-organisation/stellenangebote.html/4705",
+            ),
+            (
+                "LISTING",
+                "UMANTIS_LINKED",
+                "recruitingapp-2910.umantis.com",
+                "https://recruitingapp-2910.umantis.com/Jobs/All",
+            ),
+            (
+                "DETAIL",
+                "UMANTIS_LINKED",
+                "recruitingapp-2910.umantis.com",
+                "https://recruitingapp-2910.umantis.com/Vacancies/",
+            ),
+        ),
+        "SRC-OFF-CANTON-SH": (
+            (
+                "LANDING",
+                "OFFICIAL_WEB",
+                "sh.ch",
+                "https://sh.ch/CMS/Webseite/Kanton-Schaffhausen/Beh-rde/Verwaltung/Finanzdepartement/Personalamt/Stellenangebote-169801-DE.html",
+            ),
+            (
+                "LISTING",
+                "OFFICIAL_WEB",
+                "recruitingapp-2876.umantis.com",
+                "https://recruitingapp-2876.umantis.com/Jobs/1",
+            ),
+            (
+                "DETAIL",
+                "OFFICIAL_WEB",
+                "recruitingapp-2876.umantis.com",
+                "https://recruitingapp-2876.umantis.com/Vacancies/",
+            ),
+        ),
+        "SRC-OFF-CITY-STGALLEN": (
+            (
+                "LANDING",
+                "CITY_SG_PORTAL",
+                "www.stadt.sg.ch",
+                "https://www.stadt.sg.ch/home/verwaltung-politik/arbeiten-fuer-stgallen.html",
+            ),
+            (
+                "API",
+                "CITY_SG_PORTAL",
+                "live.solique.ch",
+                "https://live.solique.ch/STSG/de/api/v1/data/",
+            ),
+            (
+                "DETAIL",
+                "CITY_SG_PORTAL",
+                "live.solique.ch",
+                "https://live.solique.ch/STSG/de/jobs/",
+            ),
+        ),
+    }
+    gate_011c5 = str(source.pk) in {
+        "SRC-OFF-CANTON-GL",
+        "SRC-OFF-CANTON-SH",
+        "SRC-OFF-CITY-STGALLEN",
     }
     gate_011c4 = str(source.pk) in {
         "SRC-OFF-CANTON-LU",
@@ -422,7 +487,9 @@ def ensure_default_endpoints(source: Source) -> None:
         "SRC-OFF-CITY-SCHAFFHAUSEN",
     }
     decision = (
-        "docs/decisions/0012-gate-011c4-blocker-resolution-wave1.md"
+        "docs/decisions/0013-gate-011c5-hard-blocker-resolution-wave2.md"
+        if gate_011c5
+        else "docs/decisions/0012-gate-011c4-blocker-resolution-wave1.md"
         if gate_011c4
         else "docs/decisions/0011-gate-011c3-remaining-required-cantons.md"
         if gate_011c3
@@ -435,7 +502,9 @@ def ensure_default_endpoints(source: Source) -> None:
         else "docs/decisions/0003-gate-007-incremental-platform-reuse.md"
     )
     verification = (
-        "GATE-011C-4 live technical reconnaissance"
+        "GATE-011C-5 live technical reconnaissance"
+        if gate_011c5
+        else "GATE-011C-4 live technical reconnaissance"
         if gate_011c4
         else "GATE-011C-3 live technical reconnaissance"
         if gate_011c3
@@ -453,6 +522,15 @@ def ensure_default_endpoints(source: Source) -> None:
             endpoint_role="LISTING",
             base_url="https://apply.refline.ch/514915/stage.html",
         ).delete()
+    if str(source.pk) in {
+        "SRC-OFF-CANTON-AG",
+        "SRC-OFF-CANTON-BE",
+        "SRC-OFF-CANTON-FR",
+        "SRC-OFF-CANTON-OW",
+        "SRC-OFF-CANTON-UR",
+        "SRC-OFF-CANTON-VS",
+    }:
+        SourceEndpoint.objects.filter(source=source).delete()
     for role, family, host, base_url in definitions.get(str(source.pk), ()):
         endpoint, _ = SourceEndpoint.objects.get_or_create(
             source=source,

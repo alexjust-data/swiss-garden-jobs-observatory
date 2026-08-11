@@ -16,7 +16,6 @@ from collectors.platforms import (
     ListingEntry,
     ParsedSourcePosting,
     PlatformAdapterError,
-    UnsupportedPlatformError,
 )
 from collectors.priority_city_adapters import (
     BERN_API,
@@ -424,12 +423,19 @@ class Gate011BTests(TestCase):
             )
         assert not SourceEndpoint.objects.filter(host="recruitingapp-2808.umantis.com").exists()
 
-    def test_stgallen_is_blocked_without_adapter_or_endpoint_authorization(self) -> None:
+    def test_stgallen_later_gate_promotion_is_exact_source_governed(self) -> None:
         registered = make_source("SRC-OFF-CITY-STGALLEN", "CITY_SG_PORTAL", "stadt.sg.ch")
         ensure_default_endpoints(registered)
-        with pytest.raises(UnsupportedPlatformError):
-            get_adapter(registered)
-        assert not SourceEndpoint.objects.filter(source=registered).exists()
+        assert type(get_adapter(registered)).__name__ == "StGallenCitySoliqueAdapter"
+        endpoints = SourceEndpoint.objects.filter(source=registered)
+        assert set(endpoints.values_list("host", flat=True)) == {
+            "www.stadt.sg.ch",
+            "live.solique.ch",
+        }
+        assert all(
+            endpoint.evidence["verification"] == "GATE-011C-5 live technical reconnaissance"
+            for endpoint in endpoints
+        )
 
     def test_missing_acknowledgement_blocks_before_network(self) -> None:
         registered = make_source("SRC-OFF-CITY-BERN", "JOBS_BERN_CH", "bern.ch")

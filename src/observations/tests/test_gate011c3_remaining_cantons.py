@@ -145,11 +145,9 @@ class Gate011C3Tests(TestCase):
         blocked = (
             ("SRC-OFF-CANTON-AI", "OFFICIAL_WEB"),
             ("SRC-OFF-CANTON-FR", "FR_MIGRATION_PORTAL"),
-            ("SRC-OFF-CANTON-GL", "UMANTIS_LINKED"),
             ("SRC-OFF-CANTON-JU", "OFFICIAL_WEB"),
             ("SRC-OFF-CANTON-NW", "CANTON_NW_PORTAL"),
             ("SRC-OFF-CANTON-OW", "OFFICIAL_WEB"),
-            ("SRC-OFF-CANTON-SH", "OFFICIAL_WEB"),
             ("SRC-OFF-CANTON-UR", "OFFICIAL_WEB"),
             ("SRC-OFF-CANTON-VS", "OFFICIAL_WEB"),
             ("SRC-OFF-CANTON-AG", "CANTON_AG_PORTAL"),

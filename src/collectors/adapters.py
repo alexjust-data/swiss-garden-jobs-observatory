@@ -15,6 +15,11 @@ from collectors.federal_canton_adapters import (
     BaselStadtSoliqueAdapter,
     FederalProspectiveAdapter,
 )
+from collectors.hard_blocker_adapters import (
+    GlarusUmantisAdapter,
+    SchaffhausenCantonUmantisAdapter,
+    StGallenCitySoliqueAdapter,
+)
 from collectors.platforms import (
     FetchedPage,
     FetchRequest,
@@ -313,16 +318,19 @@ _SOURCE_ADAPTERS: dict[str, PlatformAdapter] = {
     "SRC-OFF-CANTON-LU": LuzernCantonReflineAdapter(),
     "SRC-OFF-CANTON-SG": StGallenCantonUmantisAdapter(),
     "SRC-OFF-CANTON-TG": ThurgauCantonProspectiveAdapter(),
+    "SRC-OFF-CANTON-GL": GlarusUmantisAdapter(),
+    "SRC-OFF-CANTON-SH": SchaffhausenCantonUmantisAdapter(),
+    "SRC-OFF-CITY-STGALLEN": StGallenCitySoliqueAdapter(),
 }
 
 _BLOCKED_SOURCE_IDS = {
     "SRC-OFF-CANTON-AI",
+    "SRC-OFF-CANTON-AG",
+    "SRC-OFF-CANTON-BE",
     "SRC-OFF-CANTON-FR",
-    "SRC-OFF-CANTON-GL",
     "SRC-OFF-CANTON-JU",
     "SRC-OFF-CANTON-NW",
     "SRC-OFF-CANTON-OW",
-    "SRC-OFF-CANTON-SH",
     "SRC-OFF-CANTON-UR",
     "SRC-OFF-CANTON-VS",
 }
