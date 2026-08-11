@@ -332,6 +332,74 @@ def ensure_default_endpoints(source: Source) -> None:
             ("LISTING", "CANTON_SZ_PORTAL", "jobs.sz.ch", "https://jobs.sz.ch/"),
             ("DETAIL", "CANTON_SZ_PORTAL", "jobs.sz.ch", "https://jobs.sz.ch/offene-stellen/"),
         ),
+        "SRC-OFF-CANTON-LU": (
+            ("LANDING", "CANTON_LU_PORTAL", "stellen.lu.ch", "https://stellen.lu.ch/"),
+            (
+                "LISTING",
+                "CANTON_LU_PORTAL",
+                "apply.refline.ch",
+                "https://apply.refline.ch/891537/positions_verwaltung.html",
+            ),
+            (
+                "LISTING",
+                "CANTON_LU_PORTAL",
+                "apply.refline.ch",
+                "https://apply.refline.ch/891537/positions_lehrpersonen.html",
+            ),
+            (
+                "API",
+                "CANTON_LU_PORTAL",
+                "lehre.lu",
+                "https://lehre.lu/api/web/jobs",
+            ),
+            (
+                "DETAIL",
+                "CANTON_LU_PORTAL",
+                "lehre.lu",
+                "https://lehre.lu/map/",
+            ),
+            (
+                "DETAIL",
+                "CANTON_LU_PORTAL",
+                "apply.refline.ch",
+                "https://apply.refline.ch/891537/",
+            ),
+        ),
+        "SRC-OFF-CANTON-SG": (
+            (
+                "LANDING",
+                "CANTON_SG_PORTAL",
+                "www.sg.ch",
+                "https://www.sg.ch/ueber-den-kanton-st-gallen/arbeitgeber-kanton-stgallen/stellenportal.html",
+            ),
+            (
+                "LISTING",
+                "CANTON_SG_PORTAL",
+                "recruitingapp-2800.umantis.com",
+                "https://recruitingapp-2800.umantis.com/Jobs/All",
+            ),
+            (
+                "DETAIL",
+                "CANTON_SG_PORTAL",
+                "recruitingapp-2800.umantis.com",
+                "https://recruitingapp-2800.umantis.com/Vacancies/",
+            ),
+        ),
+        "SRC-OFF-CANTON-TG": (
+            ("LANDING", "CANTON_TG_PORTAL", "stellen.tg.ch", "https://stellen.tg.ch/"),
+            ("LISTING", "CANTON_TG_PORTAL", "stellen.tg.ch", "https://stellen.tg.ch/"),
+            (
+                "DETAIL",
+                "CANTON_TG_PORTAL",
+                "ohws.prospective.ch",
+                "https://ohws.prospective.ch/public/v1/jobs/",
+            ),
+        ),
+    }
+    gate_011c4 = str(source.pk) in {
+        "SRC-OFF-CANTON-LU",
+        "SRC-OFF-CANTON-SG",
+        "SRC-OFF-CANTON-TG",
     }
     gate_011c3 = str(source.pk) in {
         "SRC-OFF-CANTON-GR",
@@ -354,7 +422,9 @@ def ensure_default_endpoints(source: Source) -> None:
         "SRC-OFF-CITY-SCHAFFHAUSEN",
     }
     decision = (
-        "docs/decisions/0011-gate-011c3-remaining-required-cantons.md"
+        "docs/decisions/0012-gate-011c4-blocker-resolution-wave1.md"
+        if gate_011c4
+        else "docs/decisions/0011-gate-011c3-remaining-required-cantons.md"
         if gate_011c3
         else "docs/decisions/0010-gate-011c2-major-required-sources.md"
         if gate_011c2
@@ -365,7 +435,9 @@ def ensure_default_endpoints(source: Source) -> None:
         else "docs/decisions/0003-gate-007-incremental-platform-reuse.md"
     )
     verification = (
-        "GATE-011C-3 live technical reconnaissance"
+        "GATE-011C-4 live technical reconnaissance"
+        if gate_011c4
+        else "GATE-011C-3 live technical reconnaissance"
         if gate_011c3
         else "GATE-011C-2 live technical reconnaissance"
         if gate_011c2

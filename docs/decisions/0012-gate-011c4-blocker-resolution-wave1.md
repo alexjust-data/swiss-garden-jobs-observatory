@@ -1,0 +1,66 @@
+# ADR 0012: GATE-011C-4 blocker resolution wave 1
+
+- Status: Accepted for implementation
+- Date: 2026-08-11
+- Baseline: `81c4c98cce9789fb2b8d4130b8d1e9ae5d7c0a86`
+
+## Decision
+
+GATE-011C-4 re-evaluates exactly AI, LU, SG canton, JU, NW and TG. Every material official careers surface is classified before implementation as `VACANCY_SOURCE_SURFACE`, `NON_VACANCY_SOURCE_SURFACE`, `SEPARATE_EMPLOYER_SOURCE` or `UNRESOLVED`.
+
+The frozen unit of truth remains the underlying employment opportunity. A real job, apprenticeship, internship or teacher opening may be a vacancy. A profession profile, annual cohort statement, standing candidate pool, orientation experience or generic careers page is not promoted merely because it is visible on an employer portal or green-related.
+
+Phase A establishes these terminal results:
+
+- LU, SG canton and TG: `ACCEPTED_IMPLEMENTED`.
+- AI, JU and NW: `ACCEPTED_BLOCKED`.
+
+LU's complete vacancy universe has three mandatory surfaces: administration Refline,
+cantonal-school/teacher Refline, and the mixed `lehre.lu` apprenticeship API. The
+apprenticeship host is not globally non-vacancy. A profile is admitted only while the
+complete feed marks it `free=true` and its detail exposes a tenant-891537 Refline
+application action. Its source-native Posting identity is
+`lehre:<profile_id>`; `https://lehre.lu/map/<profile_id>` is the corroborating
+canonical source URL, and the Refline application code is retained as active-opportunity
+evidence. Inactive profiles and Schnupper/orientation content are not promoted.
+Reopening the same profile preserves Posting/Vacancy identity and creates the next
+VacancyEpisode under the existing frozen recurrence semantics.
+
+The apprenticeship API publishes location title, city and postal code but no governed
+canton field. Therefore raw `location_region` remains empty. No canton is inferred from
+the Source identity, employer name or host; municipality/canton resolution remains
+downstream governed geography.
+
+SG canton's official Umantis search is one unified actual-vacancy surface. Its governed employer set contains ordinary, teacher, apprenticeship, practicum and entry-role publications with stable numeric IDs. Informational training pages and orientation offerings are non-vacancy. Stadt St. Gallen remains a separate blocked Source.
+
+TG's Govis listing mixes cantonal vacancies with an explicit `Externe Institutionen` category. The complete direct-employer source is proven by exhausting both the unified listing and category 28, then excluding category-28 UUIDs before detail and Posting promotion. Learner occupation profiles and generic practica information are non-vacancy surfaces.
+
+AI remains blocked because the required Abacus tenant contract is not publicly inspectable and cohort availability rows do not provide proven publication identity. JU remains blocked because mandatory teaching/other category empty and employer-boundary semantics are incomplete. NW remains blocked because training availability is not exposed as stable vacancy-level publications. These sources receive no adapter, endpoint or authoritative run.
+
+## Architecture and completeness
+
+Adapters only translate source evidence. `SharedCollectionPipeline` remains sole authority for governed HTTP, immutable RAW/SHA evidence, identity reconciliation, append-only observations, green classification, lifecycle, health and FULL_SOURCE promotion.
+
+Adapter authorization remains exact-source plus verified platform. LU uses one exact
+multi-contract adapter for Refline and the official server-readable Nuxt JSON API, SG an
+exact Umantis adapter, and TG an exact Govis/Prospective boundary adapter. Vendor
+similarity cannot activate another Source.
+
+Every required surface must finish. Repeated native ID plus one canonical detail collapses; a conflicting detail fails closed. A malformed or unavailable mandatory surface yields an incomplete/failed run and no negative lifecycle evidence. A healthy complete zero-posting source is valid.
+
+Only actual vacancy acquisition origins receive production endpoints. Non-vacancy and separate-employer URLs remain documented evidence, not listing seeds. Production acquisition remains governed GET/POST; browser automation is not introduced.
+
+## Unchanged contracts and consequences
+
+Publication, update and first-seen timestamps remain distinct. Profile update timestamps are not vacancy publication dates. Municipality derives only from source-published workplace evidence. Green relevance and dedup remain downstream and unchanged.
+
+The closed GATE-008 regression
+`src/vacancies/tests/test_gate008.py::Gate008Tests::test_same_posting_reappearance_creates_one_new_episode`
+proves stable Posting identity through healthy absence, `CLOSED_OBSERVED`, reappearance,
+the same Vacancy, Episode 2 and exactly one `REAPPEARED` event.
+
+Graubünden `stage.html` remains a `NON_VACANCY_SOURCE_SURFACE`: Schnupperlehre is not requested or promoted. AG, BE, FR, GL, OW, SH, UR, VS, Stadt St. Gallen, Job-Room and Job-Room API are outside this gate.
+
+GATE-008, GATE-009, GATE-010, GATE-011A, GATE-011B and GATE-011C-1/2/3 semantics are unchanged. Frozen research is unchanged.
+
+Day-0 remains unauthorized. Coverage is diagnostic only. Threshold and freshness policies remain `PENDING`.

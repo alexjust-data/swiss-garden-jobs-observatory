@@ -6,6 +6,11 @@ from datetime import date
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
+from collectors.blocker_resolution_adapters import (
+    LuzernCantonReflineAdapter,
+    StGallenCantonUmantisAdapter,
+    ThurgauCantonProspectiveAdapter,
+)
 from collectors.federal_canton_adapters import (
     BaselStadtSoliqueAdapter,
     FederalProspectiveAdapter,
@@ -305,6 +310,9 @@ _SOURCE_ADAPTERS: dict[str, PlatformAdapter] = {
     "SRC-OFF-CANTON-GR": GraubuendenReflineAdapter(),
     "SRC-OFF-CANTON-SO": SolothurnProspectiveAdapter(),
     "SRC-OFF-CANTON-SZ": SchwyzProspectiveAdapter(),
+    "SRC-OFF-CANTON-LU": LuzernCantonReflineAdapter(),
+    "SRC-OFF-CANTON-SG": StGallenCantonUmantisAdapter(),
+    "SRC-OFF-CANTON-TG": ThurgauCantonProspectiveAdapter(),
 }
 
 _BLOCKED_SOURCE_IDS = {
@@ -315,7 +323,6 @@ _BLOCKED_SOURCE_IDS = {
     "SRC-OFF-CANTON-NW",
     "SRC-OFF-CANTON-OW",
     "SRC-OFF-CANTON-SH",
-    "SRC-OFF-CANTON-TG",
     "SRC-OFF-CANTON-UR",
     "SRC-OFF-CANTON-VS",
 }

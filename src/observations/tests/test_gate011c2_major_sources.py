@@ -154,8 +154,6 @@ class Gate011C2Tests(TestCase):
         for source_id, platform in (
             ("SRC-OFF-CANTON-AG", "CANTON_AG_PORTAL"),
             ("SRC-OFF-CANTON-BE", "SITES_BE"),
-            ("SRC-OFF-CANTON-LU", "CANTON_LU_PORTAL"),
-            ("SRC-OFF-CANTON-SG", "CANTON_SG_PORTAL"),
         ):
             with pytest.raises(UnsupportedPlatformError):
                 get_adapter(Source(source_id=source_id, platform_family=platform))
@@ -549,7 +547,5 @@ class Gate011C2Tests(TestCase):
         for blocked_id in (
             "SRC-OFF-CANTON-AG",
             "SRC-OFF-CANTON-BE",
-            "SRC-OFF-CANTON-LU",
-            "SRC-OFF-CANTON-SG",
         ):
             assert not SourceEndpoint.objects.filter(source_id=blocked_id).exists()
