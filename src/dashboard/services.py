@@ -181,12 +181,11 @@ class RecordPlan:
 
 
 def _visibility(assessment: PremiumSegmentAssessment) -> str:
-    green = assessment.green_relevance_assessment
-    if green is None:
+    if assessment.effective_green_result == "MISSING":
         return cast(str, DashboardVacancyRecord.VisibilityStatus.MISSING_GREEN_ASSESSMENT)
-    if green.result == GreenRelevanceAssessment.Result.GREEN_CONFIRMED:
+    if assessment.effective_green_result == GreenRelevanceAssessment.Result.GREEN_CONFIRMED:
         return cast(str, DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED)
-    if green.result == GreenRelevanceAssessment.Result.NOT_GREEN:
+    if assessment.effective_green_result == GreenRelevanceAssessment.Result.NOT_GREEN:
         return cast(str, DashboardVacancyRecord.VisibilityStatus.EXCLUDED_NOT_GREEN)
     return cast(str, DashboardVacancyRecord.VisibilityStatus.REVIEW_NOT_PUBLIC)
 
@@ -275,6 +274,7 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
         for item in PremiumSegmentAssessment.objects.filter(run=premium_run).select_related(
             "posting_observation__source",
             "green_relevance_assessment",
+            "green_review_decision",
         )
     }
     plans: list[RecordPlan] = []
@@ -375,6 +375,8 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
                     "state_id": str(state.pk),
                     "observation_id": str(observation.pk),
                     "green_assessment_id": str(assessment.green_relevance_assessment_id or ""),
+                    "effective_green_result": assessment.effective_green_result,
+                    "green_review_decision_id": str(assessment.green_review_decision_id or ""),
                     "premium_assessment_id": str(assessment.pk),
                     "location_resolution_id": str(resolution.pk) if resolution else None,
                     "location_available_at": (

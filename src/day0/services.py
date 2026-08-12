@@ -155,9 +155,7 @@ def ensure_authorization_policy() -> Day0AuthorizationPolicy:
             "boundary": "inclusive",
             "clock": "wall_clock",
             "selected_run": "latest_causally_available_HEALTHY_complete_FULL_SOURCE",
-            "later_failed_activity": (
-                "preserves accepted evidence but invalidates current health"
-            ),
+            "later_failed_activity": ("preserves accepted evidence but invalidates current health"),
         },
         "market_semantics": (
             "Observed active GREEN_CONFIRMED vacancies in fresh, healthy, complete "
@@ -328,9 +326,7 @@ def _source_plan(
             if entry.classification == "BLOCKED_PENDING_ACCESS_REVIEW"
             else ""
         )
-    terminal_disposition = (
-        "ACCEPTED_BLOCKED" if blocker_classification else "ACCEPTED_IMPLEMENTED"
-    )
+    terminal_disposition = "ACCEPTED_BLOCKED" if blocker_classification else "ACCEPTED_IMPLEMENTED"
     if terminal_disposition == "ACCEPTED_BLOCKED":
         full = None
     complete = terminal_disposition == "ACCEPTED_IMPLEMENTED" and _structurally_complete(full)
@@ -457,7 +453,7 @@ def _review_evidence(
     )
     assessments = list(
         PremiumSegmentAssessment.objects.filter(run=premium_run).select_related(
-            "green_relevance_assessment", "posting_observation"
+            "green_relevance_assessment", "green_review_decision", "posting_observation"
         )
     )
     observation_by_posting = {
@@ -472,16 +468,13 @@ def _review_evidence(
         if assignment.posting_id in observation_by_posting
     }
     green_by_observation = {
-        row.posting_observation_id: (
-            row.green_relevance_assessment.result if row.green_relevance_assessment_id else None
-        )
-        for row in assessments
+        row.posting_observation_id: row.effective_green_result for row in assessments
     }
     green_reviews = [
         str(row.green_relevance_assessment_id)
         for row in assessments
         if row.green_relevance_assessment_id
-        and row.green_relevance_assessment.result == "REVIEW"
+        and row.effective_green_result == "REVIEW"
         and str(row.posting_observation.source_id) in eligible_source_ids
         and row.posting_observation_id in active_canonical_observation_ids
     ]
@@ -496,7 +489,7 @@ def _review_evidence(
         )
         for row in assessments
         if row.green_relevance_assessment_id
-        and row.green_relevance_assessment.result == "REVIEW"
+        and row.effective_green_result == "REVIEW"
         and (
             str(row.posting_observation.source_id) not in eligible_source_ids
             or row.posting_observation_id not in active_canonical_observation_ids
@@ -689,16 +682,13 @@ def assess_day0_readiness(
         )
     stratum_minima = policy.configuration.get("stratum_minima", {})
     eligible_by_stratum = {
-        stratum: sum(plan.stratum == stratum for plan in authorized)
-        for stratum in stratum_minima
+        stratum: sum(plan.stratum == stratum for plan in authorized) for stratum in stratum_minima
     }
     required_by_stratum = {
-        stratum: sum(plan.stratum == stratum for plan in required)
-        for stratum in stratum_minima
+        stratum: sum(plan.stratum == stratum for plan in required) for stratum in stratum_minima
     }
     structural_coverage_pass = all(
-        eligible_by_stratum[stratum] >= minimum
-        for stratum, minimum in stratum_minima.items()
+        eligible_by_stratum[stratum] >= minimum for stratum, minimum in stratum_minima.items()
     )
     blocked_supporting = [
         plan for plan in supporting if plan.entry.access_status == "BLOCKED_PENDING_ACCESS_REVIEW"
@@ -757,9 +747,7 @@ def assess_day0_readiness(
             "eligible_source_ids": sorted(eligible_source_ids),
             "canonicalization_rule": "CANONICAL_OBSERVATION_SOURCE_MUST_BE_ELIGIBLE",
             "green_confirmed_count": len(market),
-            "active_unique_vacancies": sum(
-                row.vacancy_status == "ACTIVE" for row in market
-            ),
+            "active_unique_vacancies": sum(row.vacancy_status == "ACTIVE" for row in market),
             "known_positions_total": sum(row.positions_count or 0 for row in known),
             "unknown_position_vacancy_count": len(market) - len(known),
             "multi_hire_possible_count": sum(bool(row.multi_hire_possible) for row in market),
@@ -887,8 +875,7 @@ def assess_day0_readiness(
     if not governed_disposition_complete:
         blockers.append({"code": "GOVERNED_DISPOSITION_INCOMPLETE"})
     if policy.required_completion_threshold is not None and (
-        Decimal(len(authorized)) / Decimal(len(required))
-        < policy.required_completion_threshold
+        Decimal(len(authorized)) / Decimal(len(required)) < policy.required_completion_threshold
     ):
         blockers.append(
             {

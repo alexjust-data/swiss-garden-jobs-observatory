@@ -215,6 +215,23 @@ class PremiumSegmentAssessment(AppendOnlyPremiumEvidence):
         blank=True,
         related_name="premium_segment_assessments",
     )
+    green_review_decision = models.ForeignKey(
+        "observations.GreenRelevanceReviewDecision",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="premium_segment_assessments",
+    )
+    effective_green_result = models.CharField(
+        max_length=20,
+        choices=[
+            ("GREEN_CONFIRMED", "Green confirmed"),
+            ("REVIEW", "Review"),
+            ("NOT_GREEN", "Not green"),
+            ("MISSING", "Missing"),
+        ],
+        default="MISSING",
+    )
     employer_profile_evidence = models.ForeignKey(
         EmployerProfileEvidence,
         on_delete=models.PROTECT,
@@ -281,14 +298,41 @@ class PremiumSegmentAssessment(AppendOnlyPremiumEvidence):
 
     def clean(self) -> None:
         super().clean()
+        errors: dict[str, str] = {}
         if (
             self.green_relevance_assessment is not None
             and self.green_relevance_assessment.posting_observation.pk
             != self.posting_observation.pk
         ):
-            raise ValidationError(
-                {"green_relevance_assessment": "green assessment belongs to another observation"}
-            )
+            errors["green_relevance_assessment"] = "green assessment belongs to another observation"
+        assessment = self.green_relevance_assessment
+        decision = self.green_review_decision
+        if assessment is None:
+            expected = "MISSING"
+            if decision is not None:
+                errors["green_review_decision"] = "decision requires a pinned green assessment"
+        elif assessment.result != "REVIEW":
+            expected = str(assessment.result)
+            if decision is not None:
+                errors["green_review_decision"] = "non-REVIEW assessments cannot have decisions"
+        elif decision is None:
+            expected = "REVIEW"
+        else:
+            if decision.assessment_id != assessment.pk:
+                errors["green_review_decision"] = "decision belongs to another assessment"
+            expected = {
+                "CONFIRMED_GREEN": "GREEN_CONFIRMED",
+                "CONFIRMED_NOT_GREEN": "NOT_GREEN",
+                "INSUFFICIENT_EVIDENCE": "REVIEW",
+            }[decision.outcome]
+            if decision.reviewed_at > self.run.as_of or decision.created_at > self.run.as_of:
+                errors["green_review_decision"] = "decision was not causally available at run as_of"
+        if not self.effective_green_result:
+            self.effective_green_result = expected
+        elif self.effective_green_result != expected:
+            errors["effective_green_result"] = f"expected {expected} from pinned green evidence"
+        if errors:
+            raise ValidationError(errors)
 
 
 class PremiumSegmentAssessmentEmployerEvidence(AppendOnlyPremiumEvidence):

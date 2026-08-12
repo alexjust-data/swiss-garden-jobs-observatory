@@ -16,6 +16,10 @@ class ImmutableGreenRelevanceAssessmentError(RuntimeError):
     pass
 
 
+class ImmutableGreenRelevanceReviewDecisionError(RuntimeError):
+    pass
+
+
 class ImmutablePostingLifecycleEventError(RuntimeError):
     pass
 
@@ -96,6 +100,33 @@ class GreenRelevanceAssessmentManager(models.Manager["GreenRelevanceAssessment"]
     def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
         raise ImmutableGreenRelevanceAssessmentError(
             "GreenRelevanceAssessment bulk updates are forbidden"
+        )
+
+
+class GreenRelevanceReviewDecisionQuerySet(models.QuerySet["GreenRelevanceReviewDecision"]):
+    def update(self, **kwargs: Any) -> int:
+        raise ImmutableGreenRelevanceReviewDecisionError(
+            "GreenRelevanceReviewDecision queryset updates are forbidden"
+        )
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise ImmutableGreenRelevanceReviewDecisionError(
+            "GreenRelevanceReviewDecision queryset deletion is forbidden"
+        )
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutableGreenRelevanceReviewDecisionError(
+            "GreenRelevanceReviewDecision bulk updates are forbidden"
+        )
+
+
+class GreenRelevanceReviewDecisionManager(models.Manager["GreenRelevanceReviewDecision"]):
+    def get_queryset(self) -> GreenRelevanceReviewDecisionQuerySet:
+        return GreenRelevanceReviewDecisionQuerySet(self.model, using=self._db)
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutableGreenRelevanceReviewDecisionError(
+            "GreenRelevanceReviewDecision bulk updates are forbidden"
         )
 
 
@@ -391,6 +422,112 @@ class GreenRelevanceAssessment(models.Model):
 
     def __str__(self) -> str:
         return f"{self.posting_observation.pk}:{self.classifier_version}"
+
+
+class GreenRelevanceReviewDecision(models.Model):
+    REQUIRED_EVIDENCE_FIELDS = frozenset(
+        {
+            "posting_observation_id",
+            "green_relevance_assessment_id",
+            "source_id",
+            "source_native_id",
+            "original_classifier_result",
+            "raw_payload_sha256",
+            "reviewed_surfaces",
+            "evidence_basis",
+        }
+    )
+
+    class Outcome(models.TextChoices):
+        CONFIRMED_GREEN = "CONFIRMED_GREEN", "Confirmed green"
+        CONFIRMED_NOT_GREEN = "CONFIRMED_NOT_GREEN", "Confirmed not green"
+        INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE", "Insufficient evidence"
+
+    objects = GreenRelevanceReviewDecisionManager()
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assessment = models.ForeignKey(
+        GreenRelevanceAssessment,
+        on_delete=models.PROTECT,
+        related_name="review_decisions",
+    )
+    outcome = models.CharField(max_length=30, choices=Outcome)
+    reason_code = models.CharField(max_length=80)
+    reason = models.TextField()
+    evidence = models.JSONField(default=dict)
+    governance_version = models.CharField(max_length=80)
+    reviewed_at = models.DateTimeField()
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "green_relevance_review_decision"
+        ordering = ["reviewed_at", "created_at", "pk"]
+        indexes = [
+            models.Index(fields=["assessment", "reviewed_at", "created_at"]),
+            models.Index(fields=["governance_version", "outcome"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["assessment", "governance_version"],
+                name="green_review_decision_assessment_version_unique",
+            )
+        ]
+
+    def clean(self) -> None:
+        super().clean()
+        errors: dict[str, str] = {}
+        if self.assessment.pk and self.assessment.result != GreenRelevanceAssessment.Result.REVIEW:
+            errors["assessment"] = "only REVIEW assessments may be adjudicated"
+        if self.reviewed_at and self.created_at and self.reviewed_at > self.created_at:
+            errors["reviewed_at"] = "reviewed_at cannot be later than evidence availability"
+        if not self.reason_code.strip():
+            errors["reason_code"] = "reason code is required"
+        if not self.reason.strip():
+            errors["reason"] = "reason is required"
+        missing = self.REQUIRED_EVIDENCE_FIELDS - set(self.evidence)
+        if missing:
+            errors["evidence"] = "missing required provenance: " + ", ".join(sorted(missing))
+        elif self.assessment.pk:
+            observation = self.assessment.posting_observation
+            expected = {
+                "posting_observation_id": str(observation.pk),
+                "green_relevance_assessment_id": str(self.assessment.pk),
+                "source_id": observation.source.source_id,
+                "source_native_id": observation.source_posting_id,
+                "original_classifier_result": GreenRelevanceAssessment.Result.REVIEW,
+                "raw_payload_sha256": observation.raw_artifact.sha256_digest,
+            }
+            mismatched = [key for key, value in expected.items() if self.evidence.get(key) != value]
+            if mismatched:
+                errors["evidence"] = "provenance does not match pinned evidence: " + ", ".join(
+                    mismatched
+                )
+            surfaces = self.evidence.get("reviewed_surfaces")
+            if (
+                not isinstance(surfaces, list)
+                or not surfaces
+                or not all(isinstance(value, str) and value.strip() for value in surfaces)
+            ):
+                errors["evidence"] = "reviewed_surfaces must be a non-empty list of labels"
+            basis = self.evidence.get("evidence_basis")
+            if not isinstance(basis, str) or not basis.strip():
+                errors["evidence"] = "evidence_basis must be a non-empty bounded summary"
+        if errors:
+            from django.core.exceptions import ValidationError
+
+            raise ValidationError(errors)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ImmutableGreenRelevanceReviewDecisionError(
+                "GreenRelevanceReviewDecision is append-only"
+            )
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ImmutableGreenRelevanceReviewDecisionError(
+            "GreenRelevanceReviewDecision cannot be deleted"
+        )
 
 
 class PostingLifecycleEvent(models.Model):

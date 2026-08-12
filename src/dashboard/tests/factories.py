@@ -224,6 +224,7 @@ def create_dashboard_upstream(
         run=premium_run,
         posting_observation=observation,
         green_relevance_assessment=green,
+        effective_green_result=green_result,
         segment=premium_segment,
         assessment_status=premium_status,
         method="FIXTURE",
