@@ -6,9 +6,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
-from django.db.models import OuterRef, Subquery
-
-from observations.models import Posting, PostingLifecycleEvent, PostingObservation
+from observations.models import Posting, PostingLifecycleEvent
+from observations.pit_selection import select_posting_states
 
 from .normalizer import (
     DEDUP_VERSION,
@@ -89,20 +88,10 @@ def _lifecycle_evidence(posting: Posting, as_of: datetime) -> tuple[dict[str, st
 
 
 def select_posting_evidence(as_of: datetime) -> list[PostingEvidence]:
-    latest_observation = PostingObservation.objects.filter(
-        posting_id=OuterRef("pk"),
-        observed_at__lte=as_of,
-        observation_status="ACTIVE",
-    ).order_by("-observed_at", "-pk")
-    postings = (
-        Posting.objects.filter(first_seen_at__lte=as_of)
-        .annotate(eligible_observation_id=Subquery(latest_observation.values("id")[:1]))
-        .exclude(eligible_observation_id=None)
-    )
     result: list[PostingEvidence] = []
-    for posting in postings.select_related("source"):
-        eligible_observation_id = getattr(posting, "eligible_observation_id")
-        observation = PostingObservation.objects.get(pk=eligible_observation_id)
+    for state in select_posting_states(as_of):
+        posting = state.posting
+        observation = state.observation
         lifecycle_events = _lifecycle_evidence(posting, as_of)
         structured = observation.structured_payload or {}
         contract = observation.contract_payload or {}

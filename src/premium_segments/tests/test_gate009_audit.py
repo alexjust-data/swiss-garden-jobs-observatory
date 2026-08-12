@@ -460,10 +460,16 @@ class PremiumPITAndIdentityAuditTests(TestCase):
         run_t2, _ = run_classification(t2)
         run_t1, _ = run_classification(t1)
         assert run_t4.observations_considered == 1
-        assert run_t3.observations_considered == 0
-        assert run_t2.observations_considered == 0
+        assert run_t3.observations_considered == 1
+        assert run_t2.observations_considered == 1
         assert run_t1.observations_considered == 1
         assert PremiumSegmentAssessment.objects.get(run=run_t4).posting_observation == reappeared
+        pending = PremiumSegmentAssessment.objects.get(run=run_t2)
+        closed = PremiumSegmentAssessment.objects.get(run=run_t3)
+        assert pending.posting_observation == first
+        assert pending.evidence["lifecycle_state"] == "DISAPPEARED_PENDING"
+        assert closed.posting_observation == first
+        assert closed.evidence["lifecycle_state"] == "CLOSED_OBSERVED"
         assert PremiumSegmentAssessment.objects.get(run=run_t1).posting_observation == first
         t1_snapshot = tuple(
             PremiumSegmentAssessment.objects.filter(run=run_t1).values_list(

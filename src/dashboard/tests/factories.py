@@ -15,6 +15,7 @@ from observations.models import (
     PostingLocationResolution,
     PostingObservation,
 )
+from observations.pit_selection import PIT_SELECTION_VERSION
 from premium_segments.classifier import (
     CLASSIFIER_VERSION,
     GREEN_CLASSIFIER_VERSION,
@@ -52,6 +53,8 @@ def create_dashboard_upstream(
     canonical_url_status: str = "CANONICAL",
     suffix: str = "1",
     as_of: Any = None,
+    vacancy_status: str = "ACTIVE",
+    premium_pit_selection_version: str | None = PIT_SELECTION_VERSION,
 ) -> dict[str, Any]:
     as_of = as_of or timezone.now()
     observed_at = as_of - timedelta(hours=1)
@@ -98,6 +101,15 @@ def create_dashboard_upstream(
     )
     contract = {
         "schema_version": "1.2",
+        "source_id": str(source.pk),
+        "source_native_id": posting.source_posting_id,
+        "observed_at": observed_at.isoformat(),
+        "observation_status": "ACTIVE",
+        "canonical_url": f"https://source{suffix}.example/job/{suffix}",
+        "raw_title": title,
+        "raw_payload_sha256": raw.sha256_digest,
+        "collector_run_id": str(collection_run.pk),
+        "source_health_status": "HEALTHY",
         "source_url": f"https://source{suffix}.example/job/{suffix}",
         "raw_location": "Winterthur",
         "raw_employer": f"Employer {suffix}",
@@ -161,7 +173,7 @@ def create_dashboard_upstream(
     state = DedupRunVacancyState.objects.create(
         dedup_run=dedup,
         run_vacancy_key=digest(f"state-{suffix}"),
-        status="ACTIVE",
+        status=vacancy_status,
         canonical_posting=posting,
         first_seen_at=observed_at,
         last_seen_at=observed_at,
@@ -192,7 +204,14 @@ def create_dashboard_upstream(
         normalizer_version=NORMALIZER_VERSION,
         taxonomy_version=TAXONOMY_VERSION,
         taxonomy_sha256=load_taxonomy()[1],
-        configuration={"fixture": "dashboard-v0.1"},
+        configuration={
+            "fixture": "dashboard-v0.1",
+            **(
+                {"pit_selection_version": premium_pit_selection_version}
+                if premium_pit_selection_version
+                else {}
+            ),
+        },
         input_fingerprint=digest(f"premium-{suffix}-{as_of.isoformat()}"),
         observations_considered=1,
         green_confirmed_eligible=int(green_result == "GREEN_CONFIRMED"),
