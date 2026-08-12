@@ -14,6 +14,7 @@ from django.db import connection, transaction
 
 from observations.geospatial import RESOLVER_VERSION
 from observations.models import GreenRelevanceAssessment, PostingLocationResolution
+from observations.pit_selection import PIT_SELECTION_VERSION
 from premium_segments.classifier import CLASSIFIER_VERSION as PREMIUM_CLASSIFIER_VERSION
 from premium_segments.classifier import GREEN_CLASSIFIER_VERSION, load_taxonomy
 from premium_segments.classifier import NORMALIZER_VERSION as PREMIUM_NORMALIZER_VERSION
@@ -443,6 +444,8 @@ def _validate_runs(dedup_run: DedupRun, premium_run: PremiumSegmentRun, as_of: d
         raise DashboardBuildError("unsupported premium normalizer version")
     if premium_run.taxonomy_version != PREMIUM_TAXONOMY_VERSION:
         raise DashboardBuildError("unsupported premium taxonomy version")
+    if premium_run.configuration.get("pit_selection_version") != PIT_SELECTION_VERSION:
+        raise DashboardBuildError("unsupported premium PIT selection version")
     _, expected_taxonomy_sha256 = load_taxonomy()
     if premium_run.taxonomy_sha256 != expected_taxonomy_sha256:
         raise DashboardBuildError("unsupported premium taxonomy hash")

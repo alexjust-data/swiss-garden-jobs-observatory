@@ -354,6 +354,32 @@ def test_stale_green_record_is_outside_market_and_excluded_review_is_noncritical
 
 
 @pytest.mark.django_db(transaction=True)
+def test_closed_green_record_is_classifiable_but_not_active_day0_market() -> None:
+    data = create_dashboard_upstream(
+        suffix="closed-green-market",
+        vacancy_status="CLOSED_OBSERVED",
+    )
+    complete_collection(data)
+    snapshot, _ = build_dashboard_snapshot(
+        as_of=data["as_of"], dedup_run=data["dedup"], premium_run=data["premium_run"]
+    )
+    policy = final_policy(uuid.uuid4().hex)
+    source_universe, _ = final_universe(data, policy)
+    assessment, _ = assess_day0_readiness(
+        as_of=data["as_of"],
+        dedup_run=data["dedup"],
+        premium_run=data["premium_run"],
+        dashboard_snapshot=snapshot,
+        source_universe=source_universe,
+        authorization_policy=policy,
+    )
+
+    assert snapshot.public_green_eligible_count == 1
+    assert assessment.metrics["day0_market_state"]["green_confirmed_count"] == 0
+    assert assessment.active_unique_vacancies == 0
+
+
+@pytest.mark.django_db(transaction=True)
 def test_eligible_green_review_is_authorization_critical() -> None:
     data = create_dashboard_upstream(
         suffix="eligible-review",

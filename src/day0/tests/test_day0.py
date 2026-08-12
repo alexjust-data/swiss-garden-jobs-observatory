@@ -400,9 +400,10 @@ def test_green_review_is_critical_and_unrelated_dedup_review_is_noncritical() ->
     source_universe = universe(accepted=True, threshold=Decimal("1.0"))
     add_entry(source_universe, data["source"])
     result, _ = assess(data, snapshot, source_universe)
-    assert result.critical_review_count == 1
-    assert result.critical_dedup_review_count == 1
-    assert result.critical_review_ids == [f"dedup:{review.pk}"]
+    assert result.critical_review_count == 0
+    assert result.critical_dedup_review_count == 0
+    assert result.critical_review_ids == []
+    assert f"dedup:{review.pk}" in result.noncritical_review_ids
 
 
 @pytest.mark.django_db(transaction=True)

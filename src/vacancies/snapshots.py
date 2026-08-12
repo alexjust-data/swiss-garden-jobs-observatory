@@ -70,15 +70,17 @@ def _episode_number(group: list[PostingEvidence]) -> int:
     events = sorted(
         (
             event["observed_at"],
-            event["event_type"],
+            event["created_at"],
+            event["id"],
             item.posting_id,
+            event["event_type"],
         )
         for item in group
         for event in item.lifecycle_events
     )
     episode_number = 1
     closed = False
-    for _, event_type, _ in events:
+    for *_, event_type in events:
         if event_type == "CLOSED_OBSERVED":
             closed = True
         elif closed and event_type in {"NEW", "STILL_ACTIVE"}:

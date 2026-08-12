@@ -23,10 +23,9 @@ from observations.contracts import (
 )
 from observations.models import (
     GreenRelevanceAssessment,
-    Posting,
-    PostingLifecycleEvent,
     PostingObservation,
 )
+from observations.pit_selection import PIT_SELECTION_VERSION, select_posting_states
 
 from .models import (
     EmployerProfileEvidence,
@@ -89,6 +88,7 @@ SCOPE_SURFACES = {
 URL_PATTERN = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
 
 CONFIGURATION: dict[str, object] = {
+    "pit_selection_version": PIT_SELECTION_VERSION,
     "decision_table": "premium-segment-decision-table-v0.1",
     "strong_premium": sorted(STRONG_PREMIUM),
     "qualified_premium_review": sorted(QUALIFIED_PREMIUM_REVIEW),
@@ -144,6 +144,7 @@ class SelectedInput:
     green_assessment: GreenRelevanceAssessment | None
     employer_profiles: tuple[EmployerProfileEvidence, ...]
     lifecycle_event_id: str | None
+    lifecycle_state: str
 
 
 class _VisibleTextParser(HTMLParser):
@@ -423,40 +424,11 @@ def _validate_contract_integrity(observation: PostingObservation) -> None:
         )
 
 
-def _latest_lifecycle_event(posting: Posting, as_of: datetime) -> PostingLifecycleEvent | None:
-    return (
-        PostingLifecycleEvent.objects.filter(posting=posting, observed_at__lte=as_of)
-        .select_related("posting_observation")
-        .order_by("-observed_at", "-created_at", "-pk")
-        .first()
-    )
-
-
 def select_inputs(as_of: datetime) -> list[SelectedInput]:
     selected: list[SelectedInput] = []
-    postings = (
-        Posting.objects.filter(first_seen_at__lte=as_of).select_related("source").order_by("pk")
-    )
-    for posting in postings:
-        lifecycle = _latest_lifecycle_event(posting, as_of)
-        if lifecycle is not None:
-            if lifecycle.event_type not in {"NEW", "STILL_ACTIVE"}:
-                continue
-            observation = lifecycle.posting_observation
-            lifecycle_event_id: str | None = str(lifecycle.pk)
-        else:
-            observation = (
-                PostingObservation.objects.filter(
-                    posting=posting,
-                    observation_status="ACTIVE",
-                    observed_at__lte=as_of,
-                )
-                .order_by("-observed_at", "-pk")
-                .first()
-            )
-            lifecycle_event_id = None
-        if observation is None:
-            continue
+    for state in select_posting_states(as_of):
+        observation = state.observation
+        lifecycle_event_id = str(state.lifecycle_event.pk) if state.lifecycle_event else None
         _validate_contract_integrity(observation)
         green = (
             GreenRelevanceAssessment.objects.filter(
@@ -484,7 +456,15 @@ def select_inputs(as_of: datetime) -> list[SelectedInput]:
                 for profile in candidates
                 if normalize_for_matching(profile.employer_name) == normalized_employer
             )
-        selected.append(SelectedInput(observation, green, profiles, lifecycle_event_id))
+        selected.append(
+            SelectedInput(
+                observation,
+                green,
+                profiles,
+                lifecycle_event_id,
+                state.lifecycle_state,
+            )
+        )
     return selected
 
 
@@ -512,6 +492,8 @@ def input_fingerprint(
                     str(profile.pk) for profile in item.employer_profiles
                 ],
                 "lifecycle_event_id": item.lifecycle_event_id,
+                "lifecycle_state": item.lifecycle_state,
+                "pit_selection_version": PIT_SELECTION_VERSION,
             }
             for item in inputs
         ],
@@ -531,6 +513,8 @@ def _evidence(
         else None,
         "employer_profile_evidence_ids": [str(profile.pk) for profile in item.employer_profiles],
         "lifecycle_event_id": item.lifecycle_event_id,
+        "lifecycle_state": item.lifecycle_state,
+        "pit_selection_version": PIT_SELECTION_VERSION,
         "reason_codes": list(decision.reason_codes),
         "normalization": normalizer_version,
         "matching": "LITERAL_PHRASE_SCOPE_ENFORCED",

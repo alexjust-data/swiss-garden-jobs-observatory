@@ -21,7 +21,7 @@ from premium_segments.models import (
     PremiumSegmentRun,
 )
 from sources.models import Source
-from vacancies.models import DedupReviewItem, DedupRun
+from vacancies.models import DedupReviewItem, DedupRun, DedupRunPostingAssignment
 
 from .models import (
     Day0AuthorizationPolicy,
@@ -449,11 +449,28 @@ def _review_evidence(
 ) -> tuple[list[str], list[str], int, int, int]:
     critical: list[str] = []
     noncritical: list[str] = []
+    active_canonical_observation_ids = set(
+        DashboardVacancyRecord.objects.filter(
+            snapshot=dashboard_snapshot,
+            vacancy_status="ACTIVE",
+        ).values_list("canonical_observation_id", flat=True)
+    )
     assessments = list(
         PremiumSegmentAssessment.objects.filter(run=premium_run).select_related(
             "green_relevance_assessment", "posting_observation"
         )
     )
+    observation_by_posting = {
+        row.posting_observation.posting_id: row.posting_observation_id for row in assessments
+    }
+    active_observation_ids = {
+        observation_by_posting[assignment.posting_id]
+        for assignment in DedupRunPostingAssignment.objects.filter(
+            dedup_run=dedup_run,
+            run_vacancy_state__status="ACTIVE",
+        )
+        if assignment.posting_id in observation_by_posting
+    }
     green_by_observation = {
         row.posting_observation_id: (
             row.green_relevance_assessment.result if row.green_relevance_assessment_id else None
@@ -466,36 +483,66 @@ def _review_evidence(
         if row.green_relevance_assessment_id
         and row.green_relevance_assessment.result == "REVIEW"
         and str(row.posting_observation.source_id) in eligible_source_ids
+        and row.posting_observation_id in active_canonical_observation_ids
     ]
     excluded_green_reviews = [
-        str(row.green_relevance_assessment_id)
+        (
+            str(row.green_relevance_assessment_id),
+            (
+                "green-excluded-source"
+                if str(row.posting_observation.source_id) not in eligible_source_ids
+                else "green-excluded-inactive"
+            ),
+        )
         for row in assessments
         if row.green_relevance_assessment_id
         and row.green_relevance_assessment.result == "REVIEW"
-        and str(row.posting_observation.source_id) not in eligible_source_ids
+        and (
+            str(row.posting_observation.source_id) not in eligible_source_ids
+            or row.posting_observation_id not in active_canonical_observation_ids
+        )
     ]
     critical.extend(f"green:{item}" for item in green_reviews)
-    noncritical.extend(f"green-excluded-source:{item}" for item in excluded_green_reviews)
+    noncritical.extend(f"{reason}:{item}" for item, reason in excluded_green_reviews)
     critical_dedup = 0
     reviews = DedupReviewItem.objects.filter(status="PENDING").select_related(
-        "algorithm_decision__observation_a", "algorithm_decision__observation_b"
+        "algorithm_decision__observation_a",
+        "algorithm_decision__observation_b",
+        "run_vacancy_state_a",
+        "run_vacancy_state_b",
     )
     for review in reviews:
         decision = review.algorithm_decision
         if decision.dedup_run_id != dedup_run.pk:
             continue
-        values = (
-            green_by_observation.get(decision.observation_a_id),
-            green_by_observation.get(decision.observation_b_id),
+        candidates = (
+            (
+                review.run_vacancy_state_a,
+                decision.observation_a,
+                green_by_observation.get(decision.observation_a_id),
+            ),
+            (
+                review.run_vacancy_state_b,
+                decision.observation_b,
+                green_by_observation.get(decision.observation_b_id),
+            ),
         )
         marker = f"dedup:{review.pk}"
-        source_ids = {
-            str(decision.observation_a.source_id),
-            str(decision.observation_b.source_id),
-        }
-        if source_ids & eligible_source_ids and all(
-            value in {"GREEN_CONFIRMED", "REVIEW", None} for value in values
-        ):
+        active_public_candidates = [
+            (state, observation, green)
+            for state, observation, green in candidates
+            if state is not None
+            and state.dedup_run_id == dedup_run.pk
+            and state.status == "ACTIVE"
+            and observation.pk in active_observation_ids
+            and str(observation.source_id) in eligible_source_ids
+            and green in {"GREEN_CONFIRMED", "REVIEW"}
+        ]
+        # KEEP_SEPARATE preserves these identities. MERGE can move their memberships,
+        # recalculate the canonical Posting by precedence, and reconcile lifecycle.
+        # One eligible active public-capable side is therefore sufficient; requiring
+        # both sides ACTIVE would miss ACTIVE-vs-CLOSED identity/count effects.
+        if active_public_candidates:
             critical.append(marker)
             critical_dedup += 1
         else:
@@ -503,12 +550,14 @@ def _review_evidence(
     premium_reviews = PremiumSegmentReviewItem.objects.filter(
         assessment__run=premium_run,
         assessment__posting_observation__source_id__in=eligible_source_ids,
+        assessment__posting_observation_id__in=active_canonical_observation_ids,
         status="PENDING",
     ).values_list("pk", flat=True)
     critical.extend(f"premium:{item}" for item in premium_reviews)
     location_reviews = DashboardVacancyRecord.objects.filter(
         snapshot=dashboard_snapshot,
         canonical_observation__source_id__in=eligible_source_ids,
+        vacancy_status="ACTIVE",
         mapping_status="LOCATION_REVIEW",
     ).values_list("pk", flat=True)
     critical.extend(f"geospatial-record:{item}" for item in location_reviews)
@@ -672,6 +721,7 @@ def assess_day0_readiness(
         row
         for row in public
         if str(row.canonical_observation.source_id) in eligible_source_ids
+        and row.vacancy_status == "ACTIVE"
     ]
     known = [row for row in market if row.positions_count is not None]
     green_confirmed = sum(row.visibility_status == "PUBLIC_GREEN_CONFIRMED" for row in records)
