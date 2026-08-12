@@ -264,7 +264,8 @@ def test_api_snapshot_filters_dates_detail_and_zero_feature_geojson(client: Clie
         as_of=data["as_of"], dedup_run=data["dedup"], premium_run=data["premium_run"]
     )
     assert (
-        client.get(reverse("dashboard:current")).json()["headline_market_state"] == "PENDING_DAY_0"
+        client.get(reverse("dashboard:current")).json()["headline_market_state"]
+        == "SEE_EXACT_DAY0_ASSESSMENT"
     )
     listing = client.get(
         reverse("dashboard:vacancies", args=[snapshot.pk]),

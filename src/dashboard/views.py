@@ -44,7 +44,8 @@ def snapshot_metadata(snapshot: DashboardSnapshot) -> dict[str, Any]:
         "dedup_run_id": str(snapshot.dedup_run.pk),
         "premium_run_id": str(snapshot.premium_run.pk),
         "scope_notice": SCOPE_NOTICE,
-        "headline_market_state": "PENDING_DAY_0",
+        "headline_market_state": "SEE_EXACT_DAY0_ASSESSMENT",
+        "day0_authorization_endpoint": "/api/v1/day0/readiness/current/",
         "counts": {
             "public_green_confirmed": snapshot.public_green_eligible_count,
             "mappable": snapshot.mappable_vacancy_count,
