@@ -26,7 +26,7 @@ All lifecycle consumers use the canonical ascending chronology `(observed_at, cr
 
 A `NOT_FOUND` observation is never classification content. Selecting historical active content does not manufacture active lifecycle state.
 
-Dedup adopts the shared selector without changing `dedup-v0.1`, its fingerprint meaning, weights, thresholds, hard barriers, Vacancy identity, or episode semantics.
+Dedup adopts the shared selector without changing `dedup-v0.1`, its weights, thresholds, hard barriers, Vacancy identity, or episode semantics. Its input evidence now records the canonical `created_at` lifecycle tie-break; this intentionally produces a new fingerprint when the previously omitted tie-break evidence is material.
 
 Premium keeps `premium-segment-v0.1`, `premium-normalizer-v0.1`, and the existing taxonomy/decision table. Its configuration and fingerprint additionally include `posting-pit-selection-v0.1`; each input fingerprints the selected active observation and latest lifecycle event. Thus a lifecycle transition changes the Premium fingerprint even if content is unchanged.
 
@@ -46,7 +46,7 @@ No migration is required. The correction consists of shared selection code, conf
 
 ## Live acceptance
 
-At `2026-08-12T10:20:02.339073Z`, corrected Dedup and Premium each select exactly 1,971 observations; both exact set differences are zero. Dashboard snapshot `048dedf2-bc1b-4191-8f1c-08cf768fdf2a` builds successfully. Readiness assessment `9c0e6f80-e5d6-4026-8ecd-1e591be0e74f` remains unauthorized (`DAY_0_BLOCKED_BY_DATA_QUALITY`), as expected, because this gate performs no review adjudication or policy change.
+At `2026-08-12T10:20:02.339073Z`, corrected Dedup and Premium each select exactly 1,971 observations; both exact set differences are zero. Dashboard snapshot `58293afa-1f08-4e48-a769-6344888baaa6` builds successfully. Readiness assessment `ee972d80-fe6e-47fb-8e62-001e5028abd5` remains unauthorized (`DAY_0_BLOCKED_BY_DATA_QUALITY`), as expected, because this gate performs no review adjudication or policy change. The corrected criticality rule reports 55 critical green reviews and one critical dedup review; those existing reviews remain unresolved.
 
 ## Preserved contracts
 

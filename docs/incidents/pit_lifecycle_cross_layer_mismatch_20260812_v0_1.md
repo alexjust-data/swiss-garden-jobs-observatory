@@ -42,9 +42,9 @@ The preserved incident database was copied before corrective derivation. Experim
 
 | Artifact | ID | Fingerprint / result |
 |---|---|---|
-| DedupRun | `bfa5f769-ee34-480e-a935-103ad17b66ce` | reused; `78d7a66e747e5053c01bc885dc05fddf2ac87c235f91efe028c685907baec1eb` |
+| DedupRun | `0f241f99-b1da-4c99-8d44-5d5d992e9f88` | `3dbd2aff9933a1eb84370325b5f04e071ca4b1c07377377164dd5f84bb9c71b2` |
 | PremiumSegmentRun | `27a26441-80e8-48a0-8680-42fa035e8287` | `df12c53075614cc610ee7d6d8bac4503797e13394539a9edde537ff45ead1c8b` |
-| DashboardSnapshot | `048dedf2-bc1b-4191-8f1c-08cf768fdf2a` | `77a2bbec78f74027695dcc1d14d0f70fa4acd5ff6a1eb1117c04c7b5eeb81929` |
-| Day0ReadinessAssessment | `9c0e6f80-e5d6-4026-8ecd-1e591be0e74f` | `d2467e5decc34c3339b75a3abe05342abad3503f16013169f479d99ea286e330`; blocked by data quality |
+| DashboardSnapshot | `58293afa-1f08-4e48-a769-6344888baaa6` | `9569643c2a83d1109a7a236a9260b6ec2ea9a059a24139f5364b345030f8e28d` |
+| Day0ReadinessAssessment | `ee972d80-fe6e-47fb-8e62-001e5028abd5` | `9cc198fdb18e19c645b6cbb1357021098107e1d7a04df2577aabecd6e958ef3e`; blocked by data quality |
 
-Corrected Dedup and Premium each contain 1,971 exact observation IDs. Both set differences are empty. Dashboard construction succeeds. Identical replay reuses all corrected derived artifacts. No review was adjudicated and Day-0 remains unauthorized.
+Corrected Dedup and Premium each contain 1,971 exact observation IDs. Both set differences are empty. Dashboard construction succeeds. Identical replay reuses all corrected derived artifacts. No review was adjudicated; the corrected cohort logic exposes 55 critical green reviews and one critical dedup review, and Day-0 remains unauthorized.
