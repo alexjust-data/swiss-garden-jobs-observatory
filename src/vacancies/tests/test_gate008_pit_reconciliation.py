@@ -252,6 +252,50 @@ class Gate008PITReconciliationTests(TestCase):
         assert not DedupReviewItem.objects.filter(status=DedupReviewItem.Status.PENDING).exists()
         assert run_summary(later_run)["effective_vacancies"] == 2
 
+    def _active_closed_review_outcome(self, *, merge: bool) -> tuple[int, int, Source]:
+        active = self.source(
+            f"SRC-ACTIVE-CLOSED-ACTIVE-{'MERGE' if merge else 'KEEP'}",
+            "GENERAL_AGGREGATOR",
+        )
+        closed = self.source(f"SRC-ACTIVE-CLOSED-CLOSED-{'MERGE' if merge else 'KEEP'}")
+        opened = datetime(2026, 5, 10, tzinfo=UTC)
+        self.collect(active, Adapter("ACTIVE"), opened)
+        self.collect(closed, Adapter("CLOSED"), opened)
+        cutoff = self.close_posting(closed, opened)
+
+        run, _ = run_deduplication(cutoff)
+        review = DedupReviewItem.objects.get(algorithm_decision__dedup_run=run)
+        assert review.run_vacancy_state_a is not None
+        assert review.run_vacancy_state_b is not None
+        assert {review.run_vacancy_state_a.status, review.run_vacancy_state_b.status} == {
+            Vacancy.Status.ACTIVE,
+            Vacancy.Status.CLOSED_OBSERVED,
+        }
+        assert run_summary(run)["effective_vacancies"] == 2
+        assert run_summary(run)["active_vacancies"] == 1
+
+        resolve_review(
+            str(review.pk),
+            merge=merge,
+            reason="Adversarial ACTIVE/CLOSED identity fixture",
+        )
+        effective = Vacancy.objects.filter(identity_version="dedup-v0.1", merged_into__isnull=True)
+        return effective.count(), effective.filter(current_status="ACTIVE").count(), active
+
+    def test_active_closed_keep_separate_preserves_two_identities_and_one_active(self) -> None:
+        effective, active, _ = self._active_closed_review_outcome(merge=False)
+        assert (effective, active) == (2, 1)
+
+    def test_active_closed_merge_changes_identity_and_can_close_active_market_state(self) -> None:
+        effective, active_count, active_source = self._active_closed_review_outcome(merge=True)
+        vacancy = Vacancy.objects.get(identity_version="dedup-v0.1", merged_into__isnull=True)
+
+        assert effective == 1
+        assert active_count == 0
+        assert vacancy.current_status == Vacancy.Status.CLOSED_OBSERVED
+        assert vacancy.canonical_posting is not None
+        assert vacancy.canonical_posting.source != active_source
+
     def _run_repost_case(self, *, gap_days: int, requisition: str | None) -> tuple[Vacancy, int]:
         source = self.source(f"SRC-REPOST-{gap_days}-{requisition or 'NONE'}")
         opened = datetime(2026, 1, 1, tzinfo=UTC)

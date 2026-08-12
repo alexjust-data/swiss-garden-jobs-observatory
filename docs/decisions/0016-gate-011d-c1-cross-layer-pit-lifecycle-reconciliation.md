@@ -14,6 +14,8 @@ This decision amends GATE-009/010 integration semantics while preserving their s
 
 Introduce neutral `posting-pit-selection-v0.1`. At cutoff T it selects the latest `ACTIVE` `PostingObservation` as content and the latest `PostingLifecycleEvent` as independent lifecycle evidence.
 
+All lifecycle consumers use the canonical ascending chronology `(observed_at, created_at, pk)` and its exact descending inverse for latest-event selection. `created_at`, not UUID ordering, resolves equal `observed_at` values. Dedup lifecycle status, run-scoped Vacancy state, episode reconstruction, Premium lifecycle evidence, closure and reappearance lookup therefore share one tie-break contract. The tie-break evidence participates in Dedup and Premium input fingerprints.
+
 | Latest lifecycle | Selected content | Economic interpretation |
 |---|---|---|
 | `NEW` | latest active observation | active |
@@ -31,6 +33,8 @@ Premium keeps `premium-segment-v0.1`, `premium-normalizer-v0.1`, and the existin
 Dashboard accepts only Premium runs declaring the supported PIT-selection version and still requires exact equality of Dedup selected observation IDs and Premium assessment observation IDs. Historical snapshots remain immutable.
 
 Day-0 distinguishes classifiable evidence from current market membership. The authorized market cohort and authorization-critical green, premium, geospatial, and dedup reviews require an `ACTIVE` run-scoped Vacancy. `CLOSED_OBSERVED` evidence remains auditable but is not current market truth. `DISAPPEARED_PENDING` remains active during the confirmation interval under unchanged GATE-008 semantics.
+
+A pending dedup review is critical when either candidate side is an eligible, run-scoped `ACTIVE` Vacancy whose selected observation is `GREEN_CONFIRMED` or `REVIEW`. This is an effect test, not a both-sides-active test: `KEEP_SEPARATE` preserves current identities, while `MERGE` can reassign membership, recalculate canonical Posting/source precedence, and reconcile lifecycle. A closed-only pair is noncritical. The adversarial matrix establishes that ACTIVE GREEN versus CLOSED GREEN and ACTIVE GREEN versus CLOSED NOT_GREEN are critical; ACTIVE NOT_GREEN versus CLOSED GREEN is noncritical because neither possible outcome supplies an active public market member under the frozen green contract.
 
 ## Immutability and compatibility
 

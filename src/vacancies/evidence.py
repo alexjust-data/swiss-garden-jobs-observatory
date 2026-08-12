@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from observations.models import Posting, PostingLifecycleEvent
-from observations.pit_selection import select_posting_states
+from observations.pit_selection import lifecycle_order, select_posting_states
 
 from .normalizer import (
     DEDUP_VERSION,
@@ -75,13 +75,14 @@ def _payload_text(payload: dict[str, Any], contract: dict[str, Any]) -> str:
 
 def _lifecycle_evidence(posting: Posting, as_of: datetime) -> tuple[dict[str, str], ...]:
     events = PostingLifecycleEvent.objects.filter(posting=posting, observed_at__lte=as_of).order_by(
-        "observed_at", "pk"
+        *lifecycle_order()
     )
     return tuple(
         {
             "id": str(event.pk),
             "event_type": event.event_type,
             "observed_at": event.observed_at.isoformat(),
+            "created_at": event.created_at.isoformat(),
         }
         for event in events
     )

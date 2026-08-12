@@ -506,28 +506,43 @@ def _review_evidence(
     noncritical.extend(f"{reason}:{item}" for item, reason in excluded_green_reviews)
     critical_dedup = 0
     reviews = DedupReviewItem.objects.filter(status="PENDING").select_related(
-        "algorithm_decision__observation_a", "algorithm_decision__observation_b"
+        "algorithm_decision__observation_a",
+        "algorithm_decision__observation_b",
+        "run_vacancy_state_a",
+        "run_vacancy_state_b",
     )
     for review in reviews:
         decision = review.algorithm_decision
         if decision.dedup_run_id != dedup_run.pk:
             continue
-        values = (
-            green_by_observation.get(decision.observation_a_id),
-            green_by_observation.get(decision.observation_b_id),
+        candidates = (
+            (
+                review.run_vacancy_state_a,
+                decision.observation_a,
+                green_by_observation.get(decision.observation_a_id),
+            ),
+            (
+                review.run_vacancy_state_b,
+                decision.observation_b,
+                green_by_observation.get(decision.observation_b_id),
+            ),
         )
         marker = f"dedup:{review.pk}"
-        source_ids = {
-            str(decision.observation_a.source_id),
-            str(decision.observation_b.source_id),
-        }
-        if (
-            {decision.observation_a_id, decision.observation_b_id} <= active_observation_ids
-            and source_ids & eligible_source_ids
-            and all(
-                value in {"GREEN_CONFIRMED", "REVIEW", None} for value in values
-            )
-        ):
+        active_public_candidates = [
+            (state, observation, green)
+            for state, observation, green in candidates
+            if state is not None
+            and state.dedup_run_id == dedup_run.pk
+            and state.status == "ACTIVE"
+            and observation.pk in active_observation_ids
+            and str(observation.source_id) in eligible_source_ids
+            and green in {"GREEN_CONFIRMED", "REVIEW"}
+        ]
+        # KEEP_SEPARATE preserves these identities. MERGE can move their memberships,
+        # recalculate the canonical Posting by precedence, and reconcile lifecycle.
+        # One eligible active public-capable side is therefore sufficient; requiring
+        # both sides ACTIVE would miss ACTIVE-vs-CLOSED identity/count effects.
+        if active_public_candidates:
             critical.append(marker)
             critical_dedup += 1
         else:

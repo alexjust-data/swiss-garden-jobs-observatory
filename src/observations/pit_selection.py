@@ -8,6 +8,13 @@ from django.db.models import OuterRef, Subquery
 from observations.models import Posting, PostingLifecycleEvent, PostingObservation
 
 PIT_SELECTION_VERSION = "posting-pit-selection-v0.1"
+LIFECYCLE_ORDER_FIELDS = ("observed_at", "created_at", "pk")
+
+
+def lifecycle_order(*, descending: bool = False) -> tuple[str, ...]:
+    """Return the one canonical deterministic lifecycle chronology."""
+    prefix = "-" if descending else ""
+    return tuple(f"{prefix}{field}" for field in LIFECYCLE_ORDER_FIELDS)
 
 
 @dataclass(frozen=True)
@@ -31,7 +38,7 @@ def select_posting_states(as_of: datetime) -> list[SelectedPostingState]:
     latest_lifecycle = PostingLifecycleEvent.objects.filter(
         posting_id=OuterRef("pk"),
         observed_at__lte=as_of,
-    ).order_by("-observed_at", "-created_at", "-pk")
+    ).order_by(*lifecycle_order(descending=True))
     postings = list(
         Posting.objects.filter(first_seen_at__lte=as_of)
         .annotate(

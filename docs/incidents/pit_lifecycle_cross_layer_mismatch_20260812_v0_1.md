@@ -28,9 +28,13 @@ The collection evidence is valid. A first healthy absence is deliberately `DISAP
 - the latest `ACTIVE` content observation at or before T;
 - the latest lifecycle event at or before T.
 
+Lifecycle chronology is canonical everywhere as `(observed_at, created_at, pk)`. Equal source timestamps are resolved by immutable creation time before UUID; Dedup status/episodes and Premium cannot choose different latest events.
+
 `NOT_FOUND` is lifecycle evidence and never classification content. Pending and closed Postings retain their last valid content for identity, classification, provenance, and historical presentation. Lifecycle remains authoritative for current economic state. `DISAPPEARED_PENDING` does not close a Vacancy; `CLOSED_OBSERVED` does. Reappearance selects the new active observation.
 
 Premium fingerprints the selected observation, latest lifecycle event and state, and PIT-selection version. Dashboard continues to require exact Dedup/Premium observation-ID equality and rejects Premium runs without the supported PIT-selection version. Day-0 market metrics and authorization-critical reviews require an `ACTIVE` run-scoped Vacancy.
+
+Dedup review criticality is based on possible effect on at least one eligible active public-capable Vacancy. An ACTIVE/CLOSED pair is therefore critical when the active side is GREEN or REVIEW: a human merge can change economic identity, canonical evidence, or active status even though the other side is closed. Closed-only pairs, and ACTIVE NOT_GREEN versus CLOSED GREEN where no possible active public member exists, remain noncritical.
 
 ## Corrected live evidence
 

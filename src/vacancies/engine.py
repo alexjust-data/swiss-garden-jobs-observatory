@@ -9,6 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from observations.models import Posting, PostingLifecycleEvent
+from observations.pit_selection import lifecycle_order
 
 from .evidence import (
     PostingEvidence,
@@ -98,7 +99,7 @@ def _posting_closed_at(posting_id: str, as_of: datetime) -> datetime | None:
             event_type="CLOSED_OBSERVED",
             observed_at__lte=as_of,
         )
-        .order_by("-observed_at")
+        .order_by(*lifecycle_order(descending=True))
         .first()
     )
     return event.observed_at if event else None
@@ -285,7 +286,7 @@ def _sync_episode(
                 observed_at__gt=canonical_closed,
                 observed_at__lte=run.as_of,
             )
-            .order_by("observed_at", "pk")
+            .order_by(*lifecycle_order())
             .first()
         )
     can_reopen = bool(
