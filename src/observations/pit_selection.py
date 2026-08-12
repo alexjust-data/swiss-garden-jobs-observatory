@@ -17,6 +17,11 @@ def lifecycle_order(*, descending: bool = False) -> tuple[str, ...]:
     return tuple(f"{prefix}{field}" for field in LIFECYCLE_ORDER_FIELDS)
 
 
+def lifecycle_key(event: PostingLifecycleEvent) -> tuple[datetime, datetime, str]:
+    """Return the canonical in-memory lifecycle chronology key."""
+    return (event.observed_at, event.created_at, str(event.pk))
+
+
 @dataclass(frozen=True)
 class SelectedPostingState:
     posting: Posting

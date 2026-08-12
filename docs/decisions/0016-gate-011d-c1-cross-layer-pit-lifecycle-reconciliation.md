@@ -14,7 +14,7 @@ This decision amends GATE-009/010 integration semantics while preserving their s
 
 Introduce neutral `posting-pit-selection-v0.1`. At cutoff T it selects the latest `ACTIVE` `PostingObservation` as content and the latest `PostingLifecycleEvent` as independent lifecycle evidence.
 
-All lifecycle consumers use the canonical ascending chronology `(observed_at, created_at, pk)` and its exact descending inverse for latest-event selection. `created_at`, not UUID ordering, resolves equal `observed_at` values. Dedup lifecycle status, run-scoped Vacancy state, episode reconstruction, Premium lifecycle evidence, closure and reappearance lookup therefore share one tie-break contract. The tie-break evidence participates in Dedup and Premium input fingerprints.
+All lifecycle consumers use the canonical ascending chronology `(observed_at, created_at, pk)` and its exact descending inverse for latest-event selection. `created_at`, not UUID ordering, resolves equal `observed_at` values. Dedup lifecycle status, run-scoped Vacancy state, episode reconstruction, Premium lifecycle evidence, closure and reappearance lookup therefore share one tie-break contract. Operational reappearance compares the complete closure and active-event tuples; it never reduces chronology to `observed_at__gt`. The tie-break evidence participates in Dedup and Premium input fingerprints.
 
 | Latest lifecycle | Selected content | Economic interpretation |
 |---|---|---|

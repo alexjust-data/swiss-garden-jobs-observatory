@@ -22,6 +22,8 @@ from vacancies.models import (
     DedupRun,
     DedupRunPostingAssignment,
     DedupRunVacancyState,
+    Vacancy,
+    VacancyEpisode,
 )
 
 
@@ -123,9 +125,7 @@ def test_pending_closed_and_reappeared_use_shared_content_evidence() -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_dashboard_rejects_legacy_premium_selection_contract() -> None:
-    data = create_dashboard_upstream(
-        suffix="011dc1-legacy", premium_pit_selection_version=None
-    )
+    data = create_dashboard_upstream(suffix="011dc1-legacy", premium_pit_selection_version=None)
     with pytest.raises(DashboardBuildError, match="unsupported premium PIT selection version"):
         build_dashboard_snapshot(
             as_of=data["as_of"], dedup_run=data["dedup"], premium_run=data["premium_run"]
@@ -216,15 +216,117 @@ def test_equal_observed_at_uses_created_at_before_uuid_in_every_layer() -> None:
     premium_run, _ = run_classification(when)
     premium = PremiumSegmentAssessment.objects.get(run=premium_run)
     state = DedupRunVacancyState.objects.get(dedup_run=dedup_run)
+    vacancy = Vacancy.objects.get(pk=state.vacancy_identity_id)
+    latest_episode = VacancyEpisode.objects.get(vacancy=vacancy, episode_number=2)
 
     assert evidence.lifecycle_events[-1]["id"] == str(latest.pk)
     assert evidence.lifecycle_status == "STILL_ACTIVE"
     assert evidence.observation_id == str(active_observation.pk)
     assert state.status == "ACTIVE"
     assert state.episode_number == 2
+    assert vacancy.current_status == "ACTIVE"
+    assert vacancy.current_episode_number == 2
+    assert latest_episode.status == "ACTIVE"
     assert premium.posting_observation == active_observation
     assert premium.evidence["lifecycle_event_id"] == str(latest.pk)
     assert premium.evidence["lifecycle_state"] == "STILL_ACTIVE"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_equal_observed_at_later_close_wins_operational_and_pit_projection() -> None:
+    data = create_dashboard_upstream(suffix="011dc1-tied-close-latest")
+    posting = data["posting"]
+    source = data["source"]
+    when = data["as_of"] + timedelta(days=1)
+    active_run = CollectionRun.objects.create(
+        source=source,
+        started_at=when,
+        finished_at=when,
+        status="SUCCEEDED",
+        run_scope="FULL_SOURCE",
+        source_health_status="HEALTHY",
+        snapshot_complete=True,
+        listing_url=source.search_url,
+    )
+    active_observation = PostingObservation.objects.create(
+        collection_run=active_run,
+        posting=posting,
+        source=source,
+        observation_status="ACTIVE",
+        source_posting_id=posting.source_posting_id,
+        observed_at=when,
+        canonical_url=data["observation"].canonical_url,
+        title=data["observation"].title,
+        hiring_organization=data["observation"].hiring_organization,
+        description_html=data["observation"].description_html,
+        raw_artifact=data["observation"].raw_artifact,
+        structured_payload=data["observation"].structured_payload,
+        contract_payload={
+            **data["observation"].contract_payload,
+            "observed_at": when.isoformat(),
+            "collector_run_id": str(active_run.pk),
+        },
+    )
+    PostingLifecycleEvent.objects.create(
+        pk=UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        posting=posting,
+        posting_observation=active_observation,
+        collection_run=active_run,
+        event_type="STILL_ACTIVE",
+        observed_at=when,
+        created_at=when + timedelta(seconds=1),
+        source_health_status="HEALTHY",
+    )
+    closed_run = CollectionRun.objects.create(
+        source=source,
+        started_at=when,
+        finished_at=when,
+        status="SUCCEEDED",
+        run_scope="FULL_SOURCE",
+        source_health_status="HEALTHY",
+        snapshot_complete=True,
+        listing_url=source.search_url,
+    )
+    closed_observation = PostingObservation.objects.create(
+        collection_run=closed_run,
+        posting=posting,
+        source=source,
+        observation_status="NOT_FOUND",
+        source_posting_id=posting.source_posting_id,
+        observed_at=when,
+        canonical_url=data["observation"].canonical_url,
+        title=data["observation"].title,
+        raw_artifact=data["observation"].raw_artifact,
+        structured_payload={},
+        contract_payload={"schema_version": "1.2"},
+    )
+    latest = PostingLifecycleEvent.objects.create(
+        pk=UUID("00000000-0000-0000-0000-000000000001"),
+        posting=posting,
+        posting_observation=closed_observation,
+        collection_run=closed_run,
+        event_type="CLOSED_OBSERVED",
+        observed_at=when,
+        created_at=when + timedelta(seconds=2),
+        source_health_status="HEALTHY",
+    )
+
+    evidence = select_posting_evidence(when)[0]
+    dedup_run, _ = run_deduplication(when)
+    premium_run, _ = run_classification(when)
+    state = DedupRunVacancyState.objects.get(dedup_run=dedup_run)
+    vacancy = Vacancy.objects.get(pk=state.vacancy_identity_id)
+    premium = PremiumSegmentAssessment.objects.get(run=premium_run)
+
+    assert evidence.lifecycle_events[-1]["id"] == str(latest.pk)
+    assert evidence.lifecycle_status == "CLOSED_OBSERVED"
+    assert state.status == "CLOSED_OBSERVED"
+    assert state.episode_number == 1
+    assert vacancy.current_status == "CLOSED_OBSERVED"
+    assert vacancy.current_episode_number == 1
+    assert VacancyEpisode.objects.get(vacancy=vacancy).status == "CLOSED_OBSERVED"
+    assert premium.evidence["lifecycle_event_id"] == str(latest.pk)
+    assert premium.evidence["lifecycle_state"] == "CLOSED_OBSERVED"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -324,9 +426,7 @@ def _cross_state_review_fixture(
         no_sufficient_evidence_count=sum(
             value == "GREEN_CONFIRMED" for value in (active_green, closed_green)
         ),
-        skipped_not_green_count=sum(
-            value == "NOT_GREEN" for value in (active_green, closed_green)
-        ),
+        skipped_not_green_count=sum(value == "NOT_GREEN" for value in (active_green, closed_green)),
         unknown_count=2,
         status="SUCCEEDED",
         started_at=active["as_of"],

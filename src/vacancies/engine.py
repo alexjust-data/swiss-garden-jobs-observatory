@@ -9,7 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from observations.models import Posting, PostingLifecycleEvent
-from observations.pit_selection import lifecycle_order
+from observations.pit_selection import lifecycle_key, lifecycle_order
 
 from .evidence import (
     PostingEvidence,
@@ -92,8 +92,8 @@ def _prior_human_decision(
     )
 
 
-def _posting_closed_at(posting_id: str, as_of: datetime) -> datetime | None:
-    event = (
+def _posting_closed_event(posting_id: str, as_of: datetime) -> PostingLifecycleEvent | None:
+    return (
         PostingLifecycleEvent.objects.filter(
             posting_id=posting_id,
             event_type="CLOSED_OBSERVED",
@@ -102,18 +102,17 @@ def _posting_closed_at(posting_id: str, as_of: datetime) -> datetime | None:
         .order_by(*lifecycle_order(descending=True))
         .first()
     )
-    return event.observed_at if event else None
 
 
 def _repost_window_barrier(
     left: PostingEvidence, right: PostingEvidence, assessment: PairAssessment, as_of: datetime
 ) -> dict[str, str] | None:
     earlier, later = (left, right) if left.first_seen_at <= right.first_seen_at else (right, left)
-    closed_at = _posting_closed_at(earlier.posting_id, as_of)
-    if not closed_at or later.first_seen_at <= closed_at:
+    closed_event = _posting_closed_event(earlier.posting_id, as_of)
+    if not closed_event or later.first_seen_at <= closed_event.observed_at:
         return None
     if qualifies_as_repost(
-        closed_at,
+        closed_event.observed_at,
         later.first_seen_at,
         same_requisition=bool(
             earlier.requisition_id and earlier.requisition_id == later.requisition_id
@@ -123,7 +122,7 @@ def _repost_window_barrier(
         return None
     return {
         "type": "REPOST_WINDOW_EXCEEDED",
-        "closed_at": closed_at.isoformat(),
+        "closed_at": closed_event.observed_at.isoformat(),
         "reappeared_at": later.first_seen_at.isoformat(),
     }
 
@@ -276,18 +275,21 @@ def _sync_episode(
         )
         created = True
     canonical = vacancy.canonical_posting
-    canonical_closed = _posting_closed_at(str(canonical.pk), run.as_of) if canonical else None
+    canonical_closed_event = (
+        _posting_closed_event(str(canonical.pk), run.as_of) if canonical else None
+    )
+    canonical_closed = canonical_closed_event.observed_at if canonical_closed_event else None
     reappearance_event = None
-    if canonical_closed:
-        reappearance_event = (
-            PostingLifecycleEvent.objects.filter(
-                posting_id__in=[item.posting_id for item in selected],
-                event_type__in=["NEW", "STILL_ACTIVE"],
-                observed_at__gt=canonical_closed,
-                observed_at__lte=run.as_of,
-            )
-            .order_by(*lifecycle_order())
-            .first()
+    if canonical_closed_event:
+        active_events = PostingLifecycleEvent.objects.filter(
+            posting_id__in=[item.posting_id for item in selected],
+            event_type__in=["NEW", "STILL_ACTIVE"],
+            observed_at__lte=run.as_of,
+        ).order_by(*lifecycle_order())
+        closed_key = lifecycle_key(canonical_closed_event)
+        reappearance_event = next(
+            (event for event in active_events if lifecycle_key(event) > closed_key),
+            None,
         )
     can_reopen = bool(
         canonical_closed and reappearance_event and episode.opened_observed_at <= canonical_closed
