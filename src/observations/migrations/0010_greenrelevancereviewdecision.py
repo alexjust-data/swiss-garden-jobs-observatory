@@ -63,8 +63,8 @@ class Migration(migrations.Migration):
                 ],
                 "constraints": [
                     models.UniqueConstraint(
-                        fields=("assessment", "governance_version", "reviewed_at"),
-                        name="green_review_decision_assessment_version_time_unique",
+                        fields=("assessment", "governance_version"),
+                        name="green_review_decision_assessment_version_unique",
                     )
                 ],
             },

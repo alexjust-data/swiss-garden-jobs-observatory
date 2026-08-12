@@ -422,6 +422,7 @@ def test_observed_postings_unique_vacancies_and_unknown_positions_stay_distinct(
         run=data["premium_run"],
         posting_observation=other["observation"],
         green_relevance_assessment=other["green"],
+        effective_green_result="GREEN_CONFIRMED",
         segment="UNKNOWN",
         assessment_status="NO_SUFFICIENT_EVIDENCE",
         method="FIXTURE",

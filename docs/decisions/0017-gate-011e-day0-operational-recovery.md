@@ -1,4 +1,4 @@
-# ADR 0017 â€” GATE-011E Day-0 operational recovery
+# ADR 0017 — GATE-011E Day-0 operational recovery
 
 Status: proposed in draft PR. Baseline: `a410a1d62ccbefb7157803045142c3b95b651c94` (merged GATE-011D-C1).
 
@@ -6,7 +6,7 @@ Status: proposed in draft PR. Baseline: `a410a1d62ccbefb7157803045142c3b95b651c9
 
 GATE-011E preserves `day0-coverage-v0.1`, `full-source-freshness-v0.1` and `day0-authorization-v0.1`. It refreshes exactly the 20 C-6 `ACCEPTED_IMPLEMENTED` required Sources, reconstructs the eligible cohort, and resolves only reviews capable of changing that cohort.
 
-Green review adjudication is new immutable PIT evidence. `GreenRelevanceReviewDecision` is append-only, time-scoped and versioned as `green-review-v0.1`. It never overwrites `green-relevance-v0.1`. Premium persists the effective green result and exact review-decision ID and fingerprints both; Dashboard and Day-0 consume that pinned result. Decisions after a cutoff cannot change historical runs.
+Green review adjudication is new immutable PIT evidence. `GreenRelevanceReviewDecision` is append-only, time-scoped and versioned as `green-review-v0.1`. One assessment has at most one decision per governance version; exact retries reuse it, while conflicts fail closed and require a future review-policy version. Each decision must pin bounded source surfaces, observation/assessment/Source/native IDs, raw SHA-256, the original REVIEW state and an evidence basis. It never overwrites `green-relevance-v0.1`. Premium persists the effective green result and exact review-decision ID and fingerprints both; Dashboard and Day-0 consume that pinned result. Decisions after a cutoff cannot change historical runs.
 
 Two freshly generated migrations are required: observations `0010` creates immutable human green decisions; premium `0002` pins effective green evidence and backfills historical rows from their original immutable classifier assessment. They were generated from corrected main and do not import the suspended experimental 011E migration chain.
 

@@ -425,6 +425,19 @@ class GreenRelevanceAssessment(models.Model):
 
 
 class GreenRelevanceReviewDecision(models.Model):
+    REQUIRED_EVIDENCE_FIELDS = frozenset(
+        {
+            "posting_observation_id",
+            "green_relevance_assessment_id",
+            "source_id",
+            "source_native_id",
+            "original_classifier_result",
+            "raw_payload_sha256",
+            "reviewed_surfaces",
+            "evidence_basis",
+        }
+    )
+
     class Outcome(models.TextChoices):
         CONFIRMED_GREEN = "CONFIRMED_GREEN", "Confirmed green"
         CONFIRMED_NOT_GREEN = "CONFIRMED_NOT_GREEN", "Confirmed not green"
@@ -454,8 +467,8 @@ class GreenRelevanceReviewDecision(models.Model):
         ]
         constraints = [
             models.UniqueConstraint(
-                fields=["assessment", "governance_version", "reviewed_at"],
-                name="green_review_decision_assessment_version_time_unique",
+                fields=["assessment", "governance_version"],
+                name="green_review_decision_assessment_version_unique",
             )
         ]
 
@@ -470,6 +483,34 @@ class GreenRelevanceReviewDecision(models.Model):
             errors["reason_code"] = "reason code is required"
         if not self.reason.strip():
             errors["reason"] = "reason is required"
+        missing = self.REQUIRED_EVIDENCE_FIELDS - set(self.evidence)
+        if missing:
+            errors["evidence"] = "missing required provenance: " + ", ".join(sorted(missing))
+        elif self.assessment.pk:
+            observation = self.assessment.posting_observation
+            expected = {
+                "posting_observation_id": str(observation.pk),
+                "green_relevance_assessment_id": str(self.assessment.pk),
+                "source_id": observation.source.source_id,
+                "source_native_id": observation.source_posting_id,
+                "original_classifier_result": GreenRelevanceAssessment.Result.REVIEW,
+                "raw_payload_sha256": observation.raw_artifact.sha256_digest,
+            }
+            mismatched = [key for key, value in expected.items() if self.evidence.get(key) != value]
+            if mismatched:
+                errors["evidence"] = "provenance does not match pinned evidence: " + ", ".join(
+                    mismatched
+                )
+            surfaces = self.evidence.get("reviewed_surfaces")
+            if (
+                not isinstance(surfaces, list)
+                or not surfaces
+                or not all(isinstance(value, str) and value.strip() for value in surfaces)
+            ):
+                errors["evidence"] = "reviewed_surfaces must be a non-empty list of labels"
+            basis = self.evidence.get("evidence_basis")
+            if not isinstance(basis, str) or not basis.strip():
+                errors["evidence"] = "evidence_basis must be a non-empty bounded summary"
         if errors:
             from django.core.exceptions import ValidationError
 

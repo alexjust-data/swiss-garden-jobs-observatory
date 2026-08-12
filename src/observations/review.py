@@ -4,12 +4,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from observations.models import GreenRelevanceAssessment, GreenRelevanceReviewDecision
 
 GREEN_REVIEW_GOVERNANCE_VERSION = "green-review-v0.1"
+
+
+class ConflictingGreenReviewDecisionError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -59,15 +63,62 @@ def record_green_review_decision(
         raise ValueError("only REVIEW assessments may be adjudicated")
     available_at = timezone.now()
     effective_at = reviewed_at or available_at
+    observation = assessment.posting_observation
+    if not isinstance(evidence, dict):
+        raise ValueError("review evidence must be a JSON object")
+    complete_evidence = {
+        **evidence,
+        "posting_observation_id": str(observation.pk),
+        "green_relevance_assessment_id": str(assessment.pk),
+        "source_id": observation.source.source_id,
+        "source_native_id": observation.source_posting_id,
+        "original_classifier_result": str(assessment.result),
+        "raw_payload_sha256": observation.raw_artifact.sha256_digest,
+        "reviewed_surfaces": evidence.get("reviewed_surfaces")
+        or evidence.get("evidence_surfaces_reviewed"),
+        "evidence_basis": evidence.get("evidence_basis") or reason,
+    }
+    existing = GreenRelevanceReviewDecision.objects.filter(
+        assessment=assessment,
+        governance_version=governance_version,
+    ).first()
+    if existing is not None:
+        if (
+            existing.outcome == outcome
+            and existing.reason_code == reason_code
+            and existing.reason == reason
+            and existing.evidence == complete_evidence
+        ):
+            return existing
+        raise ConflictingGreenReviewDecisionError(
+            "a conflicting decision already exists for this assessment and governance version"
+        )
     decision = GreenRelevanceReviewDecision(
         assessment=assessment,
         outcome=outcome,
         reason_code=reason_code,
         reason=reason,
-        evidence=evidence,
+        evidence=complete_evidence,
         governance_version=governance_version,
         reviewed_at=effective_at,
         created_at=available_at,
     )
-    decision.save()
+    try:
+        with transaction.atomic():
+            decision.save()
+    except IntegrityError as exc:
+        concurrent = GreenRelevanceReviewDecision.objects.filter(
+            assessment=assessment,
+            governance_version=governance_version,
+        ).first()
+        if concurrent is not None and (
+            concurrent.outcome == outcome
+            and concurrent.reason_code == reason_code
+            and concurrent.reason == reason
+            and concurrent.evidence == complete_evidence
+        ):
+            return concurrent
+        raise ConflictingGreenReviewDecisionError(
+            "a conflicting concurrent decision exists for this assessment and governance version"
+        ) from exc
     return decision

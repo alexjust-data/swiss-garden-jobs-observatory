@@ -437,6 +437,7 @@ def _cross_state_review_fixture(
             run=premium_run,
             posting_observation=data["observation"],
             green_relevance_assessment=data["green"],
+            effective_green_result=green,
             segment="UNKNOWN",
             assessment_status=(
                 "NO_SUFFICIENT_EVIDENCE" if green == "GREEN_CONFIRMED" else "SKIPPED_NOT_GREEN"
