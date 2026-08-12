@@ -232,7 +232,7 @@ class Gate008PITReconciliationTests(TestCase):
             event_type=VacancyMembershipEvent.EventType.HUMAN_CONFIRM,
         ).exists()
 
-        later_run, _ = run_deduplication(when + timedelta(seconds=1))
+        later_run, _ = run_deduplication(human.created_at + timedelta(seconds=1))
         assert later_run.review_pairs == 0
         assert not DedupReviewItem.objects.filter(status=DedupReviewItem.Status.PENDING).exists()
         assert run_summary(later_run)["effective_vacancies"] == 1
@@ -245,9 +245,9 @@ class Gate008PITReconciliationTests(TestCase):
         self.collect(source, Adapter("B"), when)
         run_deduplication(when)
         review = DedupReviewItem.objects.get(status=DedupReviewItem.Status.PENDING)
-        resolve_review(str(review.pk), merge=False, reason="Distinct assignments")
+        human = resolve_review(str(review.pk), merge=False, reason="Distinct assignments")
 
-        later_run, _ = run_deduplication(when + timedelta(seconds=1))
+        later_run, _ = run_deduplication(human.created_at + timedelta(seconds=1))
         assert later_run.review_pairs == 0
         assert not DedupReviewItem.objects.filter(status=DedupReviewItem.Status.PENDING).exists()
         assert run_summary(later_run)["effective_vacancies"] == 2
@@ -488,7 +488,7 @@ class Gate008PITReconciliationTests(TestCase):
         assert watermark.applied_dedup_run == later_run
         assert watermark.applied_as_of == t2
 
-    def test_lifecycle_change_does_not_inherit_human_decision(self) -> None:
+    def test_pending_absence_preserves_material_human_decision(self) -> None:
         source = self.source("SRC-HUMAN-LIFECYCLE-CHANGE")
         when = datetime(2026, 8, 5, tzinfo=UTC)
         self.collect(source, Adapter("A"), when)
@@ -500,10 +500,11 @@ class Gate008PITReconciliationTests(TestCase):
 
         later = when + timedelta(days=1)
         self.collect_empty(source, later)
-        later_run, _ = run_deduplication(later)
-        later_review = DedupReviewItem.objects.get(algorithm_decision__dedup_run=later_run)
-        later_fingerprint = later_review.algorithm_decision.evidence["pair_evidence_fingerprint"]
-
-        assert later_fingerprint != first_fingerprint
-        assert later_run.review_pairs == 1
-        assert later_review.status == DedupReviewItem.Status.PENDING
+        later_run, _ = run_deduplication(human.created_at + timedelta(seconds=1))
+        assert not DedupReviewItem.objects.filter(algorithm_decision__dedup_run=later_run).exists()
+        inherited = DedupDecision.objects.filter(
+            dedup_run=later_run,
+            evidence__material_version="dedup-review-material-v0.1",
+        ).get()
+        assert inherited.evidence["pair_evidence_fingerprint"] != first_fingerprint
+        assert inherited.inherited_review_application.source_human_decision == human

@@ -4,6 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .engine import merge_vacancies, reconcile_effective_vacancy
+from .evidence import DEDUP_REVIEW_MATERIAL_VERSION
 from .models import (
     DedupDecision,
     DedupReviewItem,
@@ -50,6 +51,8 @@ def resolve_review(review_id: str, *, merge: bool, reason: str) -> DedupDecision
             "reason": reason,
             "algorithm_decision_id": str(algorithm.pk),
             "pair_evidence_fingerprint": algorithm.evidence.get("pair_evidence_fingerprint"),
+            "material_fingerprint": algorithm.evidence.get("material_fingerprint"),
+            "material_version": DEDUP_REVIEW_MATERIAL_VERSION,
         },
     )
     watermark = (

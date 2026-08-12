@@ -495,6 +495,10 @@ def input_fingerprint(
                 "green_review_decision_id": str(item.effective_green.decision.pk)
                 if item.effective_green.decision
                 else None,
+                "green_review_application_id": str(item.effective_green.application.pk)
+                if item.effective_green.application
+                else None,
+                "green_result_origin": item.effective_green.origin,
                 "employer_profile_evidence_ids": [
                     str(profile.pk) for profile in item.employer_profiles
                 ],
@@ -522,6 +526,10 @@ def _evidence(
         "green_review_decision_id": str(item.effective_green.decision.pk)
         if item.effective_green.decision
         else None,
+        "green_review_application_id": str(item.effective_green.application.pk)
+        if item.effective_green.application
+        else None,
+        "green_result_origin": item.effective_green.origin,
         "employer_profile_evidence_ids": [str(profile.pk) for profile in item.employer_profiles],
         "lifecycle_event_id": item.lifecycle_event_id,
         "lifecycle_state": item.lifecycle_state,
@@ -620,6 +628,8 @@ def run_classification(
             posting_observation=item.observation,
             green_relevance_assessment=item.green_assessment,
             green_review_decision=item.effective_green.decision,
+            green_review_application=item.effective_green.application,
+            green_result_origin=item.effective_green.origin,
             effective_green_result=item.effective_green.result,
             employer_profile_evidence=(
                 item.employer_profiles[0] if len(item.employer_profiles) == 1 else None

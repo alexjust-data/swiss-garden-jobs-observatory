@@ -394,6 +394,24 @@ class DedupReviewItem(models.Model):
         ]
 
 
+class DedupReviewDecisionApplication(AppendOnlyEvidence):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    target_algorithm_decision = models.OneToOneField(
+        DedupDecision, on_delete=models.PROTECT, related_name="inherited_review_application"
+    )
+    source_human_decision = models.ForeignKey(
+        DedupDecision, on_delete=models.PROTECT, related_name="review_reuse_applications"
+    )
+    material_fingerprint = models.CharField(max_length=64)
+    fingerprint_version = models.CharField(max_length=80)
+    application_method = models.CharField(max_length=50, default="MATERIAL_IDENTICAL_HUMAN_REUSE")
+    evidence = models.JSONField(default=dict)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "dedup_review_decision_application"
+
+
 class PositionCountEvidence(AppendOnlyEvidence):
     class Method(models.TextChoices):
         EXPLICIT_NUMERIC = "EXPLICIT_NUMERIC", "Explicit numeric"

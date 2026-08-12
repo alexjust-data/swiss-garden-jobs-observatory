@@ -7,7 +7,15 @@ from typing import Any
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from observations.models import GreenRelevanceAssessment, GreenRelevanceReviewDecision
+from observations.models import (
+    GreenRelevanceAssessment,
+    GreenRelevanceReviewDecision,
+    GreenRelevanceReviewDecisionApplication,
+)
+from observations.review_continuity import (
+    GREEN_REVIEW_MATERIAL_VERSION,
+    green_review_material_fingerprint,
+)
 
 GREEN_REVIEW_GOVERNANCE_VERSION = "green-review-v0.1"
 
@@ -20,6 +28,15 @@ class ConflictingGreenReviewDecisionError(RuntimeError):
 class EffectiveGreenResult:
     result: str
     decision: GreenRelevanceReviewDecision | None
+    application: GreenRelevanceReviewDecisionApplication | None = None
+
+    @property
+    def origin(self) -> str:
+        if self.application:
+            return "MATERIAL_IDENTICAL_HUMAN_REUSE"
+        if self.decision:
+            return "DIRECT_HUMAN_DECISION"
+        return "ORIGINAL_CLASSIFIER"
 
 
 def effective_green_result(
@@ -41,11 +58,67 @@ def effective_green_result(
         .order_by("-reviewed_at", "-created_at", "-pk")
         .first()
     )
+    application = None
+    if decision is None:
+        application = (
+            GreenRelevanceReviewDecisionApplication.objects.filter(
+                target_assessment=assessment,
+                governance_version=GREEN_REVIEW_GOVERNANCE_VERSION,
+                created_at__lte=as_of,
+                source_decision__reviewed_at__lte=as_of,
+                source_decision__created_at__lte=as_of,
+            )
+            .select_related("source_decision")
+            .first()
+        )
+        decision = application.source_decision if application else None
     if decision is None or decision.outcome == "INSUFFICIENT_EVIDENCE":
-        return EffectiveGreenResult("REVIEW", decision)
+        return EffectiveGreenResult("REVIEW", decision, application)
     if decision.outcome == "CONFIRMED_GREEN":
-        return EffectiveGreenResult("GREEN_CONFIRMED", decision)
-    return EffectiveGreenResult("NOT_GREEN", decision)
+        return EffectiveGreenResult("GREEN_CONFIRMED", decision, application)
+    return EffectiveGreenResult("NOT_GREEN", decision, application)
+
+
+@transaction.atomic
+def apply_materially_identical_green_decision(
+    *,
+    target_assessment: GreenRelevanceAssessment,
+    source_decision: GreenRelevanceReviewDecision,
+) -> GreenRelevanceReviewDecisionApplication:
+    version = source_decision.governance_version
+    source_fp = green_review_material_fingerprint(
+        source_decision.assessment, governance_version=version
+    )
+    target_fp = green_review_material_fingerprint(target_assessment, governance_version=version)
+    if source_fp != target_fp:
+        raise ValueError("green review material differs")
+    existing = GreenRelevanceReviewDecisionApplication.objects.filter(
+        target_assessment=target_assessment, governance_version=version
+    ).first()
+    if existing:
+        if (
+            existing.source_decision_id == source_decision.pk
+            and existing.material_fingerprint == target_fp
+        ):
+            return existing
+        raise ConflictingGreenReviewDecisionError("conflicting inherited application exists")
+    now = timezone.now()
+    return GreenRelevanceReviewDecisionApplication.objects.create(
+        target_assessment=target_assessment,
+        source_decision=source_decision,
+        material_fingerprint=target_fp,
+        fingerprint_version=GREEN_REVIEW_MATERIAL_VERSION,
+        governance_version=version,
+        created_at=now,
+        evidence={
+            "source_raw_sha256": (
+                source_decision.assessment.posting_observation.raw_artifact.sha256_digest
+            ),
+            "target_raw_sha256": target_assessment.posting_observation.raw_artifact.sha256_digest,
+            "source_assessment_id": str(source_decision.assessment.pk),
+            "target_assessment_id": str(target_assessment.pk),
+        },
+    )
 
 
 @transaction.atomic
@@ -61,6 +134,10 @@ def record_green_review_decision(
 ) -> GreenRelevanceReviewDecision:
     if assessment.result != GreenRelevanceAssessment.Result.REVIEW:
         raise ValueError("only REVIEW assessments may be adjudicated")
+    if GreenRelevanceReviewDecisionApplication.objects.filter(
+        target_assessment=assessment, governance_version=governance_version
+    ).exists():
+        raise ConflictingGreenReviewDecisionError("assessment already inherits human knowledge")
     available_at = timezone.now()
     effective_at = reviewed_at or available_at
     observation = assessment.posting_observation

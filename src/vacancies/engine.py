@@ -12,7 +12,9 @@ from observations.models import Posting, PostingLifecycleEvent
 from observations.pit_selection import lifecycle_key, lifecycle_order
 
 from .evidence import (
+    DEDUP_REVIEW_MATERIAL_VERSION,
     PostingEvidence,
+    dedup_review_material_fingerprint,
     evidence_snapshot,
     input_fingerprint,
     pair_evidence_fingerprint,
@@ -20,6 +22,7 @@ from .evidence import (
 )
 from .models import (
     DedupDecision,
+    DedupReviewDecisionApplication,
     DedupReviewItem,
     DedupRun,
     PositionCountEvidence,
@@ -48,6 +51,7 @@ CONFIGURATION: dict[str, Any] = {
     "repost_window_days": REPOST_WINDOW_DAYS,
     "normalizer_version": NORMALIZER_VERSION,
     "source_precedence_version": SOURCE_PRECEDENCE_VERSION,
+    "review_material_version": DEDUP_REVIEW_MATERIAL_VERSION,
 }
 
 
@@ -71,25 +75,43 @@ def qualifies_as_repost(
 
 
 def _prior_human_decision(
-    left: PostingEvidence, right: PostingEvidence, pair_fingerprint: str
+    left: PostingEvidence,
+    right: PostingEvidence,
+    material_fingerprint: str,
+    as_of: datetime,
 ) -> DedupDecision | None:
-    return (
+    direct = (
         DedupDecision.objects.filter(
             posting_a_id=left.posting_id,
             posting_b_id=right.posting_id,
-            observation_a_id=left.observation_id,
-            observation_b_id=right.observation_id,
             dedup_version=DEDUP_VERSION,
             method=DedupDecision.Method.HUMAN,
-            evidence__pair_evidence_fingerprint=pair_fingerprint,
+            evidence__material_fingerprint=material_fingerprint,
             outcome__in=[
                 DedupDecision.Outcome.MERGE,
                 DedupDecision.Outcome.KEEP_SEPARATE,
             ],
+            created_at__lte=as_of,
         )
         .order_by("-created_at")
         .first()
     )
+    if direct:
+        return direct
+    application = (
+        DedupReviewDecisionApplication.objects.filter(
+            target_algorithm_decision__posting_a_id=left.posting_id,
+            target_algorithm_decision__posting_b_id=right.posting_id,
+            material_fingerprint=material_fingerprint,
+            fingerprint_version=DEDUP_REVIEW_MATERIAL_VERSION,
+            created_at__lte=as_of,
+            source_human_decision__created_at__lte=as_of,
+        )
+        .select_related("source_human_decision")
+        .order_by("-created_at")
+        .first()
+    )
+    return application.source_human_decision if application else None
 
 
 def _posting_closed_event(posting_id: str, as_of: datetime) -> PostingLifecycleEvent | None:
@@ -465,8 +487,52 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
             barriers.append(repost_barrier)
         outcome = "KEEP_SEPARATE" if barriers else assessment.outcome
         pair_fingerprint = pair_evidence_fingerprint(left, right, CONFIGURATION)
-        prior_human = _prior_human_decision(left, right, pair_fingerprint)
+        material_fingerprint = dedup_review_material_fingerprint(
+            left,
+            right,
+            CONFIGURATION,
+            method=assessment.method,
+            score=str(assessment.score),
+            feature_scores=assessment.feature_scores,
+            hard_keys=assessment.hard_key_evidence,
+            hard_barriers=barriers,
+            algorithm_outcome=outcome,
+        )
+        prior_human = _prior_human_decision(left, right, material_fingerprint, as_of)
         if prior_human:
+            target = DedupDecision.objects.create(
+                dedup_run=run,
+                posting_a_id=left.posting_id,
+                posting_b_id=right.posting_id,
+                observation_a_id=left.observation_id,
+                observation_b_id=right.observation_id,
+                dedup_version=DEDUP_VERSION,
+                normalizer_version=NORMALIZER_VERSION,
+                method=assessment.method,
+                outcome=outcome,
+                score=assessment.score,
+                feature_scores=assessment.feature_scores,
+                weights={key: str(value) for key, value in WEIGHTS.items()},
+                blocking_evidence={"hard_keys": assessment.hard_key_evidence},
+                hard_barriers=barriers,
+                evidence={
+                    "left": evidence_snapshot(left),
+                    "right": evidence_snapshot(right),
+                    "pair_evidence_fingerprint": pair_fingerprint,
+                    "material_fingerprint": material_fingerprint,
+                    "material_version": DEDUP_REVIEW_MATERIAL_VERSION,
+                },
+            )
+            DedupReviewDecisionApplication.objects.create(
+                target_algorithm_decision=target,
+                source_human_decision=prior_human,
+                material_fingerprint=material_fingerprint,
+                fingerprint_version=DEDUP_REVIEW_MATERIAL_VERSION,
+                evidence={
+                    "source_decision_id": str(prior_human.pk),
+                    "target_decision_id": str(target.pk),
+                },
+            )
             inherited_decisions[right.posting_id] = prior_human
             if prior_human.outcome == DedupDecision.Outcome.MERGE:
                 clusters.union(left.posting_id, right.posting_id)
@@ -500,6 +566,8 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
                 "left": evidence_snapshot(left),
                 "right": evidence_snapshot(right),
                 "pair_evidence_fingerprint": pair_fingerprint,
+                "material_fingerprint": material_fingerprint,
+                "material_version": DEDUP_REVIEW_MATERIAL_VERSION,
             },
         )
         if barriers:
