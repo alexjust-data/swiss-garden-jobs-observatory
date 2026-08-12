@@ -9,6 +9,7 @@ from observations.models import (
     GeocoderCacheEntry,
     GeocodingReviewItem,
     GreenRelevanceAssessment,
+    GreenRelevanceReviewDecision,
     Posting,
     PostingLifecycleEvent,
     PostingLocationResolution,
@@ -73,6 +74,28 @@ class GreenRelevanceAssessmentAdmin(admin.ModelAdmin):
     )
     list_filter = ("result", "classifier_version", "taxonomy_version")
     readonly_fields = tuple(field.name for field in GreenRelevanceAssessment._meta.fields)
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
+    def has_change_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False
+
+
+@admin.register(GreenRelevanceReviewDecision)
+class GreenRelevanceReviewDecisionAdmin(admin.ModelAdmin):
+    list_display = (
+        "assessment",
+        "outcome",
+        "reason_code",
+        "governance_version",
+        "reviewed_at",
+    )
+    list_filter = ("outcome", "reason_code", "governance_version")
+    readonly_fields = tuple(field.name for field in GreenRelevanceReviewDecision._meta.fields)
 
     def has_add_permission(self, request: HttpRequest) -> bool:
         return False

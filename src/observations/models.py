@@ -16,6 +16,10 @@ class ImmutableGreenRelevanceAssessmentError(RuntimeError):
     pass
 
 
+class ImmutableGreenRelevanceReviewDecisionError(RuntimeError):
+    pass
+
+
 class ImmutablePostingLifecycleEventError(RuntimeError):
     pass
 
@@ -96,6 +100,33 @@ class GreenRelevanceAssessmentManager(models.Manager["GreenRelevanceAssessment"]
     def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
         raise ImmutableGreenRelevanceAssessmentError(
             "GreenRelevanceAssessment bulk updates are forbidden"
+        )
+
+
+class GreenRelevanceReviewDecisionQuerySet(models.QuerySet["GreenRelevanceReviewDecision"]):
+    def update(self, **kwargs: Any) -> int:
+        raise ImmutableGreenRelevanceReviewDecisionError(
+            "GreenRelevanceReviewDecision queryset updates are forbidden"
+        )
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise ImmutableGreenRelevanceReviewDecisionError(
+            "GreenRelevanceReviewDecision queryset deletion is forbidden"
+        )
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutableGreenRelevanceReviewDecisionError(
+            "GreenRelevanceReviewDecision bulk updates are forbidden"
+        )
+
+
+class GreenRelevanceReviewDecisionManager(models.Manager["GreenRelevanceReviewDecision"]):
+    def get_queryset(self) -> GreenRelevanceReviewDecisionQuerySet:
+        return GreenRelevanceReviewDecisionQuerySet(self.model, using=self._db)
+
+    def bulk_update(self, objs: Any, fields: Any, batch_size: int | None = None) -> int:
+        raise ImmutableGreenRelevanceReviewDecisionError(
+            "GreenRelevanceReviewDecision bulk updates are forbidden"
         )
 
 
@@ -391,6 +422,71 @@ class GreenRelevanceAssessment(models.Model):
 
     def __str__(self) -> str:
         return f"{self.posting_observation.pk}:{self.classifier_version}"
+
+
+class GreenRelevanceReviewDecision(models.Model):
+    class Outcome(models.TextChoices):
+        CONFIRMED_GREEN = "CONFIRMED_GREEN", "Confirmed green"
+        CONFIRMED_NOT_GREEN = "CONFIRMED_NOT_GREEN", "Confirmed not green"
+        INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE", "Insufficient evidence"
+
+    objects = GreenRelevanceReviewDecisionManager()
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assessment = models.ForeignKey(
+        GreenRelevanceAssessment,
+        on_delete=models.PROTECT,
+        related_name="review_decisions",
+    )
+    outcome = models.CharField(max_length=30, choices=Outcome)
+    reason_code = models.CharField(max_length=80)
+    reason = models.TextField()
+    evidence = models.JSONField(default=dict)
+    governance_version = models.CharField(max_length=80)
+    reviewed_at = models.DateTimeField()
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "green_relevance_review_decision"
+        ordering = ["reviewed_at", "created_at", "pk"]
+        indexes = [
+            models.Index(fields=["assessment", "reviewed_at", "created_at"]),
+            models.Index(fields=["governance_version", "outcome"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["assessment", "governance_version", "reviewed_at"],
+                name="green_review_decision_assessment_version_time_unique",
+            )
+        ]
+
+    def clean(self) -> None:
+        super().clean()
+        errors: dict[str, str] = {}
+        if self.assessment.pk and self.assessment.result != GreenRelevanceAssessment.Result.REVIEW:
+            errors["assessment"] = "only REVIEW assessments may be adjudicated"
+        if self.reviewed_at and self.created_at and self.reviewed_at > self.created_at:
+            errors["reviewed_at"] = "reviewed_at cannot be later than evidence availability"
+        if not self.reason_code.strip():
+            errors["reason_code"] = "reason code is required"
+        if not self.reason.strip():
+            errors["reason"] = "reason is required"
+        if errors:
+            from django.core.exceptions import ValidationError
+
+            raise ValidationError(errors)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ImmutableGreenRelevanceReviewDecisionError(
+                "GreenRelevanceReviewDecision is append-only"
+            )
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ImmutableGreenRelevanceReviewDecisionError(
+            "GreenRelevanceReviewDecision cannot be deleted"
+        )
 
 
 class PostingLifecycleEvent(models.Model):

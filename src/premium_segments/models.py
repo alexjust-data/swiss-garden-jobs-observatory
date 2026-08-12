@@ -215,6 +215,23 @@ class PremiumSegmentAssessment(AppendOnlyPremiumEvidence):
         blank=True,
         related_name="premium_segment_assessments",
     )
+    green_review_decision = models.ForeignKey(
+        "observations.GreenRelevanceReviewDecision",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="premium_segment_assessments",
+    )
+    effective_green_result = models.CharField(
+        max_length=20,
+        choices=[
+            ("GREEN_CONFIRMED", "Green confirmed"),
+            ("REVIEW", "Review"),
+            ("NOT_GREEN", "Not green"),
+            ("MISSING", "Missing"),
+        ],
+        default="MISSING",
+    )
     employer_profile_evidence = models.ForeignKey(
         EmployerProfileEvidence,
         on_delete=models.PROTECT,
@@ -283,12 +300,27 @@ class PremiumSegmentAssessment(AppendOnlyPremiumEvidence):
         super().clean()
         if (
             self.green_relevance_assessment is not None
+            and self.green_review_decision is None
+            and self.effective_green_result == "MISSING"
+        ):
+            self.effective_green_result = self.green_relevance_assessment.result
+        if (
+            self.green_relevance_assessment is not None
             and self.green_relevance_assessment.posting_observation.pk
             != self.posting_observation.pk
         ):
             raise ValidationError(
                 {"green_relevance_assessment": "green assessment belongs to another observation"}
             )
+        if (
+            self.green_review_decision is not None
+            and self.green_review_decision.assessment.pk != self.green_relevance_assessment.pk
+        ):
+            raise ValidationError(
+                {"green_review_decision": "decision belongs to another assessment"}
+            )
+        if self.green_relevance_assessment is None and self.effective_green_result != "MISSING":
+            raise ValidationError({"effective_green_result": "missing assessment requires MISSING"})
 
 
 class PremiumSegmentAssessmentEmployerEvidence(AppendOnlyPremiumEvidence):

@@ -26,6 +26,7 @@ from observations.models import (
     PostingObservation,
 )
 from observations.pit_selection import PIT_SELECTION_VERSION, select_posting_states
+from observations.review import EffectiveGreenResult, effective_green_result
 
 from .models import (
     EmployerProfileEvidence,
@@ -142,6 +143,7 @@ class PremiumDecision:
 class SelectedInput:
     observation: PostingObservation
     green_assessment: GreenRelevanceAssessment | None
+    effective_green: EffectiveGreenResult
     employer_profiles: tuple[EmployerProfileEvidence, ...]
     lifecycle_event_id: str | None
     lifecycle_state: str
@@ -460,6 +462,7 @@ def select_inputs(as_of: datetime) -> list[SelectedInput]:
             SelectedInput(
                 observation,
                 green,
+                effective_green_result(green, as_of=as_of),
                 profiles,
                 lifecycle_event_id,
                 state.lifecycle_state,
@@ -488,6 +491,10 @@ def input_fingerprint(
                 "green_assessment_id": str(item.green_assessment.pk)
                 if item.green_assessment
                 else None,
+                "effective_green_result": item.effective_green.result,
+                "green_review_decision_id": str(item.effective_green.decision.pk)
+                if item.effective_green.decision
+                else None,
                 "employer_profile_evidence_ids": [
                     str(profile.pk) for profile in item.employer_profiles
                 ],
@@ -510,6 +517,10 @@ def _evidence(
         "posting_observation_id": str(item.observation.pk),
         "green_relevance_assessment_id": str(item.green_assessment.pk)
         if item.green_assessment
+        else None,
+        "effective_green_result": item.effective_green.result,
+        "green_review_decision_id": str(item.effective_green.decision.pk)
+        if item.effective_green.decision
         else None,
         "employer_profile_evidence_ids": [str(profile.pk) for profile in item.employer_profiles],
         "lifecycle_event_id": item.lifecycle_event_id,
@@ -562,7 +573,7 @@ def run_classification(
     decisions = [
         classifier.classify_observation(
             item.observation,
-            item.green_assessment.result if item.green_assessment else "MISSING",
+            item.effective_green.result,
             item.employer_profiles,
         )
         for item in inputs
@@ -586,8 +597,7 @@ def run_classification(
         input_fingerprint=fingerprint,
         observations_considered=len(inputs),
         green_confirmed_eligible=sum(
-            item.green_assessment is not None and item.green_assessment.result == GREEN_CONFIRMED
-            for item in inputs
+            item.effective_green.result == GREEN_CONFIRMED for item in inputs
         ),
         classified_count=statuses[STATUS_CLASSIFIED],
         review_count=statuses[STATUS_REVIEW],
@@ -609,6 +619,8 @@ def run_classification(
             run=run,
             posting_observation=item.observation,
             green_relevance_assessment=item.green_assessment,
+            green_review_decision=item.effective_green.decision,
+            effective_green_result=item.effective_green.result,
             employer_profile_evidence=(
                 item.employer_profiles[0] if len(item.employer_profiles) == 1 else None
             ),
