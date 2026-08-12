@@ -6,8 +6,10 @@ Day-0 uses the frozen denominator of 29 equally weighted required Sources. A Sou
 
 Authorization requires both:
 
-- at least 24 of 29 Sources (80%); and
-- structural minima of 1/1 federal, 15/22 canton, and 4/6 city Sources.
+- a coverage ratio of at least 0.80, which requires at least 24 of 29 discrete Sources;
+- structural minima of 1/1 federal and 4/6 city Sources.
+
+The canton consequence is derived, not a separate threshold: if 24 total Sources and the federal Source pass, at most six can be cities, so at least 17/22 cantons must be covered. `23/29 = 79.31%` fails; `24/29 = 82.76%` passes.
 
 All 29 must also have a final governed disposition. `ACCEPTED_BLOCKED` remains in the denominator, never enters the numerator, and is presented as `NOT_COVERED`, never as zero demand. Vacancy counts are not weights.
 
@@ -15,7 +17,7 @@ Policy version: `day0-coverage-v0.1`.
 
 ## Rationale and alternatives
 
-The rule was frozen before current-state evaluation. Eighty percent is a supermajority rule; the separate two-thirds stratum floors prevent total coverage from concealing concentrated loss of an employer class. Federal coverage is indivisible and therefore requires 1/1.
+The rule was frozen before current-state evaluation. Eighty percent is an explicit normative launch-governance threshold, not a statistically estimated market-completeness parameter. Scientific integrity comes from pre-declaration, versioning, equal Source weighting, transparent missingness, no imputation, explicit scope, and sensitivity to future policy versions. The city floor prevents concentrated city loss; federal coverage is indivisible and therefore requires 1/1.
 
 - 100% was rejected as an operational veto by any one scientifically governed blocker.
 - 90% (27/29) was rejected because two blocked Sources would veto the product without a separately governed structural reason.

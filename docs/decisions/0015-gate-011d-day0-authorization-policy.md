@@ -10,19 +10,19 @@ Merged GATE-011C-6 baseline: `a9199cac3cc0233adf7b523fd9671e19981c5822`.
 
 ## Decision
 
-Coverage policy `day0-coverage-v0.1` requires 24/29 fresh, healthy, complete required Sources, with minima of federal 1/1, canton 15/22, and city 4/6. Freshness policy `full-source-freshness-v0.1` uses `CollectionRun.finished_at` and an inclusive 72-hour wall-clock maximum age. Authorization policy is `day0-authorization-v0.1`; readiness evidence is `day0-readiness-v0.3`.
+Coverage policy `day0-coverage-v0.1` requires ratio >=0.80: with 29 discrete Sources, 23/29 fails and 24/29 (82.76%) passes. Structural minima are federal 1/1 and city 4/6; passing total plus federal derives a canton floor of 17/22. Freshness policy `full-source-freshness-v0.1` uses `CollectionRun.finished_at` and an inclusive 72-hour wall-clock maximum age. Authorization policy is `day0-authorization-v0.1`; readiness evidence is `day0-readiness-v0.3`.
 
 All 29 Sources require final disposition. The nine C-6 blocked Sources remain in the denominator and appear as not covered; their blocker class is explanatory, not an exemption or automatic veto. A fresh healthy complete zero-result run counts as covered.
 
-The latest accepted complete FULL_SOURCE run supplies immutable source evidence. Later failed/outage/degraded activity preserves that evidence but fails current health. Policy values, policy versions, source evidence, aligned downstream IDs, review sets, and cutoff participate in the readiness fingerprint.
+The latest accepted `FULL_SOURCE + SUCCEEDED + HEALTHY + complete` run supplies immutable source evidence. Later failed/outage/degraded activity preserves that evidence but fails current health. Policy values, policy versions, exact eligible Source IDs, filtered market state, aligned downstream IDs, review sets, and cutoff participate in the readiness fingerprint.
 
-Closed GATE-011A critical-review semantics remain intact: reviews capable of changing the public count or identity block authorization. Green `REVIEW` remains non-public.
+Closed GATE-011A critical-review semantics remain intact: only reviews capable of changing the eligible Day-0 count or identity block authorization. Reviews from blocked, stale, unhealthy, incomplete, supporting, or otherwise excluded Sources remain visible as noncritical evidence. Green `REVIEW` remains non-public.
 
 ## Current result
 
-At `2026-08-12T07:30:00Z`, disposition is 29/29, but only 18/29 Sources are fresh and eligible. Structural coverage is federal 1, canton 13, city 4. Winterthur and Z?rich are stale at approximately 87.5 and 87.4 hours. Coverage fails 24/29; cantons fail 15/22; 53 critical green reviews also remain. Result: `DAY_0_NOT_AUTHORIZED`.
+The current corrected PIT audit is rebuilt below. Authorization-facing market metrics use only dashboard records whose canonical observation Source is in the exact eligible Source set. Supporting provenance cannot re-canonicalize an excluded record in v0.1.
 
-The numeric value remains null in the public market-figure API. The 14 green-confirmed records are corpus diagnostics, not an authorized headline.
+Exact DashboardSnapshot endpoints remain immutable and contain no dynamically selected readiness assessment. Exact readiness endpoints are pinned by assessment ID; the current convenience endpoint declares its selection policy. Unauthorized market value remains null.
 
 ## Future versions
 

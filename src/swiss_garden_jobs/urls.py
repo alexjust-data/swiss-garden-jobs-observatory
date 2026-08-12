@@ -11,5 +11,6 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("health/", views.health_check),
     path("api/health/", views.health_check),
+    path("", include("day0.urls")),
     path("", include("dashboard.urls")),
 ]

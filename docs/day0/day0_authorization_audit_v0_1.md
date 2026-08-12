@@ -10,8 +10,8 @@ PremiumSegmentRun       5464f4c5-13d1-47b4-a0fb-c3ada61f83ab
 fingerprint             b34575cd813f24aff29f2b84584075cfeb4e79eadb051b5e7e50ff3819b29717
 DashboardSnapshot       e8fafe8d-ebb0-42e2-9d8a-2acebb47e313
 fingerprint             d9cf027490ec22f2d577100ba9c61ad7f86b1388fea0528922159ee6237b0a5f
-Day0ReadinessAssessment 6f189434-ab48-4c69-bfdd-0237101c4b06
-fingerprint             806dba637a1722d2cf56dfc90dfd238a1f08e683e5fb4a7f8a51c083b1132ef0
+Day0ReadinessAssessment d078eea3-495b-43b7-bc37-20a199e1a3a2
+fingerprint             c350b8f946ea60dde0f11b55102551caadc5004a3c05bbad09ea032a2f3eb362
 ```
 
 ## Required-source evidence
@@ -58,8 +58,9 @@ implemented complete       20 / 29
 healthy                    20 / 29
 fresh eligible             18 / 29 FAIL (minimum 24)
 structural federal          1 / 1  PASS
-structural canton          13 / 22 FAIL (minimum 15)
 structural city             4 / 6  PASS
+derived canton guarantee   17 / 22 when total + federal pass
+current canton diagnostic  13 / 22 (total already fails)
 blocked                     9
 stale                       2
 unhealthy                   0
@@ -68,14 +69,21 @@ incomplete implemented      0
 postings/vacancies          1,867 / 1,867
 AUTO_MERGE                  0
 cross-source AUTO_MERGE     0
-dedup REVIEW               99 (noncritical for current public cohort)
-public GREEN_CONFIRMED     14
-critical green REVIEW      53
-mappable/unmappable         0 / 14
+dedup REVIEW               99 (noncritical for eligible Day-0 cohort)
+corpus GREEN_CONFIRMED     14
+eligible GREEN_CONFIRMED    8
+corpus green REVIEW        53
+critical green REVIEW      39
+excluded noncritical green 14
+eligible mappable           0 / 8
 ```
 
 ## Authorization result
 
-`DAY_0_NOT_AUTHORIZED` (stored status: `DAY_0_BLOCKED_BY_DATA_QUALITY`). Independent failed conditions are acquisition coverage 18/29 < 24/29, canton coverage 13/22 < 15/22, and 53 critical green reviews under closed GATE-011A semantics. The public market figure is `null`; 14 is an observed corpus diagnostic only.
+`DAY_0_NOT_AUTHORIZED` (stored status: `DAY_0_BLOCKED_BY_DATA_QUALITY`). Failed conditions are acquisition coverage 18/29 < 24/29 and 39 authorization-critical green reviews inside the exact eligible Source cohort. Federal and city structural rules pass. The current 13/22 canton count is diagnostic, not a redundant independent blocker: passing total plus federal with at most six cities would guarantee at least 17/22 cantons.
+
+The public market figure is `null`. The corpus contains 14 public `GREEN_CONFIRMED` records, but only 8 have canonical observations owned by the 18 fresh, healthy, complete required Sources. If this assessment had otherwise authorized publication, the immutable assessment envelope—not the whole DashboardSnapshot—would expose 8.
+
+The eligible Source set is persisted in `metrics.day0_market_state.eligible_source_ids`. Exact DashboardSnapshot responses remain independent of later readiness assessments; exact authorization evidence is retrieved by `Day0ReadinessAssessment` ID.
 
 Exact replay reused the same four IDs and fingerprints with no duplicate derived artifact.

@@ -33,6 +33,7 @@ from .models import (
 from .policy import (
     AUTHORIZATION_POLICY_VERSION,
     COVERAGE_POLICY_VERSION,
+    DERIVED_CANTON_FLOOR,
     FINAL_BLOCKED_REQUIRED_SOURCES,
     FRESHNESS_POLICY_VERSION,
     MAX_FULL_SOURCE_AGE_HOURS,
@@ -145,6 +146,7 @@ def ensure_authorization_policy() -> Day0AuthorizationPolicy:
         "minimum_required_source_coverage": MINIMUM_REQUIRED_SOURCE_COVERAGE,
         "equal_source_weighting": True,
         "stratum_minima": REQUIRED_STRATUM_MINIMA,
+        "derived_canton_floor": DERIVED_CANTON_FLOOR,
         "governed_disposition_required": REQUIRED_SOURCE_COUNT,
         "final_blocked_required_sources": FINAL_BLOCKED_REQUIRED_SOURCES,
         "freshness": {
@@ -152,7 +154,7 @@ def ensure_authorization_policy() -> Day0AuthorizationPolicy:
             "maximum_age_hours": MAX_FULL_SOURCE_AGE_HOURS,
             "boundary": "inclusive",
             "clock": "wall_clock",
-            "selected_run": "latest_causally_available_healthy_complete_FULL_SOURCE",
+            "selected_run": "latest_causally_available_HEALTHY_complete_FULL_SOURCE",
             "later_failed_activity": (
                 "preserves accepted evidence but invalidates current health"
             ),
@@ -176,6 +178,10 @@ def ensure_authorization_policy() -> Day0AuthorizationPolicy:
     ).first()
     if existing:
         return existing
+    if Day0AuthorizationPolicy.objects.filter(policy_version=POLICY_VERSION).exists():
+        raise Day0ContractError(
+            "Authorization policy version already exists with a different immutable fingerprint"
+        )
     return Day0AuthorizationPolicy.objects.create(
         policy_version=POLICY_VERSION,
         threshold_policy_status="ACCEPTED",
@@ -307,7 +313,7 @@ def _source_plan(
         (
             run
             for run in full_attempts
-            if _structurally_complete(run)
+            if _structurally_complete(run) and run.source_health_status == "HEALTHY"
         ),
         None,
     )
@@ -439,12 +445,13 @@ def _review_evidence(
     dedup_run: DedupRun,
     premium_run: PremiumSegmentRun,
     dashboard_snapshot: DashboardSnapshot,
+    eligible_source_ids: set[str],
 ) -> tuple[list[str], list[str], int, int, int]:
     critical: list[str] = []
     noncritical: list[str] = []
     assessments = list(
         PremiumSegmentAssessment.objects.filter(run=premium_run).select_related(
-            "green_relevance_assessment"
+            "green_relevance_assessment", "posting_observation"
         )
     )
     green_by_observation = {
@@ -456,9 +463,19 @@ def _review_evidence(
     green_reviews = [
         str(row.green_relevance_assessment_id)
         for row in assessments
-        if row.green_relevance_assessment_id and row.green_relevance_assessment.result == "REVIEW"
+        if row.green_relevance_assessment_id
+        and row.green_relevance_assessment.result == "REVIEW"
+        and str(row.posting_observation.source_id) in eligible_source_ids
+    ]
+    excluded_green_reviews = [
+        str(row.green_relevance_assessment_id)
+        for row in assessments
+        if row.green_relevance_assessment_id
+        and row.green_relevance_assessment.result == "REVIEW"
+        and str(row.posting_observation.source_id) not in eligible_source_ids
     ]
     critical.extend(f"green:{item}" for item in green_reviews)
+    noncritical.extend(f"green-excluded-source:{item}" for item in excluded_green_reviews)
     critical_dedup = 0
     reviews = DedupReviewItem.objects.filter(status="PENDING").select_related(
         "algorithm_decision__observation_a", "algorithm_decision__observation_b"
@@ -472,17 +489,27 @@ def _review_evidence(
             green_by_observation.get(decision.observation_b_id),
         )
         marker = f"dedup:{review.pk}"
-        if all(value in {"GREEN_CONFIRMED", "REVIEW", None} for value in values):
+        source_ids = {
+            str(decision.observation_a.source_id),
+            str(decision.observation_b.source_id),
+        }
+        if source_ids & eligible_source_ids and all(
+            value in {"GREEN_CONFIRMED", "REVIEW", None} for value in values
+        ):
             critical.append(marker)
             critical_dedup += 1
         else:
             noncritical.append(marker)
     premium_reviews = PremiumSegmentReviewItem.objects.filter(
-        assessment__run=premium_run, status="PENDING"
+        assessment__run=premium_run,
+        assessment__posting_observation__source_id__in=eligible_source_ids,
+        status="PENDING",
     ).values_list("pk", flat=True)
     critical.extend(f"premium:{item}" for item in premium_reviews)
     location_reviews = DashboardVacancyRecord.objects.filter(
-        snapshot=dashboard_snapshot, mapping_status="LOCATION_REVIEW"
+        snapshot=dashboard_snapshot,
+        canonical_observation__source_id__in=eligible_source_ids,
+        mapping_status="LOCATION_REVIEW",
     ).values_list("pk", flat=True)
     critical.extend(f"geospatial-record:{item}" for item in location_reviews)
     critical = sorted(set(critical))
@@ -593,6 +620,13 @@ def assess_day0_readiness(
         for plan in required
         if plan.structurally_complete and plan.currently_healthy and plan.freshness_valid is True
     ]
+    final_policy = policy.configuration.get("authorization_policy_version") == POLICY_VERSION
+    market_plans = (
+        authorized
+        if final_policy
+        else [plan for plan in required if plan.structurally_complete and plan.currently_healthy]
+    )
+    eligible_source_ids = {str(plan.entry.source_id) for plan in market_plans}
     blocked_required = [
         plan for plan in required if plan.terminal_disposition == "ACCEPTED_BLOCKED"
     ]
@@ -600,7 +634,6 @@ def assess_day0_readiness(
         plan.terminal_disposition in {"ACCEPTED_IMPLEMENTED", "ACCEPTED_BLOCKED"}
         for plan in required
     )
-    final_policy = policy.configuration.get("authorization_policy_version") == POLICY_VERSION
     if final_policy:
         governed_disposition_complete = (
             governed_disposition_complete and len(required) == REQUIRED_SOURCE_COUNT
@@ -628,11 +661,19 @@ def assess_day0_readiness(
         and plan.entry.access_status == "BLOCKED_PENDING_ACCESS_REVIEW"
     ]
     critical, noncritical, critical_green, critical_dedup, other_critical = _review_evidence(
-        dedup_run, premium_run, dashboard_snapshot
+        dedup_run,
+        premium_run,
+        dashboard_snapshot,
+        eligible_source_ids,
     )
     records = list(DashboardVacancyRecord.objects.filter(snapshot=dashboard_snapshot))
     public = [row for row in records if row.visibility_status == "PUBLIC_GREEN_CONFIRMED"]
-    known = [row for row in public if row.positions_count is not None]
+    market = [
+        row
+        for row in public
+        if str(row.canonical_observation.source_id) in eligible_source_ids
+    ]
+    known = [row for row in market if row.positions_count is not None]
     green_confirmed = sum(row.visibility_status == "PUBLIC_GREEN_CONFIRMED" for row in records)
     green_review = sum(row.visibility_status == "REVIEW_NOT_PUBLIC" for row in records)
     not_green = sum(row.visibility_status == "EXCLUDED_NOT_GREEN" for row in records)
@@ -661,12 +702,34 @@ def assess_day0_readiness(
                 if plan.latest_full_source_run
             ],
         ),
+        "day0_market_state": {
+            "version": "day0-market-state-v0.1",
+            "eligible_source_ids": sorted(eligible_source_ids),
+            "canonicalization_rule": "CANONICAL_OBSERVATION_SOURCE_MUST_BE_ELIGIBLE",
+            "green_confirmed_count": len(market),
+            "active_unique_vacancies": sum(
+                row.vacancy_status == "ACTIVE" for row in market
+            ),
+            "known_positions_total": sum(row.positions_count or 0 for row in known),
+            "unknown_position_vacancy_count": len(market) - len(known),
+            "multi_hire_possible_count": sum(bool(row.multi_hire_possible) for row in market),
+        },
+        "corpus_diagnostics": {
+            "dashboard_green_confirmed_count": len(public),
+            "dashboard_green_review_count": green_review,
+            "dashboard_record_count": len(records),
+            "excluded_source_green_review_count": sum(
+                marker.startswith("green-excluded-source:") for marker in noncritical
+            ),
+        },
         "day0_structural_coverage": {
             "version": METRIC_VERSION,
             "status": "PASS" if structural_coverage_pass else "FAIL",
             "eligible": eligible_by_stratum,
             "required": required_by_stratum,
             "minimum": stratum_minima,
+            "derived_canton_floor_if_total_and_federal_pass": DERIVED_CANTON_FLOOR,
+            "current_eligible_cantons": sum(plan.stratum == "CANTON" for plan in authorized),
         },
         "required_source_run_coverage": _metric(
             len(complete),
@@ -715,15 +778,15 @@ def assess_day0_readiness(
             "NOT_COMPUTABLE",
         ),
         "publication_date_coverage": _metric(
-            dashboard_snapshot.known_publication_date_count,
-            dashboard_snapshot.public_green_eligible_count,
-            "Public green records with source publication dates.",
+            sum(row.source_published_date is not None for row in market),
+            len(market),
+            "Eligible Day-0 market records with source publication dates.",
             [str(dashboard_snapshot.pk)],
         ),
         "geospatial_resolution_coverage": _metric(
-            dashboard_snapshot.mappable_vacancy_count,
-            dashboard_snapshot.public_green_eligible_count,
-            "Public green records with safe public-display coordinates.",
+            sum(row.mapping_status == "MAPPABLE" for row in market),
+            len(market),
+            "Eligible Day-0 market records with safe public-display coordinates.",
             [str(dashboard_snapshot.pk)],
         ),
         "green_classification_coverage": _metric(
@@ -733,8 +796,8 @@ def assess_day0_readiness(
             [str(dashboard_snapshot.pk)],
         ),
         "dedup_resolution_quality": _metric(
-            len(public),
-            len(public) + critical_dedup,
+            len(market),
+            len(market) + critical_dedup,
             (
                 "Public unique vacancies relative to pending dedup decisions capable "
                 "of changing the count."
@@ -743,15 +806,15 @@ def assess_day0_readiness(
         ),
         "position_count_disclosure_coverage": _metric(
             len(known),
-            len(public),
-            "Public unique vacancies with explicit positions_count.",
+            len(market),
+            "Eligible Day-0 market vacancies with explicit positions_count.",
             [str(row.pk) for row in known],
         ),
         "source_link_provenance_coverage": _metric(
-            sum(row.source_link_status not in {"NO_LINK_AVAILABLE", "REVIEW"} for row in public),
-            len(public),
-            "Public records with governed source-link status.",
-            [str(row.pk) for row in public],
+            sum(row.source_link_status not in {"NO_LINK_AVAILABLE", "REVIEW"} for row in market),
+            len(market),
+            "Eligible Day-0 market records with governed source-link status.",
+            [str(row.pk) for row in market],
         ),
     }
     blockers: list[dict[str, Any]] = []
@@ -905,10 +968,10 @@ def assess_day0_readiness(
         missing_green_count=missing_green,
         observed_postings=selected_postings,
         selected_source_postings=selected_postings,
-        active_unique_vacancies=sum(row.vacancy_status == "ACTIVE" for row in public),
+        active_unique_vacancies=sum(row.vacancy_status == "ACTIVE" for row in market),
         known_positions_total=sum(row.positions_count or 0 for row in known),
-        vacancies_unknown_position_count=len(public) - len(known),
-        multi_hire_possible_count=sum(bool(row.multi_hire_possible) for row in public),
+        vacancies_unknown_position_count=len(market) - len(known),
+        multi_hire_possible_count=sum(bool(row.multi_hire_possible) for row in market),
         input_fingerprint=fingerprint,
     )
     assessment.save()

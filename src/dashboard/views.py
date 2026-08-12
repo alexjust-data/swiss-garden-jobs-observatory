@@ -37,53 +37,6 @@ def _ratio(numerator: int, denominator: int) -> float | None:
 
 
 def snapshot_metadata(snapshot: DashboardSnapshot) -> dict[str, Any]:
-    from day0.models import Day0ReadinessAssessment
-
-    readiness = (
-        Day0ReadinessAssessment.objects.filter(dashboard_snapshot=snapshot)
-        .select_related("authorization_policy")
-        .order_by("-created_at")
-        .first()
-    )
-    authorized = bool(readiness and readiness.readiness_status == "DAY_0_AUTHORIZED")
-    authorization = {
-        "authorized": authorized,
-        "value": snapshot.public_green_eligible_count if authorized else None,
-        "as_of": snapshot.as_of.isoformat(),
-        "assessment_id": str(readiness.pk) if readiness else None,
-        "status": readiness.readiness_status if readiness else "NO_DAY_0_ASSESSMENT",
-        "coverage": (
-            {
-                "eligible": readiness.required_freshness_valid_count,
-                "required": readiness.required_source_count,
-                "blocked": readiness.blocked_required_source_count,
-                "stale": sum(
-                    row.evidence.get("freshness_state") == "STALE"
-                    for row in readiness.source_evidence.all()
-                ),
-            }
-            if readiness
-            else None
-        ),
-        "policy_versions": (
-            {
-                "authorization": readiness.policy_version,
-                "coverage": readiness.authorization_policy.configuration.get(
-                    "coverage_policy_version"
-                ),
-                "freshness": readiness.authorization_policy.configuration.get(
-                    "freshness_policy_version"
-                ),
-            }
-            if readiness and readiness.authorization_policy
-            else None
-        ),
-        "scope": (
-            "Observed active GREEN_CONFIRMED vacancies in the fresh, healthy, complete "
-            "required-source universe; not an estimate of missing Sources."
-        ),
-        "reasons": readiness.blockers if readiness else [{"code": "NO_DAY_0_ASSESSMENT"}],
-    }
     return {
         "snapshot_id": str(snapshot.pk),
         "as_of": snapshot.as_of.isoformat(),
@@ -91,8 +44,8 @@ def snapshot_metadata(snapshot: DashboardSnapshot) -> dict[str, Any]:
         "dedup_run_id": str(snapshot.dedup_run.pk),
         "premium_run_id": str(snapshot.premium_run.pk),
         "scope_notice": SCOPE_NOTICE,
-        "headline_market_state": "AUTHORIZED" if authorized else "NOT_AUTHORIZED",
-        "market_figure": authorization,
+        "headline_market_state": "SEE_EXACT_DAY0_ASSESSMENT",
+        "day0_authorization_endpoint": "/api/v1/day0/readiness/current/",
         "counts": {
             "public_green_confirmed": snapshot.public_green_eligible_count,
             "mappable": snapshot.mappable_vacancy_count,

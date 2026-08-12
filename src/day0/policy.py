@@ -18,9 +18,9 @@ MAX_FULL_SOURCE_AGE_HOURS = 72
 
 REQUIRED_STRATUM_MINIMA: dict[str, int] = {
     "FEDERAL": 1,
-    "CANTON": 15,
     "CITY": 4,
 }
+DERIVED_CANTON_FLOOR = 17
 
 # GATE-011C-6 closed all provisional research states. These are governance
 # evidence, not mutable registry fields and not runtime source-model enums.
