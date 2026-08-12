@@ -32,7 +32,15 @@ from .models import (
 )
 from .policy import (
     AUTHORIZATION_POLICY_VERSION,
+    COVERAGE_POLICY_VERSION,
+    FINAL_BLOCKED_REQUIRED_SOURCES,
+    FRESHNESS_POLICY_VERSION,
+    MAX_FULL_SOURCE_AGE_HOURS,
+    MINIMUM_REQUIRED_SOURCE_COUNT,
+    MINIMUM_REQUIRED_SOURCE_COVERAGE,
     READINESS_VERSION,
+    REQUIRED_SOURCE_COUNT,
+    REQUIRED_STRATUM_MINIMA,
     SOURCE_UNIVERSE_VERSION,
     VACANCY_CANONICALITY_VALUES,
     SourcePolicyError,
@@ -41,7 +49,7 @@ from .policy import (
 )
 
 POLICY_VERSION = AUTHORIZATION_POLICY_VERSION
-METRIC_VERSION = "day0-coverage-metrics-v0.2"
+METRIC_VERSION = "day0-coverage-metrics-v0.3"
 
 
 class Day0ContractError(ValueError):
@@ -57,6 +65,9 @@ class SourceEvidencePlan:
     structurally_complete: bool
     currently_healthy: bool
     freshness_valid: bool | None
+    terminal_disposition: str
+    blocker_classification: str
+    stratum: str
     evidence: dict[str, Any]
 
 
@@ -126,15 +137,37 @@ def _entry_spec(source: Source) -> dict[str, Any]:
 @transaction.atomic
 def ensure_authorization_policy() -> Day0AuthorizationPolicy:
     configuration = {
-        "threshold": "No frozen numeric threshold exists.",
-        "freshness": "No frozen maximum source-run age exists.",
-        "alternatives_for_review": ["1.00", "0.95", "0.90"],
+        "coverage_policy_version": COVERAGE_POLICY_VERSION,
+        "freshness_policy_version": FRESHNESS_POLICY_VERSION,
+        "authorization_policy_version": POLICY_VERSION,
+        "denominator": REQUIRED_SOURCE_COUNT,
+        "minimum_required_source_count": MINIMUM_REQUIRED_SOURCE_COUNT,
+        "minimum_required_source_coverage": MINIMUM_REQUIRED_SOURCE_COVERAGE,
+        "equal_source_weighting": True,
+        "stratum_minima": REQUIRED_STRATUM_MINIMA,
+        "governed_disposition_required": REQUIRED_SOURCE_COUNT,
+        "final_blocked_required_sources": FINAL_BLOCKED_REQUIRED_SOURCES,
+        "freshness": {
+            "timestamp": "CollectionRun.finished_at",
+            "maximum_age_hours": MAX_FULL_SOURCE_AGE_HOURS,
+            "boundary": "inclusive",
+            "clock": "wall_clock",
+            "selected_run": "latest_causally_available_healthy_complete_FULL_SOURCE",
+            "later_failed_activity": (
+                "preserves accepted evidence but invalidates current health"
+            ),
+        },
+        "market_semantics": (
+            "Observed active GREEN_CONFIRMED vacancies in fresh, healthy, complete "
+            "required Sources at the exact PIT cutoff; never a national census or estimate."
+        ),
+        "alternatives_considered": ["1.00", "0.90", "0.80", "two_thirds"],
     }
     fingerprint = _sha256(
         {
             "version": POLICY_VERSION,
-            "threshold_status": "PENDING",
-            "freshness_status": "PENDING",
+            "threshold_status": "ACCEPTED",
+            "freshness_status": "ACCEPTED",
             "configuration": configuration,
         }
     )
@@ -145,10 +178,10 @@ def ensure_authorization_policy() -> Day0AuthorizationPolicy:
         return existing
     return Day0AuthorizationPolicy.objects.create(
         policy_version=POLICY_VERSION,
-        threshold_policy_status="PENDING",
-        required_completion_threshold=None,
-        freshness_policy_status="PENDING",
-        required_source_max_age_hours=None,
+        threshold_policy_status="ACCEPTED",
+        required_completion_threshold=Decimal(MINIMUM_REQUIRED_SOURCE_COVERAGE),
+        freshness_policy_status="ACCEPTED",
+        required_source_max_age_hours=MAX_FULL_SOURCE_AGE_HOURS,
         configuration=configuration,
         input_fingerprint=fingerprint,
     )
@@ -174,6 +207,7 @@ def ensure_source_universe() -> Day0SourceUniverse:
         "selection": "frozen-field-rules-v0.2",
         "access_is_orthogonal": True,
         "geographic_coverage": "NOT_COMPUTABLE",
+        "authorization_policy_version": POLICY_VERSION,
     }
     fingerprint = _sha256(
         {
@@ -181,6 +215,7 @@ def ensure_source_universe() -> Day0SourceUniverse:
             "registry": registry_hash,
             "coverage": coverage_hash,
             "configuration": configuration,
+            "policy_version": POLICY_VERSION,
             "entries": [{"source_id": str(source.pk), **spec} for source, spec in specs],
         }
     )
@@ -192,8 +227,8 @@ def ensure_source_universe() -> Day0SourceUniverse:
     universe = Day0SourceUniverse.objects.create(
         universe_version=SOURCE_UNIVERSE_VERSION,
         policy_version=POLICY_VERSION,
-        threshold_policy_status="PENDING",
-        required_completion_threshold=None,
+        threshold_policy_status="ACCEPTED",
+        required_completion_threshold=Decimal(MINIMUM_REQUIRED_SOURCE_COVERAGE),
         source_registry_sha256=registry_hash,
         coverage_matrix_sha256=coverage_hash,
         configuration=configuration,
@@ -247,6 +282,16 @@ def _structurally_complete(run: CollectionRun | None) -> bool:
     )
 
 
+def _source_stratum(entry: Day0SourceUniverseEntry) -> str:
+    if entry.source_family == "OFFICIAL_FEDERAL":
+        return "FEDERAL"
+    if entry.source_family == "OFFICIAL_CANTON":
+        return "CANTON"
+    if entry.source_family == "OFFICIAL_MUNICIPAL":
+        return "CITY"
+    return "OTHER"
+
+
 def _source_plan(
     entry: Day0SourceUniverseEntry,
     as_of: datetime,
@@ -256,13 +301,40 @@ def _source_plan(
         source=entry.source, finished_at__isnull=False, finished_at__lte=as_of
     ).order_by("-finished_at", "-started_at", "-pk")
     activity = runs.first()
-    full = runs.filter(run_scope="FULL_SOURCE").first()
-    health = activity
-    complete = _structurally_complete(full)
-    healthy = bool(
-        health and health.status == "SUCCEEDED" and health.source_health_status == "HEALTHY"
+    full_attempts = list(runs.filter(run_scope="FULL_SOURCE"))
+    latest_full_attempt = full_attempts[0] if full_attempts else None
+    full = next(
+        (
+            run
+            for run in full_attempts
+            if _structurally_complete(run)
+        ),
+        None,
     )
-    freshness: bool | None = None
+    health = activity
+    source_id = str(entry.source_id)
+    final_policy = policy.configuration.get("authorization_policy_version") == POLICY_VERSION
+    if final_policy:
+        blocker_classification = FINAL_BLOCKED_REQUIRED_SOURCES.get(source_id, "")
+    else:
+        blocker_classification = (
+            "LEGACY_ACCESS_BLOCKED"
+            if entry.classification == "BLOCKED_PENDING_ACCESS_REVIEW"
+            else ""
+        )
+    terminal_disposition = (
+        "ACCEPTED_BLOCKED" if blocker_classification else "ACCEPTED_IMPLEMENTED"
+    )
+    if terminal_disposition == "ACCEPTED_BLOCKED":
+        full = None
+    complete = terminal_disposition == "ACCEPTED_IMPLEMENTED" and _structurally_complete(full)
+    healthy = bool(
+        terminal_disposition == "ACCEPTED_IMPLEMENTED"
+        and health
+        and health.status == "SUCCEEDED"
+        and health.source_health_status == "HEALTHY"
+    )
+    freshness: bool | None = False if terminal_disposition == "ACCEPTED_BLOCKED" else None
     if (
         policy.freshness_policy_status == "ACCEPTED"
         and policy.required_source_max_age_hours is not None
@@ -274,6 +346,7 @@ def _source_plan(
         )
     evidence = {
         "latest_activity_run": _run_payload(activity),
+        "latest_full_source_attempt": _run_payload(latest_full_attempt),
         "latest_full_source_run": _run_payload(full),
         "latest_health_run": _run_payload(health),
         "structurally_complete": complete,
@@ -282,8 +355,40 @@ def _source_plan(
         "classification": entry.classification,
         "target_role": entry.target_role,
         "access_status": entry.access_status,
+        "terminal_disposition": terminal_disposition,
+        "blocker_classification": blocker_classification,
+        "stratum": _source_stratum(entry),
+        "freshness_state": (
+            "BLOCKED"
+            if terminal_disposition == "ACCEPTED_BLOCKED"
+            else "FRESH"
+            if freshness is True
+            else "STALE"
+            if freshness is False
+            else "NO_ACCEPTED_RUN"
+            if full is None
+            else "POLICY_PENDING"
+        ),
+        "run_age_seconds": (
+            int((as_of - full.finished_at).total_seconds())
+            if full is not None and full.finished_at is not None
+            else None
+        ),
+        "counts_toward_coverage": complete and healthy and freshness is True,
     }
-    return SourceEvidencePlan(entry, activity, full, health, complete, healthy, freshness, evidence)
+    return SourceEvidencePlan(
+        entry,
+        activity,
+        full,
+        health,
+        complete,
+        healthy,
+        freshness,
+        terminal_disposition,
+        blocker_classification,
+        _source_stratum(entry),
+        evidence,
+    )
 
 
 def _persisted_ratio(numerator: int, denominator: int) -> Decimal | None:
@@ -392,18 +497,23 @@ def _evaluate_status(
     required_count: int,
     critical_count: int,
     access_blockers: int,
+    governed_disposition_complete: bool = True,
+    structural_coverage_pass: bool = True,
 ) -> str:
     freshness_status = getattr(policy, "freshness_policy_status", "ACCEPTED")
     if policy.threshold_policy_status == "PENDING" or freshness_status == "PENDING":
         return cast(str, Day0ReadinessAssessment.Status.POLICY_PENDING)
-    if access_blockers:
+    if not governed_disposition_complete:
+        return cast(str, Day0ReadinessAssessment.Status.NOT_READY)
+    final_policy = policy.configuration.get("authorization_policy_version") == POLICY_VERSION
+    if not final_policy and access_blockers:
         return cast(str, Day0ReadinessAssessment.Status.BLOCKED_ACCESS)
     if critical_count:
         return cast(str, Day0ReadinessAssessment.Status.BLOCKED_QUALITY)
     if not required_count or policy.required_completion_threshold is None:
         return cast(str, Day0ReadinessAssessment.Status.NOT_READY)
     ratio = Decimal(required_authorized) / Decimal(required_count)
-    if ratio < policy.required_completion_threshold:
+    if ratio < policy.required_completion_threshold or not structural_coverage_pass:
         return cast(str, Day0ReadinessAssessment.Status.NOT_READY)
     return cast(str, Day0ReadinessAssessment.Status.AUTHORIZED)
 
@@ -484,8 +594,30 @@ def assess_day0_readiness(
         if plan.structurally_complete and plan.currently_healthy and plan.freshness_valid is True
     ]
     blocked_required = [
-        plan for plan in required if plan.entry.access_status == "BLOCKED_PENDING_ACCESS_REVIEW"
+        plan for plan in required if plan.terminal_disposition == "ACCEPTED_BLOCKED"
     ]
+    governed_disposition_complete = all(
+        plan.terminal_disposition in {"ACCEPTED_IMPLEMENTED", "ACCEPTED_BLOCKED"}
+        for plan in required
+    )
+    final_policy = policy.configuration.get("authorization_policy_version") == POLICY_VERSION
+    if final_policy:
+        governed_disposition_complete = (
+            governed_disposition_complete and len(required) == REQUIRED_SOURCE_COUNT
+        )
+    stratum_minima = policy.configuration.get("stratum_minima", {})
+    eligible_by_stratum = {
+        stratum: sum(plan.stratum == stratum for plan in authorized)
+        for stratum in stratum_minima
+    }
+    required_by_stratum = {
+        stratum: sum(plan.stratum == stratum for plan in required)
+        for stratum in stratum_minima
+    }
+    structural_coverage_pass = all(
+        eligible_by_stratum[stratum] >= minimum
+        for stratum, minimum in stratum_minima.items()
+    )
     blocked_supporting = [
         plan for plan in supporting if plan.entry.access_status == "BLOCKED_PENDING_ACCESS_REVIEW"
     ]
@@ -510,6 +642,32 @@ def assess_day0_readiness(
     ]
     canonical_complete = [plan for plan in canonical_required if plan.structurally_complete]
     metrics = {
+        "governed_disposition_coverage": _metric(
+            len(required) if governed_disposition_complete else 0,
+            len(required),
+            "Required Sources with an ACCEPTED_IMPLEMENTED or ACCEPTED_BLOCKED disposition.",
+            [str(plan.entry.source_id) for plan in required],
+        ),
+        "day0_acquisition_coverage": _metric(
+            len(authorized),
+            len(required),
+            (
+                "Required Sources with accepted implementation plus fresh, healthy, "
+                "structurally complete FULL_SOURCE evidence."
+            ),
+            [
+                str(plan.latest_full_source_run.pk)
+                for plan in authorized
+                if plan.latest_full_source_run
+            ],
+        ),
+        "day0_structural_coverage": {
+            "version": METRIC_VERSION,
+            "status": "PASS" if structural_coverage_pass else "FAIL",
+            "eligible": eligible_by_stratum,
+            "required": required_by_stratum,
+            "minimum": stratum_minima,
+        },
         "required_source_run_coverage": _metric(
             len(complete),
             len(required),
@@ -604,9 +762,36 @@ def assess_day0_readiness(
     if blocked_required:
         blockers.append(
             {
-                "code": "REQUIRED_SOURCE_ACCESS_REVIEW",
+                "code": "FINAL_BLOCKED_REQUIRED_SOURCES",
                 "count": len(blocked_required),
-                "source_ids": sorted(str(plan.entry.source_id) for plan in blocked_required),
+                "sources": {
+                    str(plan.entry.source_id): plan.blocker_classification
+                    for plan in sorted(blocked_required, key=lambda item: str(item.entry.source_id))
+                },
+                "authorization_effect": "DENOMINATOR_ONLY_NOT_AUTOMATIC_VETO",
+            }
+        )
+    if not governed_disposition_complete:
+        blockers.append({"code": "GOVERNED_DISPOSITION_INCOMPLETE"})
+    if policy.required_completion_threshold is not None and (
+        Decimal(len(authorized)) / Decimal(len(required))
+        < policy.required_completion_threshold
+    ):
+        blockers.append(
+            {
+                "code": "ACQUISITION_COVERAGE_BELOW_THRESHOLD",
+                "eligible": len(authorized),
+                "required": len(required),
+                "minimum_count": policy.configuration.get("minimum_required_source_count"),
+                "minimum_ratio": str(policy.required_completion_threshold),
+            }
+        )
+    if not structural_coverage_pass:
+        blockers.append(
+            {
+                "code": "STRUCTURAL_COVERAGE_BELOW_MINIMUM",
+                "eligible": eligible_by_stratum,
+                "minimum": stratum_minima,
             }
         )
     if len(complete) < len(required):
@@ -676,7 +861,13 @@ def assess_day0_readiness(
         premium_run=premium_run,
         dashboard_snapshot=dashboard_snapshot,
         readiness_status=_evaluate_status(
-            policy, len(authorized), len(required), len(critical), len(blocked_required)
+            policy,
+            len(authorized),
+            len(required),
+            len(critical),
+            len(blocked_required),
+            governed_disposition_complete,
+            structural_coverage_pass,
         ),
         selected_source_ids=sorted(str(plan.entry.source_id) for plan in plans),
         selected_collection_run_ids=selected_run_ids,

@@ -264,7 +264,8 @@ def test_api_snapshot_filters_dates_detail_and_zero_feature_geojson(client: Clie
         as_of=data["as_of"], dedup_run=data["dedup"], premium_run=data["premium_run"]
     )
     assert (
-        client.get(reverse("dashboard:current")).json()["headline_market_state"] == "PENDING_DAY_0"
+        client.get(reverse("dashboard:current")).json()["headline_market_state"]
+        == "NOT_AUTHORIZED"
     )
     listing = client.get(
         reverse("dashboard:vacancies", args=[snapshot.pk]),
@@ -343,7 +344,7 @@ def test_list_endpoint_query_count_is_bounded(
     snapshot, _ = build_dashboard_snapshot(
         as_of=data["as_of"], dedup_run=data["dedup"], premium_run=data["premium_run"]
     )
-    with django_assert_num_queries(3):
+    with django_assert_num_queries(4):
         response = client.get(reverse("dashboard:vacancies", args=[snapshot.pk]))
         assert response.status_code == 200
 

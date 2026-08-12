@@ -453,6 +453,8 @@ def test_management_command_uses_frozen_universe_and_succeeds_when_not_ready() -
             stdout=output,
         )
     payload = json.loads(output.getvalue())
-    assert payload["status"] == "DAY_0_THRESHOLD_POLICY_PENDING"
+    assert payload["status"] == "DAY_0_NOT_READY"
+    assert payload["threshold_policy_status"] == "ACCEPTED"
+    assert payload["freshness_policy_status"] == "ACCEPTED"
     assert payload["required_sources"] == 29
     assert payload["exact_replay_reused"] is False

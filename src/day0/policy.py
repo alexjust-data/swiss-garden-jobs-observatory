@@ -6,8 +6,35 @@ from reference_data.models import Municipality
 from sources.models import Source
 
 SOURCE_UNIVERSE_VERSION = "day0-source-universe-v0.2"
-AUTHORIZATION_POLICY_VERSION = "day0-authorization-policy-proposed-v0.2"
-READINESS_VERSION = "day0-readiness-v0.2"
+AUTHORIZATION_POLICY_VERSION = "day0-authorization-v0.1"
+COVERAGE_POLICY_VERSION = "day0-coverage-v0.1"
+FRESHNESS_POLICY_VERSION = "full-source-freshness-v0.1"
+READINESS_VERSION = "day0-readiness-v0.3"
+
+REQUIRED_SOURCE_COUNT = 29
+MINIMUM_REQUIRED_SOURCE_COUNT = 24
+MINIMUM_REQUIRED_SOURCE_COVERAGE = "0.8000"
+MAX_FULL_SOURCE_AGE_HOURS = 72
+
+REQUIRED_STRATUM_MINIMA: dict[str, int] = {
+    "FEDERAL": 1,
+    "CANTON": 15,
+    "CITY": 4,
+}
+
+# GATE-011C-6 closed all provisional research states. These are governance
+# evidence, not mutable registry fields and not runtime source-model enums.
+FINAL_BLOCKED_REQUIRED_SOURCES: dict[str, str] = {
+    "SRC-OFF-CANTON-AI": "SEMANTIC_IDENTITY_BLOCKED",
+    "SRC-OFF-CANTON-AG": "POLICY_BLOCKED",
+    "SRC-OFF-CANTON-BE": "MULTI_SURFACE_BLOCKED",
+    "SRC-OFF-CANTON-FR": "MULTI_SURFACE_BLOCKED",
+    "SRC-OFF-CANTON-JU": "SOURCE_UNIVERSE_BLOCKED",
+    "SRC-OFF-CANTON-NW": "SEMANTIC_IDENTITY_BLOCKED",
+    "SRC-OFF-CANTON-OW": "POLICY_BLOCKED",
+    "SRC-OFF-CANTON-UR": "TECHNICAL_RELIABILITY_BLOCKED",
+    "SRC-OFF-CANTON-VS": "MULTI_SURFACE_BLOCKED",
+}
 
 # The registry has no structured canton code. This is the only identity-specific
 # mapping in v0.2 and every key is reconciled against the frozen registry in tests.
