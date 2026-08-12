@@ -10,8 +10,8 @@ PremiumSegmentRun       5464f4c5-13d1-47b4-a0fb-c3ada61f83ab
 fingerprint             b34575cd813f24aff29f2b84584075cfeb4e79eadb051b5e7e50ff3819b29717
 DashboardSnapshot       e8fafe8d-ebb0-42e2-9d8a-2acebb47e313
 fingerprint             d9cf027490ec22f2d577100ba9c61ad7f86b1388fea0528922159ee6237b0a5f
-Day0ReadinessAssessment d078eea3-495b-43b7-bc37-20a199e1a3a2
-fingerprint             c350b8f946ea60dde0f11b55102551caadc5004a3c05bbad09ea032a2f3eb362
+Day0ReadinessAssessment 904bdf77-282f-48f4-bf21-15728470f0a6
+fingerprint             4b8abbfe4d3272a4b97ff06642164ddfc53d8aa55ddcc02e485d0cf2ef931b48
 ```
 
 ## Required-source evidence
@@ -85,5 +85,7 @@ eligible mappable           0 / 8
 The public market figure is `null`. The corpus contains 14 public `GREEN_CONFIRMED` records, but only 8 have canonical observations owned by the 18 fresh, healthy, complete required Sources. If this assessment had otherwise authorized publication, the immutable assessment envelope—not the whole DashboardSnapshot—would expose 8.
 
 The eligible Source set is persisted in `metrics.day0_market_state.eligible_source_ids`. Exact DashboardSnapshot responses remain independent of later readiness assessments; exact authorization evidence is retrieved by `Day0ReadinessAssessment` ID.
+
+The exact readiness envelope reports `coverage.eligible = 18`, derived from that set, and separately reports `coverage.freshness_valid = 18`. These happen to match in this assessment but are not interchangeable: later unhealthy activity can invalidate eligibility while accepted FULL_SOURCE evidence remains fresh. `REQUIRED_SOURCE_RUNS_INCOMPLETE` and `REQUIRED_SOURCE_HEALTH_INCOMPLETE` are not authorization failures for the final policy; their 20/29 counts remain in immutable fields and coverage diagnostics.
 
 Exact replay reused the same four IDs and fingerprints with no duplicate derived artifact.

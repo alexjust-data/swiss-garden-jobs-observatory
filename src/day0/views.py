@@ -11,11 +11,19 @@ from .models import Day0ReadinessAssessment, Day0ReadinessSourceEvidence
 
 def _market_envelope(assessment: Day0ReadinessAssessment) -> dict[str, Any]:
     market = assessment.metrics.get("day0_market_state", {})
+    eligible_source_ids = market.get("eligible_source_ids", [])
     authorized = assessment.readiness_status == "DAY_0_AUTHORIZED"
     stale = Day0ReadinessSourceEvidence.objects.filter(
         assessment=assessment,
         evidence__freshness_state="STALE"
     ).count()
+    diagnostics = [
+        item
+        for item in assessment.blockers
+        if item.get("authorization_effect")
+        in {"DENOMINATOR_ONLY_NOT_AUTOMATIC_VETO", "DIAGNOSTIC_ONLY"}
+    ]
+    authorization_failures = [item for item in assessment.blockers if item not in diagnostics]
     return {
         "assessment_id": str(assessment.pk),
         "authorized": authorized,
@@ -23,11 +31,12 @@ def _market_envelope(assessment: Day0ReadinessAssessment) -> dict[str, Any]:
         "as_of": assessment.as_of.isoformat(),
         "status": assessment.readiness_status,
         "coverage": {
-            "eligible": assessment.required_freshness_valid_count,
+            "eligible": len(eligible_source_ids),
+            "freshness_valid": assessment.required_freshness_valid_count,
             "required": assessment.required_source_count,
             "blocked": assessment.blocked_required_source_count,
             "stale": stale,
-            "eligible_source_ids": market.get("eligible_source_ids", []),
+            "eligible_source_ids": eligible_source_ids,
         },
         "market_state": market,
         "corpus_diagnostics": assessment.metrics.get("corpus_diagnostics", {}),
@@ -45,7 +54,9 @@ def _market_envelope(assessment: Day0ReadinessAssessment) -> dict[str, Any]:
             "fresh, healthy, complete required Source. Supporting provenance is not used "
             "to re-canonicalize excluded records."
         ),
-        "reasons": assessment.blockers,
+        "authorization_failures": authorization_failures,
+        "diagnostics": diagnostics,
+        "reasons": authorization_failures,
     }
 
 

@@ -26,6 +26,8 @@ from day0.services import (
     ensure_authorization_policy,
 )
 from day0.tests.test_day0 import add_entry, complete_collection, universe
+from observations.models import CollectionRun
+from sources.models import Source
 
 
 def final_policy(suffix: str) -> Day0AuthorizationPolicy:
@@ -87,6 +89,20 @@ def test_exact_coverage_threshold_boundary(eligible: int, expected: str) -> None
     )
 
     assert _evaluate_status(policy, eligible, 29, 0, 0) == expected
+
+
+def test_final_policy_authorizes_24_of_29_without_treating_five_blocked_as_vetoes() -> None:
+    policy = Day0AuthorizationPolicy(
+        policy_version=AUTHORIZATION_POLICY_VERSION,
+        threshold_policy_status="ACCEPTED",
+        freshness_policy_status="ACCEPTED",
+        required_completion_threshold=Decimal("0.8000"),
+        required_source_max_age_hours=72,
+        configuration={"authorization_policy_version": AUTHORIZATION_POLICY_VERSION},
+        input_fingerprint="c" * 64,
+    )
+
+    assert _evaluate_status(policy, 24, 29, 0, 5, True, True) == "DAY_0_AUTHORIZED"
 
 
 def test_structural_rule_can_fail_above_numeric_threshold() -> None:
@@ -153,7 +169,150 @@ def test_full_source_itself_must_be_healthy_and_later_activity_controls_current_
 
     targeted.source_health_status = "OUTAGE"
     targeted.save(update_fields=["source_health_status"])
-    assert not _source_plan(entry, data["as_of"], policy).currently_healthy
+    outage_plan = _source_plan(entry, data["as_of"], policy)
+    assert outage_plan.freshness_valid is True
+    assert not outage_plan.currently_healthy
+
+    snapshot, _ = build_dashboard_snapshot(
+        as_of=data["as_of"], dedup_run=data["dedup"], premium_run=data["premium_run"]
+    )
+    assessment, _ = assess_day0_readiness(
+        as_of=data["as_of"],
+        dedup_run=data["dedup"],
+        premium_run=data["premium_run"],
+        dashboard_snapshot=snapshot,
+        source_universe=entry.universe,
+        authorization_policy=policy,
+    )
+    envelope = Client().get(reverse("day0:detail", args=[assessment.pk])).json()
+    assert assessment.required_freshness_valid_count == 1
+    assert envelope["coverage"]["freshness_valid"] == 1
+    assert envelope["coverage"]["eligible"] == 0
+    assert envelope["coverage"]["eligible_source_ids"] == []
+    assert envelope["market_state"]["green_confirmed_count"] == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_final_policy_incomplete_counts_are_diagnostics_not_authorization_failures() -> None:
+    data = create_dashboard_upstream(suffix="diagnostic-only-counts")
+    complete_collection(data)
+    snapshot, _ = build_dashboard_snapshot(
+        as_of=data["as_of"], dedup_run=data["dedup"], premium_run=data["premium_run"]
+    )
+    policy = final_policy(uuid.uuid4().hex)
+    source_universe, _ = final_universe(data, policy)
+    assessment, _ = assess_day0_readiness(
+        as_of=data["as_of"],
+        dedup_run=data["dedup"],
+        premium_run=data["premium_run"],
+        dashboard_snapshot=snapshot,
+        source_universe=source_universe,
+        authorization_policy=policy,
+    )
+    codes = {item["code"] for item in assessment.blockers}
+    envelope = Client().get(reverse("day0:detail", args=[assessment.pk])).json()
+
+    assert "REQUIRED_SOURCE_RUNS_INCOMPLETE" not in codes
+    assert "REQUIRED_SOURCE_HEALTH_INCOMPLETE" not in codes
+    assert assessment.metrics["required_source_run_coverage"]["numerator"] == 1
+    assert assessment.metrics["source_health_coverage"]["numerator"] == 1
+    assert all(
+        item["code"]
+        not in {"REQUIRED_SOURCE_RUNS_INCOMPLETE", "REQUIRED_SOURCE_HEALTH_INCOMPLETE"}
+        for item in envelope["authorization_failures"]
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_24_of_29_with_five_final_blocked_can_authorize_without_false_failures() -> None:
+    data = create_dashboard_upstream(suffix="24-of-29")
+    data["source"].source_family = "OFFICIAL_FEDERAL"
+    data["source"].save(update_fields=["source_family"])
+    complete_collection(data)
+    snapshot, _ = build_dashboard_snapshot(
+        as_of=data["as_of"], dedup_run=data["dedup"], premium_run=data["premium_run"]
+    )
+    policy = final_policy(uuid.uuid4().hex)
+    source_universe, _ = final_universe(data, policy)
+
+    for index in range(23):
+        family = "OFFICIAL_MUNICIPAL" if index < 4 else "OFFICIAL_CANTON"
+        source = Source.objects.create(
+            source_id=f"TEST-DAY0-ELIGIBLE-{index:02d}",
+            source_name=f"Eligible source {index}",
+            domain=f"eligible-{index}.example",
+            source_family=family,
+            source_type="PUBLIC_OFFICIAL_EMPLOYER",
+            priority="P0",
+            coverage_scope="fixture",
+            canonicality="CANONICAL",
+            platform_family="FIXTURE",
+            access_method="HTML",
+            automation_status="COLLECTOR_CANDIDATE",
+            legal_review_status="APPROVED",
+            verification_status="VERIFIED",
+            official_url=f"https://eligible-{index}.example/jobs",
+            search_url=f"https://eligible-{index}.example/jobs",
+        )
+        add_entry(source_universe, source)
+        CollectionRun.objects.create(
+            source=source,
+            started_at=data["as_of"] - timedelta(hours=1),
+            finished_at=data["as_of"] - timedelta(hours=1),
+            status="SUCCEEDED",
+            run_scope="FULL_SOURCE",
+            source_health_status="HEALTHY",
+            snapshot_complete=True,
+            listing_url=source.search_url,
+        )
+
+    for source_id in (
+        "SRC-OFF-CANTON-AI",
+        "SRC-OFF-CANTON-AG",
+        "SRC-OFF-CANTON-BE",
+        "SRC-OFF-CANTON-FR",
+        "SRC-OFF-CANTON-JU",
+    ):
+        source = Source.objects.create(
+            source_id=source_id,
+            source_name=source_id,
+            domain=f"{source_id.lower()}.example",
+            source_family="OFFICIAL_CANTON",
+            source_type="PUBLIC_OFFICIAL_EMPLOYER",
+            priority="P0",
+            coverage_scope="fixture",
+            canonicality="CANONICAL",
+            platform_family="BLOCKED",
+            access_method="HTML",
+            automation_status="BLOCKED",
+            legal_review_status="APPROVED",
+            verification_status="VERIFIED",
+            official_url=f"https://{source_id.lower()}.example/jobs",
+            search_url=f"https://{source_id.lower()}.example/jobs",
+        )
+        add_entry(source_universe, source)
+
+    assessment, _ = assess_day0_readiness(
+        as_of=data["as_of"],
+        dedup_run=data["dedup"],
+        premium_run=data["premium_run"],
+        dashboard_snapshot=snapshot,
+        source_universe=source_universe,
+        authorization_policy=policy,
+    )
+    envelope = Client().get(reverse("day0:detail", args=[assessment.pk])).json()
+
+    assert assessment.readiness_status == "DAY_0_AUTHORIZED"
+    assert assessment.required_source_count == 29
+    assert assessment.required_complete_count == 24
+    assert assessment.required_healthy_count == 24
+    assert assessment.required_freshness_valid_count == 24
+    assert envelope["coverage"]["eligible"] == 24
+    assert envelope["authorization_failures"] == []
+    assert envelope["reasons"] == []
+    assert {item["code"] for item in envelope["diagnostics"]} == {
+        "FINAL_BLOCKED_REQUIRED_SOURCES"
+    }
 
 
 @pytest.mark.django_db(transaction=True)

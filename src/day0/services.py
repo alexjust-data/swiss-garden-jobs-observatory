@@ -857,7 +857,7 @@ def assess_day0_readiness(
                 "minimum": stratum_minima,
             }
         )
-    if len(complete) < len(required):
+    if not final_policy and len(complete) < len(required):
         blockers.append(
             {
                 "code": "REQUIRED_SOURCE_RUNS_INCOMPLETE",
@@ -865,7 +865,7 @@ def assess_day0_readiness(
                 "required": len(required),
             }
         )
-    if len(healthy) < len(required):
+    if not final_policy and len(healthy) < len(required):
         blockers.append(
             {
                 "code": "REQUIRED_SOURCE_HEALTH_INCOMPLETE",

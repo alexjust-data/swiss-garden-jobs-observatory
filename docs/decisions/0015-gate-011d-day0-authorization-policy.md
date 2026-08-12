@@ -16,6 +16,10 @@ All 29 Sources require final disposition. The nine C-6 blocked Sources remain in
 
 The latest accepted `FULL_SOURCE + SUCCEEDED + HEALTHY + complete` run supplies immutable source evidence. Later failed/outage/degraded activity preserves that evidence but fails current health. Policy values, policy versions, exact eligible Source IDs, filtered market state, aligned downstream IDs, review sets, and cutoff participate in the readiness fingerprint.
 
+The public `coverage.eligible` count is the cardinality of that exact eligible Source set, not the broader number of fresh accepted FULL_SOURCE runs. The latter remains separately disclosed as `coverage.freshness_valid`, because a later outage may preserve fresh evidence while invalidating current eligibility.
+
+Counts below 29 for complete or currently healthy required Sources remain transparent readiness diagnostics and coverage-metric inputs. They are not independent authorization failures under a policy that explicitly permits 24/29 coverage. The exact readiness API separates effective `authorization_failures` from denominator-only or diagnostic evidence.
+
 Closed GATE-011A critical-review semantics remain intact: only reviews capable of changing the eligible Day-0 count or identity block authorization. Reviews from blocked, stale, unhealthy, incomplete, supporting, or otherwise excluded Sources remain visible as noncritical evidence. Green `REVIEW` remains non-public.
 
 ## Current result
