@@ -28,6 +28,9 @@ time-bound evidence, never production constants.
 | FR | `MULTI_SURFACE_BLOCKED` | completed migration or an authoritative cross-platform inventory with stable identity and exhaustion |
 | JU | `SOURCE_UNIVERSE_BLOCKED` | explicit teaching empty/list contract and resolved same-employer versus separate-employer classification for `Autres` |
 | NW | `SEMANTIC_IDENTITY_BLOCKED` | source evidence that `NW-1616` is one continuous standing opportunity, or source-native cohort/application identities that distinguish its simultaneously active internship opportunities |
+| OW | `POLICY_BLOCKED` | an authorized complete official alternate origin or a source/platform policy change |
+| UR | `TECHNICAL_RELIABILITY_BLOCKED` | reproducible complete listing and detail delivery under the existing bounded HTTP policy |
+| VS | `MULTI_SURFACE_BLOCKED` | deterministic cross-platform ownership, bilingual identity reconciliation and exhaustion for every mandatory surface |
 
 ## Nidwalden apprenticeship identity reconciliation
 
@@ -62,9 +65,6 @@ source-native identity and is not fabricated. Because this mandatory family
 cannot be represented causally under the frozen identity contract, NW remains
 `ACCEPTED_BLOCKED` with the precise supporting condition
 `CONCURRENT_COHORT_IDENTITY_AMBIGUITY`.
-| OW | `POLICY_BLOCKED` | an authorized complete official alternate origin or a source/platform policy change |
-| UR | `TECHNICAL_RELIABILITY_BLOCKED` | reproducible complete listing and detail delivery under the existing bounded HTTP policy |
-| VS | `MULTI_SURFACE_BLOCKED` | deterministic cross-platform ownership, bilingual identity reconciliation and exhaustion for every mandatory surface |
 
 ## Acquisition-policy evidence
 
