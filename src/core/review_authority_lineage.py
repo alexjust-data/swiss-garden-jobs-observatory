@@ -38,8 +38,12 @@ from vacancies.review_continuity import (
 
 LINEAGE_VERSION = "review-authority-lineage-v0.1"
 DESIGNATION_VERSION = "review-authority-package-designation-v0.1"
-DESIGNATION_PATH = Path(
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+DESIGNATION_PATH = REPOSITORY_ROOT / (
     "docs/day0/gate_011g_c1_review_authority_package_designation_v0_1.json"
+)
+GOVERNANCE_DOCUMENT_PATH = REPOSITORY_ROOT / (
+    "docs/day0/gate_011e_critical_review_resolution_v0_1.md"
 )
 REGISTRY_VERSION = "review-authority-registry-v0.1"
 GATE_SHAS = {
@@ -824,12 +828,14 @@ def _verify_existing_batch_rows(package: dict[str, Any]) -> None:
 def import_package(
     package: dict[str, Any],
     expected_registry: dict[str, Any],
-    designation: dict[str, Any] | None = None,
 ) -> ImportResult:
     """Preflight and atomically replicate exact authority into the configured target."""
 
     verify_package(package, expected_registry)
-    accepted_designation = designation or load_json(DESIGNATION_PATH)
+    verify_registry_against_merged_governance(
+        expected_registry, GOVERNANCE_DOCUMENT_PATH
+    )
+    accepted_designation = load_json(DESIGNATION_PATH)
     verify_package_designation(package, expected_registry, accepted_designation)
     existing_batch = ReviewAuthorityLineageImport.objects.filter(
         lineage_version=LINEAGE_VERSION

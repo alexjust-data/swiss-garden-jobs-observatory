@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -8,14 +9,23 @@ from typing import Any
 import pytest
 from django.core.exceptions import ValidationError
 
+import core.review_authority_lineage as lineage
+from core.management.commands.export_review_authority_lineage import (
+    Command as ExportLineageCommand,
+)
+from core.management.commands.import_review_authority_lineage import (
+    Command as ImportLineageCommand,
+)
 from core.models import (
     ImmutableReviewAuthorityLineageImportError,
     ReviewAuthorityLineageImport,
 )
 from core.review_authority_lineage import (
+    DESIGNATION_PATH,
     EXPECTED_DEDUP_DECISION_ID,
     EXPECTED_DEDUP_MATERIAL,
     GATE_SHAS,
+    GOVERNANCE_DOCUMENT_PATH,
     LINEAGE_VERSION,
     MODEL_MAP,
     ReviewAuthorityLineageError,
@@ -208,9 +218,7 @@ def test_canonical_json_and_timestamps_are_deterministic() -> None:
     assert canonical_json({"b": [2, 1], "a": {"z": 3}}) == canonical_json(
         {"a": {"z": 3}, "b": [2, 1]}
     )
-    assert canonical_value(datetime(2026, 8, 13, 20, tzinfo=UTC)) == (
-        "2026-08-13T20:00:00.000000Z"
-    )
+    assert canonical_value(datetime(2026, 8, 13, 20, tzinfo=UTC)) == ("2026-08-13T20:00:00.000000Z")
     instant = datetime(2026, 8, 13, 20, 0, 0, 123456, tzinfo=UTC)
     assert canonical_value(instant) == "2026-08-13T20:00:00.123456Z"
     assert canonical_value(instant.astimezone(timezone(timedelta(hours=2)))) == canonical_value(
@@ -293,9 +301,7 @@ def test_lineage_batch_is_append_only_at_instance_queryset_and_manager_layers() 
     with pytest.raises(ImmutableReviewAuthorityLineageImportError):
         batch.delete()
     with pytest.raises(ImmutableReviewAuthorityLineageImportError):
-        ReviewAuthorityLineageImport.objects.filter(pk=batch.pk).update(
-            package_sha256="f" * 64
-        )
+        ReviewAuthorityLineageImport.objects.filter(pk=batch.pk).update(package_sha256="f" * 64)
     with pytest.raises(ImmutableReviewAuthorityLineageImportError):
         ReviewAuthorityLineageImport.objects.filter(pk=batch.pk).delete()
     with pytest.raises(ImmutableReviewAuthorityLineageImportError):
@@ -303,15 +309,112 @@ def test_lineage_batch_is_append_only_at_instance_queryset_and_manager_layers() 
 
 
 @pytest.mark.django_db
-def test_one_package_per_lineage_fails_closed_before_authority_mutation() -> None:
+def test_one_package_per_lineage_fails_closed_before_authority_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ReviewAuthorityLineageImport.objects.create(**_batch_values("a" * 64))
     package, registry = _package_fixture()
     designation = package_designation(package, registry)
+    monkeypatch.setattr(lineage, "load_json", lambda path: designation)
+    monkeypatch.setattr(lineage, "verify_registry_against_merged_governance", lambda *args: None)
     with pytest.raises(ReviewAuthorityLineageError, match="different package"):
-        import_package(package, registry, designation)
+        import_package(package, registry)
     conflicting = _batch_values("f" * 64)
-    conflicting["input_fingerprint"] = lineage_batch_input_fingerprint(**{
-        key: value for key, value in conflicting.items() if key != "input_fingerprint"
-    })
+    conflicting["input_fingerprint"] = lineage_batch_input_fingerprint(
+        **{key: value for key, value in conflicting.items() if key != "input_fingerprint"}
+    )
     with pytest.raises(ValidationError):
         ReviewAuthorityLineageImport.objects.create(**conflicting)
+
+
+def _option_strings(command: object, command_name: str) -> set[str]:
+    parser = command.create_parser("manage.py", command_name)  # type: ignore[attr-defined]
+    return {option for action in parser._actions for option in action.option_strings}
+
+
+def test_authoritative_interfaces_expose_no_trust_root_override() -> None:
+    import_options = _option_strings(ImportLineageCommand(), "import_review_authority_lineage")
+    export_options = _option_strings(ExportLineageCommand(), "export_review_authority_lineage")
+    assert "--designation" not in import_options
+    assert "--governance-document" not in import_options
+    assert "--governance-document" not in export_options
+    assert list(inspect.signature(import_package).parameters) == [
+        "package",
+        "expected_registry",
+    ]
+
+
+def test_authoritative_service_loads_only_repository_trust_roots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package, registry = _package_fixture()
+    designation = package_designation(package, registry)
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(lineage, "verify_package", lambda *args: None)
+
+    def record_governance(value: object, path: Path) -> None:
+        seen["governance_registry"] = value
+        seen["governance_path"] = path
+
+    def record_load(path: Path) -> dict[str, Any]:
+        seen["designation_path"] = path
+        return designation
+
+    def stop_after_trust_roots(*args: object) -> None:
+        raise ReviewAuthorityLineageError("trust roots inspected")
+
+    monkeypatch.setattr(lineage, "verify_registry_against_merged_governance", record_governance)
+    monkeypatch.setattr(lineage, "load_json", record_load)
+    monkeypatch.setattr(lineage, "verify_package_designation", stop_after_trust_roots)
+    with pytest.raises(ReviewAuthorityLineageError, match="trust roots inspected"):
+        import_package(package, registry)
+
+    assert seen == {
+        "governance_registry": registry,
+        "governance_path": GOVERNANCE_DOCUMENT_PATH,
+        "designation_path": DESIGNATION_PATH,
+    }
+
+
+@pytest.mark.django_db
+def test_self_consistent_alternate_designation_cannot_authorize_first_import(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    package, registry = _package_fixture()
+    alternate_path = tmp_path / "alternate-designation.json"
+    alternate_path.write_text(
+        canonical_json(package_designation(package, registry)), encoding="utf-8"
+    )
+    original_load = lineage.load_json
+    loaded_paths: list[Path] = []
+
+    def record_load(path: Path) -> dict[str, Any]:
+        loaded_paths.append(path)
+        return original_load(path)
+
+    monkeypatch.setattr(lineage, "verify_registry_against_merged_governance", lambda *args: None)
+    monkeypatch.setattr(lineage, "load_json", record_load)
+    before = ReviewAuthorityLineageImport.objects.count()
+    with pytest.raises(ReviewAuthorityLineageError, match="audited designation"):
+        import_package(package, registry)
+
+    assert loaded_paths == [DESIGNATION_PATH]
+    assert alternate_path not in loaded_paths
+    assert ReviewAuthorityLineageImport.objects.count() == before
+
+
+@pytest.mark.django_db
+def test_tampered_committed_designation_fails_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package, registry = _package_fixture()
+    tampered = package_designation(package, registry)
+    tampered["package_sha256"] = "f" * 64
+    monkeypatch.setattr(lineage, "verify_registry_against_merged_governance", lambda *args: None)
+    monkeypatch.setattr(lineage, "load_json", lambda path: tampered)
+    before = ReviewAuthorityLineageImport.objects.count()
+    with pytest.raises(ReviewAuthorityLineageError, match="audited designation"):
+        import_package(package, registry)
+    assert ReviewAuthorityLineageImport.objects.count() == before

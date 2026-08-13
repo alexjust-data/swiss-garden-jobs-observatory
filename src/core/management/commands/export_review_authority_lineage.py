@@ -6,6 +6,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 
 from core.review_authority_lineage import (
+    GOVERNANCE_DOCUMENT_PATH,
     ReviewAuthorityLineageError,
     export_package,
     package_designation,
@@ -20,16 +21,12 @@ class Command(BaseCommand):
         parser.add_argument("--package-output", required=True)
         parser.add_argument("--registry-output", required=True)
         parser.add_argument("--designation-output", required=True)
-        parser.add_argument(
-            "--governance-document",
-            default="docs/day0/gate_011e_critical_review_resolution_v0_1.md",
-        )
 
     def handle(self, *args: object, **options: object) -> None:
         try:
             package, registry = export_package()
             verify_registry_against_merged_governance(
-                registry, Path(str(options["governance_document"]))
+                registry, GOVERNANCE_DOCUMENT_PATH
             )
         except ReviewAuthorityLineageError as exc:
             raise CommandError(str(exc)) from exc

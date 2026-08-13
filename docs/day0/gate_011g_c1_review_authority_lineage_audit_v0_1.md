@@ -252,3 +252,76 @@ Exact replay returned the same four IDs and fingerprints with one artifact per f
 The scientific result remains 19 acquisition-eligible Sources, 51 active GREEN, three critical
 green reviews, zero critical dedup reviews, `DAY_0_BLOCKED_BY_DATA_QUALITY`, and null headline.
 The real operational database remained untouched.
+
+## Independent-audit authority-designation lockdown
+
+Prior audited head: `82d62173885ebd8a7c7488947d103a71b9492db6`.
+
+The independent audit found that the production import command and service still accepted a
+runtime-supplied designation, allowing a self-consistent alternative package and designation to
+replace the independently audited package during the first import into an empty target. The
+command also accepted a runtime replacement for the merged GATE-011E governance document.
+
+The authoritative mutation path now has exactly two repository trust roots:
+
+- committed package designation:
+  `docs/day0/gate_011g_c1_review_authority_package_designation_v0_1.json`;
+- merged authority-set governance:
+  `docs/day0/gate_011e_critical_review_resolution_v0_1.md`.
+
+Neither the import CLI nor the service accepts a designation override. Neither the import nor
+export CLI accepts a governance-document override. Candidate export destinations remain
+configurable for audit construction, but generating a candidate designation does not grant it
+authority. The committed designation alone pins package
+`a82fb98616f8072b0343f5fc5ce5f7c9d449c4d3e26e619df661c1ce81d6bc92`, snapshot
+`01d155b681fcb2851010350d3db380f2fad4b7575410eda3648ebe7a4455388e`, and registry
+`922bff765eaf461b3769e674120a2be365960e09c146cfab16771590869ccf55`.
+
+Adversarial coverage proves that a self-consistent alternative designation cannot authorize a
+first import on an empty target, an alternate designation file is never consulted, tampered
+committed values fail before mutation, and the service verifies the registry against the fixed
+merged GATE-011E document. Package, snapshot, registry, human-authority and scientific PIT
+identities are unchanged by this trust-root correction.
+
+### Lockdown acceptance evidence
+
+A fresh isolated operational copy was migrated and exercised through the production import
+command with only `--package` and `--registry`; the command selected the committed designation
+and fixed governance document internally. Dry-run batch
+`1ef5d8af-3760-49dc-9070-a004546ce17d` rolled back. The first committed import created
+lineage batch `82ff1c6a-506a-4123-82e8-e60294a82f4b`; the second exact import reused that batch,
+created zero duplicate authority rows, and reported 55 green plus one dedup authority reused.
+
+Continuity imported 70 exact historical green applications, regenerated 105 target applications,
+left seven unmatched, and regenerated one dedup continuity application. No human decision was
+created. Corrected cutoff: `2026-08-13T21:35:22.136589Z`.
+
+| Artifact | ID | Input fingerprint |
+|---|---|---|
+| DedupRun | `306d69f4-2dcf-4f98-9317-11c7763663f4` | `0096cde9eaed6db16a095e9b156890076763972a61e23303b0279931989be536` |
+| PremiumSegmentRun | `619c2b83-fc49-402f-9c1b-9c6f8ac00cf3` | `9a16ace37c2b59d7c39f1786618e619afc1903b972f8cccdbc8677a6b4ef988a` |
+| DashboardSnapshot | `4f7149ba-7ad1-4628-96a6-9c50693e17cd` | `fd92e914fec8f70345da2bc3189d83d896c0b3b0899c76c1c748aa0cb27073dc` |
+| Day0ReadinessAssessment | `464d6f63-5254-481a-8516-d8b4a9313c75` | `ea5d106983c35f68c51f440c7a0b2857e5fc7ff96509deaa5a62d38614e94f3a` |
+
+Exact replay returned the same IDs and one artifact per fingerprint. The result remains 19
+acquisition-eligible Sources, 51 active GREEN, three critical green reviews, zero critical dedup
+reviews, `DAY_0_BLOCKED_BY_DATA_QUALITY`, and null headline. The real operational database and
+the suspended GATE-012 branch/cycle remained untouched.
+
+### Lockdown validation
+
+- `pytest -q`: 415 passed;
+- focused C1 package/lineage suite: 11 passed;
+- Playwright: one initial isolated timeout, immediate clean rerun 1 passed;
+- Ruff: passed;
+- mypy: no issues in 147 source files;
+- Django check: passed;
+- migration drift: none;
+- PostgreSQL clean migration: passed;
+- clean reference import twice: passed;
+- isolated operational-copy migration: passed;
+- production import command dry-run and exact import twice: passed;
+- continuity, corrected PIT and exact replay: passed;
+- package/snapshot/registry hashes: unchanged;
+- Source HTTP and human adjudication: none;
+- real operational database: not modified.

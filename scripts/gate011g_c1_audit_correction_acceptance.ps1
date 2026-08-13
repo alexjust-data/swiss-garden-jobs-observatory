@@ -20,7 +20,6 @@ Get-Content -LiteralPath $envFile | ForEach-Object {
 }
 $package = '.gate011gc1-artifacts\review-authority-lineage-corrected-v0.1.json'
 $registry = 'docs\day0\gate_011g_c1_review_authority_registry_v0_1.json'
-$designation = 'docs\day0\gate_011g_c1_review_authority_package_designation_v0_1.json'
 $transcript = ".gate011gc1-artifacts\audit-correction-acceptance-$TargetDb.txt"
 
 if (-not $Resume) {
@@ -36,11 +35,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'First reference import failed' }
     python manage.py import_reference_data
     if ($LASTEXITCODE -ne 0) { throw 'Second reference import failed' }
-    python manage.py import_review_authority_lineage --package $package --registry $registry --designation $designation --dry-run
+    python manage.py import_review_authority_lineage --package $package --registry $registry --dry-run
     if ($LASTEXITCODE -ne 0) { throw 'Package preflight failed' }
-    python manage.py import_review_authority_lineage --package $package --registry $registry --designation $designation
+    python manage.py import_review_authority_lineage --package $package --registry $registry
     if ($LASTEXITCODE -ne 0) { throw 'First package import failed' }
-    python manage.py import_review_authority_lineage --package $package --registry $registry --designation $designation
+    python manage.py import_review_authority_lineage --package $package --registry $registry
     if ($LASTEXITCODE -ne 0) { throw 'Second package import failed' }
 
     $code = @"
