@@ -159,3 +159,42 @@ After clean migration and two reference imports:
 
 These UUIDs identify isolated acceptance evidence only. Production identity is governed by exact
 fingerprints and designation evidence.
+
+## Independent-audit authority-boundary correction
+
+Prior audited head: `dc23196315bf7d3cef8def5a40b3ac92cd9da089`.
+
+That head represented `MERGED_GOVERNANCE_DECISION` authority as effective at
+`2026-08-12T08:09:55Z`, one second before GitHub's authoritative PR #19
+`merged_at=2026-08-12T08:09:56Z`. The scientific policy artifact was correct; its authority
+availability boundary was not.
+
+The corrected designation now binds:
+
+- governance evidence `merged_at=2026-08-12T08:09:56Z`;
+- `effective_at=2026-08-12T08:09:56Z`;
+- exact equality between those values for `MERGED_GOVERNANCE_DECISION`;
+- strict UTC `YYYY-MM-DDTHH:MM:SSZ` parsing;
+- rejection at `2026-08-12T08:09:55Z` and inclusive availability at the exact merge second.
+
+Corrected isolated existing-copy acceptance:
+
+- legacy policy: `bedee7bb-f826-4584-9e0e-1e37b617b30b`, unchanged;
+- historical readiness: `6f189434-ab48-4c69-bfdd-0237101c4b06`, unchanged FK and fingerprint;
+- historical API SHA-256: `d3267d4b02e59260f9613135489375eca564fc1f4f5f44c4f592d0a20b980243`, unchanged;
+- canonical policy: `b81441a0-1e78-4b33-b660-21b401e134ec`;
+- canonical policy fingerprint: `a72dd56dee6f6a580e1904c4e5427dd3dab9109775fd83722f2108cafb8d294e`;
+- designation: `34caa5e4-e8d0-4306-8b61-e8b79437af52`;
+- corrected designation fingerprint: `abe3278ddabb091080f4e65cc6ec9e8d5866cbc5ca6280cc9b4d57d4d2107500`;
+- canonical readiness: `e3b1b302-8fd0-4b33-beaf-469ba4a48eba`;
+- readiness fingerprint: `0303e7c240ad1f67469ebffebdd8c32971382f1925f1b95b090550a2cb240815`;
+- exact replay: same readiness ID and fingerprint.
+
+Corrected isolated clean-database acceptance:
+
+- legacy artifact created: NO;
+- canonical policy: `f1920485-6f0b-4a51-9cc4-f7f6271c7f4e` with unchanged `a72d...294e` fingerprint;
+- designation: `71b1dac0-e9af-4e97-b3f3-ae74040bfdcf` with corrected `abe327...7500` fingerprint;
+- second execution reused the sole canonical policy and designation.
+
+The frozen C2 predeclaration contract was not modified.

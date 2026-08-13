@@ -56,10 +56,11 @@ CANONICAL_AUTHORIZATION_POLICY_FINGERPRINT = (
     "a72dd56dee6f6a580e1904c4e5427dd3dab9109775fd83722f2108cafb8d294e"
 )
 POLICY_DESIGNATION_VERSION = "day0-authorization-policy-designation-v0.1"
-POLICY_AUTHORITY_EFFECTIVE_AT = datetime(2026, 8, 12, 8, 9, 55, tzinfo=UTC)
+POLICY_AUTHORITY_EFFECTIVE_AT = datetime(2026, 8, 12, 8, 9, 56, tzinfo=UTC)
 POLICY_AUTHORITY_EVIDENCE = {
     "pr_number": 19,
     "merged_sha": "1a1af1f5ac3fb2657d5b034cd6ff602a5c08cc5b",
+    "merged_at": "2026-08-12T08:09:56Z",
     "final_policy_commit": "75cab6b54ea9295cf9f3c072b0f69243ecf6d95c",
     "final_tree_commit": "76c427ef9bf038872addfd32d1cfac3f633b04da",
     "adr_path": "docs/decisions/0015-gate-011d-day0-authorization-policy.md",

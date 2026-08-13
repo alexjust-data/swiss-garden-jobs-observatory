@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from django.core.exceptions import ValidationError
@@ -172,6 +173,7 @@ class Day0AuthorizationPolicyDesignation(AppendOnlyDay0Evidence):
         {
             "pr_number",
             "merged_sha",
+            "merged_at",
             "final_policy_commit",
             "final_tree_commit",
             "adr_path",
@@ -237,6 +239,24 @@ class Day0AuthorizationPolicyDesignation(AppendOnlyDay0Evidence):
             errors["governance_evidence"] = "Missing governance evidence: " + ", ".join(
                 sorted(missing)
             )
+        if self.authority_basis == self.AuthorityBasis.MERGED_GOVERNANCE_DECISION:
+            merged_at_value = self.governance_evidence.get("merged_at")
+            try:
+                if not isinstance(merged_at_value, str):
+                    raise TypeError
+                merged_at = datetime.strptime(merged_at_value, "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=UTC
+                )
+            except (TypeError, ValueError):
+                errors["governance_evidence"] = (
+                    "Merged-governance evidence requires merged_at as exact UTC "
+                    "YYYY-MM-DDTHH:MM:SSZ."
+                )
+            else:
+                if self.effective_at != merged_at:
+                    errors["effective_at"] = (
+                        "Merged-governance authority must become effective exactly at merged_at."
+                    )
         if self.effective_at and self.created_at and self.effective_at > self.created_at:
             errors["effective_at"] = "Authority cannot become effective after its evidence exists."
         if self.authoritative_policy_id and self.effective_at:

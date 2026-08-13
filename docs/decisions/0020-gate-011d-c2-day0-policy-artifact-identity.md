@@ -74,6 +74,24 @@ replay. The existing-copy historical row/readiness remain exact. A new canonical
 the designated FK and replays to one ID/fingerprint. Full validation results and final GitHub head
 are recorded in the PR handoff rather than made normative here.
 
+## Independent-audit correction
+
+The independent audit of head `dc23196315bf7d3cef8def5a40b3ac92cd9da089` found that
+`MERGED_GOVERNANCE_DECISION` used `effective_at=2026-08-12T08:09:55Z`, while GitHub records PR
+#19 `merged_at=2026-08-12T08:09:56Z`. Authority cannot precede the merge that grants it.
+
+The correction pins `merged_at=2026-08-12T08:09:56Z` in bounded governance evidence and sets
+`effective_at` to that exact instant. Model validation requires the merged timestamp, parses only
+the deterministic UTC `Z` representation and requires exact equality. One second before merge
+fails closed; the exact merge second is inclusive.
+
+This changes only designation evidence and its fingerprint. The canonical scientific policy
+fingerprint remains `a72dd56dee6f6a580e1904c4e5427dd3dab9109775fd83722f2108cafb8d294e`.
+Corrected clean and existing-copy acceptance independently produced designation fingerprint
+`abe3278ddabb091080f4e65cc6ec9e8d5866cbc5ca6280cc9b4d57d4d2107500`, preserved the legacy
+policy/readiness/API exactly, and replayed the canonical readiness deterministically. The frozen
+predeclaration contract remains byte-identical.
+
 ## Resuming GATE-012
 
 Only after C2 independent audit and merge: synchronize `main`, merge corrected `main` into the

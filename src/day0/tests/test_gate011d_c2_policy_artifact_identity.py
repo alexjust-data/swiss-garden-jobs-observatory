@@ -101,6 +101,7 @@ def test_legacy_artifact_is_preserved_and_final_v01_is_designated() -> None:
     assert designation.designation_version == POLICY_DESIGNATION_VERSION
     assert designation.governance_evidence == POLICY_AUTHORITY_EVIDENCE
     assert designation.effective_at == POLICY_AUTHORITY_EFFECTIVE_AT
+    assert designation.governance_evidence["merged_at"] == "2026-08-12T08:09:56Z"
     assert Day0AuthorizationPolicy.objects.filter(policy_version=legacy.policy_version).count() == 2
 
     legacy.refresh_from_db()
@@ -180,17 +181,24 @@ def test_final_v01_threshold_and_structural_semantics_are_unchanged() -> None:
     assert policy.configuration["derived_canton_floor"] == 17
 
 
-def test_designation_cannot_influence_cutoff_before_effective_at() -> None:
+@pytest.mark.parametrize(
+    ("cutoff", "available"),
+    [
+        (datetime(2026, 8, 12, 8, 9, 55, tzinfo=UTC), False),
+        (datetime(2026, 8, 12, 8, 9, 56, tzinfo=UTC), True),
+    ],
+)
+def test_designation_authority_boundary_is_inclusive(cutoff: datetime, available: bool) -> None:
     canonical = ensure_authorization_policy()
     data, snapshot = upstream(
-        suffix="c2-pre-authority",
-        as_of=datetime(2026, 8, 12, 8, 0, tzinfo=UTC),
+        suffix=f"c2-authority-{cutoff.second}",
+        as_of=cutoff,
     )
     source_universe = universe(accepted=True, threshold=Decimal("0.8000"))
     add_entry(source_universe, data["source"])
 
-    with pytest.raises(Day0ContractError, match="not available at the requested cutoff"):
-        assess_day0_readiness(
+    def assess_at_boundary():
+        return assess_day0_readiness(
             as_of=data["as_of"],
             dedup_run=data["dedup"],
             premium_run=data["premium_run"],
@@ -199,7 +207,55 @@ def test_designation_cannot_influence_cutoff_before_effective_at() -> None:
             authorization_policy=canonical,
         )
 
-    assert Day0AuthorizationPolicyDesignation.objects.get().effective_at > data["as_of"]
+    if not available:
+        with pytest.raises(Day0ContractError, match="not available at the requested cutoff"):
+            assess_at_boundary()
+        return
+
+    assessment, reused = assess_at_boundary()
+    assert not reused
+    assert assessment.as_of == cutoff
+    assert assessment.authorization_policy == canonical
+    assert Day0AuthorizationPolicyDesignation.objects.get().effective_at == cutoff
+
+
+@pytest.mark.parametrize(
+    ("merged_at", "effective_at", "message"),
+    [
+        ("not-a-timestamp", POLICY_AUTHORITY_EFFECTIVE_AT, "exact UTC"),
+        ("2026-08-12T08:09:56+00:00", POLICY_AUTHORITY_EFFECTIVE_AT, "exact UTC"),
+        (
+            "2026-08-12T08:09:56Z",
+            datetime(2026, 8, 12, 8, 9, 55, tzinfo=UTC),
+            "exactly at merged_at",
+        ),
+    ],
+)
+def test_merged_governance_time_mismatch_fails_closed(
+    merged_at: str, effective_at: datetime, message: str
+) -> None:
+    policy = create_policy(canonical_authorization_policy_configuration())
+    designation = designation_for(policy)
+    designation.governance_evidence = {
+        **designation.governance_evidence,
+        "merged_at": merged_at,
+    }
+    designation.effective_at = effective_at
+    designation.input_fingerprint = designation.expected_input_fingerprint()
+
+    with pytest.raises(ValidationError, match=message):
+        designation.save()
+
+
+def test_merged_governance_time_is_required() -> None:
+    policy = create_policy(canonical_authorization_policy_configuration())
+    designation = designation_for(policy)
+    designation.governance_evidence = dict(designation.governance_evidence)
+    designation.governance_evidence.pop("merged_at")
+    designation.input_fingerprint = designation.expected_input_fingerprint()
+
+    with pytest.raises(ValidationError, match="merged_at"):
+        designation.save()
 
 
 def test_designation_rejects_forged_fingerprint() -> None:
