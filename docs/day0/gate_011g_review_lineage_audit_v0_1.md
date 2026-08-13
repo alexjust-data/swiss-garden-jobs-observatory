@@ -48,3 +48,40 @@ Both comparisons retain score `0.7940`, identical feature scores, weights, no ha
 ## Scientific conclusion
 
 At this cutoff the operational review reset is entirely explained by immutable observation UUID churn rather than decision-relevant evidence change. Governed reuse should restore 37 green confirmations, 15 not-green confirmations, preserve two unresolved green reviews, and apply one prior dedup separation. These are acceptance expectations derived from material equality, not target counts used to define the contract.
+
+## Second-refresh operational acceptance
+
+Final cutoff: `2026-08-13T06:34:17.993915Z`. The selected refresh window contains exactly one completed run for each of the 20 implemented required Sources: 20 succeeded, 20 healthy, 20 snapshot-complete, 20 counter-consistent, and 20 fresh. No blocked Source was requested. The cohort contains 2,002 new observations.
+
+All 54 new green `REVIEW` assessments have an exact prior material match under `green-review-material-v0.1`: 37 inherit `CONFIRMED_GREEN`, 15 inherit `CONFIRMED_NOT_GREEN`, and two inherit `INSUFFICIENT_EVIDENCE` while correctly remaining `REVIEW`. There are zero material changes, zero new governed Posting identities in this review cohort, zero other unresolved lineage cases, and zero new human decisions.
+
+The two unresolved items remain active, eligible, and authorization-critical:
+
+| Source / native ID | Prior decision | New assessment | Material fingerprint | Raw provenance | Final state |
+|---|---|---|---|---|---|
+| `SRC-OFF-CANTON-AR` / `3996438` | `6d40da88-f664-4e51-ba5f-9b2413426e6c` | `5f301f43-234e-4149-ac9a-01e82e6e8c2b` | `33c2f1be5a9d36763ecdc70ea95fa160de79a121f6782e392c23a8fa82b79dd0` | byte-identical RAW | `REVIEW`, critical |
+| `SRC-OFF-CANTON-SG` / `6251` | `60cf7b46-ab36-410a-becb-c1b4af88d15a` | `d7dc8af8-4160-47ef-b321-eca56defd994` | `b2bb6addca87e3c1ec39a7a6ec9eebe449f26a3eaab395557b37175508c6a0a0` | RAW changed (`c19b...` to `476659...`), material equal | `REVIEW`, critical |
+
+The second-refresh dedup run produced 103 algorithmic review candidates. One is the same governed pair and exact material fingerprint as the prior `KEEP_SEPARATE` decision, so application `6966f84a-325b-4eed-b0c7-5329a5f232f3` inherits it. The other 102 pairs have no prior human decision; they remain noncritical review items. There are zero reused `MERGE` decisions, zero material invalidations, and zero critical dedup reviews.
+
+The inherited pair is native IDs `10139013` / `10129828`, target decision `d5a40701-9fc5-4328-a04a-f347d900025d`, source decision `74550a24-4075-469c-946a-4ea48c045877`, fingerprint `c9f0c0f6a4c0d57062bd15b8024dd434bee2d889a531b74d950277e77d518087`. Routine `STILL_ACTIVE` evidence did not alter episode or economic identity.
+
+## Cross-refresh result
+
+| Metric | GATE-011F | GATE-011G final |
+|---|---:|---:|
+| Active observations / selected observations | 2,002 | 2,002 |
+| Green `REVIEW` assessments before continuity | 54 | 54 |
+| Material matches | 54 | 54 |
+| Inherited green confirmations | 37 | 37 |
+| Inherited not-green decisions | 15 | 15 |
+| Inherited insufficient decisions | 2 | 2 |
+| Material invalidations | 0 | 0 |
+| Critical green reviews after continuity | 54 | 2 |
+| Dedup algorithm reviews | 1 | 103 |
+| Critical dedup reviews after continuity | 1 | 0 |
+| Eligible active green vacancies | 14 | 51 |
+| Eligible Sources | 20 | 20 |
+| Day-0 | Not authorized | `DAY_0_BLOCKED_BY_DATA_QUALITY` |
+
+The increase from one to 103 algorithmic dedup reviews is disclosed rather than suppressed: 102 are new pairs without human lineage, but none is capable of changing the 51-vacancy public green count at this cutoff and therefore none is authorization-critical.
