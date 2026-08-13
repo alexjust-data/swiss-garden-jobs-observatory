@@ -545,7 +545,7 @@ class Gate008PITReconciliationTests(TestCase):
         algorithm = DedupReviewItem.objects.get(
             algorithm_decision__dedup_run=first_run
         ).algorithm_decision
-        human = self._legacy_human(algorithm, outcome=DedupDecision.Outcome.KEEP_SEPARATE)
+        human = self._legacy_human(algorithm, outcome="KEEP_SEPARATE")
         proof = reconstruct_source_human_material(human, FROZEN_CONFIGURATION)
         assert proof.algorithm_decision == algorithm
 
@@ -571,7 +571,7 @@ class Gate008PITReconciliationTests(TestCase):
         algorithm = DedupReviewItem.objects.get(
             algorithm_decision__dedup_run=first_run
         ).algorithm_decision
-        human = self._legacy_human(algorithm, outcome=DedupDecision.Outcome.KEEP_SEPARATE)
+        human = self._legacy_human(algorithm, outcome="KEEP_SEPARATE")
         human.evidence = {"reason": "missing source algorithm"}
         with self.assertRaises(UnverifiableLegacyHumanDecisionError):
             reconstruct_source_human_material(human, FROZEN_CONFIGURATION)
@@ -592,7 +592,7 @@ class Gate008PITReconciliationTests(TestCase):
         algorithm = DedupReviewItem.objects.get(
             algorithm_decision__dedup_run=run
         ).algorithm_decision
-        human = self._legacy_human(algorithm, outcome=DedupDecision.Outcome.KEEP_SEPARATE)
+        human = self._legacy_human(algorithm, outcome="KEEP_SEPARATE")
         forged = DedupReviewDecisionApplication(
             target_algorithm_decision=algorithm,
             source_human_decision=human,
