@@ -1,0 +1,12 @@
+{
+  "authority_registry_sha256": "922bff765eaf461b3769e674120a2be365960e09c146cfab16771590869ccf55",
+  "designation_version": "review-authority-package-designation-v0.1",
+  "lineage_version": "review-authority-lineage-v0.1",
+  "merged_governance": {
+    "c1_baseline": "520b68d989d36abfc382143458b30d1f3bad96b2",
+    "gate_011e": "cbf1054b329843ea3fff7eeac77ea9342df60147",
+    "gate_011g": "3f8e5cacc191309188e142ebf28ae0d1115e95e7"
+  },
+  "package_sha256": "a82fb98616f8072b0343f5fc5ce5f7c9d449c4d3e26e619df661c1ce81d6bc92",
+  "source_snapshot_fingerprint": "01d155b681fcb2851010350d3db380f2fad4b7575410eda3648ebe7a4455388e"
+}

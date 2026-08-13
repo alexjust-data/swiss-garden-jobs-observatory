@@ -32,7 +32,6 @@ from vacancies.review_continuity import (
     FROZEN_CONFIGURATION,
     DedupContinuityValidationError,
     UnverifiableLegacyHumanDecisionError,
-    create_dedup_review_application,
     reconstruct_source_human_material,
 )
 from vacancies.tests.test_gate008 import Adapter, Clock, Fetcher
@@ -550,17 +549,41 @@ class Gate008PITReconciliationTests(TestCase):
         assert proof.algorithm_decision == algorithm
 
         later_run, _ = run_deduplication(human.created_at + timedelta(seconds=1))
-        target_review = DedupReviewItem.objects.get(algorithm_decision__dedup_run=later_run)
-        application, created = create_dedup_review_application(
-            target_algorithm_decision=target_review.algorithm_decision,
-            source_human_decision=human,
-            configuration=FROZEN_CONFIGURATION,
+        application = DedupReviewDecisionApplication.objects.get(
+            target_algorithm_decision__dedup_run=later_run
         )
-        assert created
+        assert application.source_human_decision == human
         assert application.material_fingerprint == proof.material_fingerprint
+        target_review = DedupReviewItem.objects.create(
+            algorithm_decision=application.target_algorithm_decision
+        )
         for merge in (False, True):
             with self.assertRaisesRegex(ValueError, "inherited authority"):
                 resolve_review(str(target_review.pk), merge=merge, reason="must fail closed")
+
+    def test_engine_automatically_reuses_reconstructable_legacy_authority(self) -> None:
+        source = self.source("SRC-LEGACY-AUTO-BRIDGE")
+        when = datetime(2026, 8, 6, 12, tzinfo=UTC)
+        self.collect(source, Adapter("A"), when)
+        self.collect(source, Adapter("B"), when)
+        first_run, _ = run_deduplication(when)
+        algorithm = DedupReviewItem.objects.get(
+            algorithm_decision__dedup_run=first_run
+        ).algorithm_decision
+        human = self._legacy_human(algorithm, outcome="KEEP_SEPARATE")
+
+        later_run, _ = run_deduplication(human.created_at + timedelta(seconds=1))
+
+        assert not DedupReviewItem.objects.filter(
+            algorithm_decision__dedup_run=later_run
+        ).exists()
+        application = DedupReviewDecisionApplication.objects.get(
+            target_algorithm_decision__dedup_run=later_run
+        )
+        assert application.source_human_decision == human
+        assert application.material_fingerprint == reconstruct_source_human_material(
+            human, FROZEN_CONFIGURATION
+        ).material_fingerprint
 
     def test_legacy_bridge_rejects_changed_or_unverifiable_source(self) -> None:
         source = self.source("SRC-LEGACY-INVALID")

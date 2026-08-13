@@ -6,6 +6,7 @@ from itertools import combinations
 from typing import Any
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from observations.models import Posting, PostingLifecycleEvent
@@ -79,27 +80,32 @@ def _prior_human_decision(
     material_fingerprint: str,
     as_of: datetime,
 ) -> DedupDecision | None:
-    direct = (
+    pair = Q(posting_a_id=left.posting_id, posting_b_id=right.posting_id) | Q(
+        posting_a_id=right.posting_id, posting_b_id=left.posting_id
+    )
+    direct_candidates = list(
         DedupDecision.objects.filter(
-            posting_a_id=left.posting_id,
-            posting_b_id=right.posting_id,
+            pair,
             dedup_version=DEDUP_VERSION,
             method=DedupDecision.Method.HUMAN,
-            evidence__material_fingerprint=material_fingerprint,
             outcome__in=[
                 DedupDecision.Outcome.MERGE,
                 DedupDecision.Outcome.KEEP_SEPARATE,
             ],
             created_at__lte=as_of,
-        )
-        .order_by("-created_at")
-        .first()
+        ).order_by("created_at", "pk")
     )
-    if direct:
-        proof = reconstruct_source_human_material(direct, CONFIGURATION)
-        if proof.material_fingerprint != material_fingerprint:
-            raise ValueError("direct human material fingerprint is unverified")
-        return direct
+    matching_direct: list[DedupDecision] = []
+    for candidate in direct_candidates:
+        proof = reconstruct_source_human_material(candidate, CONFIGURATION)
+        if proof.material_fingerprint == material_fingerprint:
+            matching_direct.append(candidate)
+    if len(matching_direct) > 1:
+        raise ValueError(
+            "CONFLICTING_PRIOR_HUMAN_KNOWLEDGE: multiple material-identical dedup decisions"
+        )
+    if matching_direct:
+        return matching_direct[0]
     application = (
         DedupReviewDecisionApplication.objects.filter(
             target_algorithm_decision__posting_a_id=left.posting_id,
