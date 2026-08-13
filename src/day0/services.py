@@ -5,13 +5,13 @@ import csv
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
 from django.conf import settings
-from django.db import connection, transaction
+from django.db import IntegrityError, connection, transaction
 
 from dashboard.models import DashboardSnapshot, DashboardVacancyRecord
 from observations.models import CollectionRun
@@ -25,6 +25,7 @@ from vacancies.models import DedupReviewItem, DedupRun, DedupRunPostingAssignmen
 
 from .models import (
     Day0AuthorizationPolicy,
+    Day0AuthorizationPolicyDesignation,
     Day0ReadinessAssessment,
     Day0ReadinessSourceEvidence,
     Day0SourceUniverse,
@@ -51,6 +52,19 @@ from .policy import (
 
 POLICY_VERSION = AUTHORIZATION_POLICY_VERSION
 METRIC_VERSION = "day0-coverage-metrics-v0.3"
+CANONICAL_AUTHORIZATION_POLICY_FINGERPRINT = (
+    "a72dd56dee6f6a580e1904c4e5427dd3dab9109775fd83722f2108cafb8d294e"
+)
+POLICY_DESIGNATION_VERSION = "day0-authorization-policy-designation-v0.1"
+POLICY_AUTHORITY_EFFECTIVE_AT = datetime(2026, 8, 12, 8, 9, 56, tzinfo=UTC)
+POLICY_AUTHORITY_EVIDENCE = {
+    "pr_number": 19,
+    "merged_sha": "1a1af1f5ac3fb2657d5b034cd6ff602a5c08cc5b",
+    "merged_at": "2026-08-12T08:09:56Z",
+    "final_policy_commit": "75cab6b54ea9295cf9f3c072b0f69243ecf6d95c",
+    "final_tree_commit": "76c427ef9bf038872addfd32d1cfac3f633b04da",
+    "adr_path": "docs/decisions/0015-gate-011d-day0-authorization-policy.md",
+}
 
 
 class Day0ContractError(ValueError):
@@ -135,9 +149,8 @@ def _entry_spec(source: Source) -> dict[str, Any]:
     }
 
 
-@transaction.atomic
-def ensure_authorization_policy() -> Day0AuthorizationPolicy:
-    configuration = {
+def canonical_authorization_policy_configuration() -> dict[str, Any]:
+    return {
         "coverage_policy_version": COVERAGE_POLICY_VERSION,
         "freshness_policy_version": FRESHNESS_POLICY_VERSION,
         "authorization_policy_version": POLICY_VERSION,
@@ -163,7 +176,10 @@ def ensure_authorization_policy() -> Day0AuthorizationPolicy:
         ),
         "alternatives_considered": ["1.00", "0.90", "0.80", "two_thirds"],
     }
-    fingerprint = _sha256(
+
+
+def authorization_policy_artifact_fingerprint(configuration: dict[str, Any]) -> str:
+    return _sha256(
         {
             "version": POLICY_VERSION,
             "threshold_status": "ACCEPTED",
@@ -171,24 +187,114 @@ def ensure_authorization_policy() -> Day0AuthorizationPolicy:
             "configuration": configuration,
         }
     )
-    existing = Day0AuthorizationPolicy.objects.filter(
-        policy_version=POLICY_VERSION, input_fingerprint=fingerprint
-    ).first()
-    if existing:
-        return existing
-    if Day0AuthorizationPolicy.objects.filter(policy_version=POLICY_VERSION).exists():
+
+
+def _validate_canonical_policy_artifact(
+    policy: Day0AuthorizationPolicy, configuration: dict[str, Any], fingerprint: str
+) -> None:
+    expected = {
+        "policy_version": POLICY_VERSION,
+        "threshold_policy_status": "ACCEPTED",
+        "required_completion_threshold": Decimal(MINIMUM_REQUIRED_SOURCE_COVERAGE),
+        "freshness_policy_status": "ACCEPTED",
+        "required_source_max_age_hours": MAX_FULL_SOURCE_AGE_HOURS,
+        "configuration": configuration,
+        "input_fingerprint": fingerprint,
+    }
+    mismatched = [name for name, value in expected.items() if getattr(policy, name) != value]
+    if mismatched:
         raise Day0ContractError(
-            "Authorization policy version already exists with a different immutable fingerprint"
+            "Canonical authorization policy artifact is inconsistent: " + ", ".join(mismatched)
         )
-    return Day0AuthorizationPolicy.objects.create(
+
+
+def _validate_policy_designation(
+    designation: Day0AuthorizationPolicyDesignation,
+    policy: Day0AuthorizationPolicy,
+) -> None:
+    try:
+        designation.full_clean()
+    except Exception as exc:
+        raise Day0ContractError("Invalid authorization policy designation") from exc
+    expected = {
+        "designation_version": POLICY_DESIGNATION_VERSION,
+        "policy_version": POLICY_VERSION,
+        "authoritative_policy_id": policy.pk,
+        "authority_basis": "MERGED_GOVERNANCE_DECISION",
+        "governance_evidence": POLICY_AUTHORITY_EVIDENCE,
+        "effective_at": POLICY_AUTHORITY_EFFECTIVE_AT,
+    }
+    mismatched = [name for name, value in expected.items() if getattr(designation, name) != value]
+    if mismatched:
+        raise Day0ContractError(
+            "Authorization policy designation conflicts with merged governance: "
+            + ", ".join(mismatched)
+        )
+
+
+def ensure_authorization_policy_designation(
+    policy: Day0AuthorizationPolicy,
+) -> Day0AuthorizationPolicyDesignation:
+    candidate = Day0AuthorizationPolicyDesignation(
+        designation_version=POLICY_DESIGNATION_VERSION,
         policy_version=POLICY_VERSION,
-        threshold_policy_status="ACCEPTED",
-        required_completion_threshold=Decimal(MINIMUM_REQUIRED_SOURCE_COVERAGE),
-        freshness_policy_status="ACCEPTED",
-        required_source_max_age_hours=MAX_FULL_SOURCE_AGE_HOURS,
-        configuration=configuration,
-        input_fingerprint=fingerprint,
+        authoritative_policy=policy,
+        authority_basis="MERGED_GOVERNANCE_DECISION",
+        governance_evidence=POLICY_AUTHORITY_EVIDENCE,
+        effective_at=POLICY_AUTHORITY_EFFECTIVE_AT,
     )
+    candidate.input_fingerprint = candidate.expected_input_fingerprint()
+    exact = Day0AuthorizationPolicyDesignation.objects.filter(
+        input_fingerprint=candidate.input_fingerprint
+    ).first()
+    if exact:
+        _validate_policy_designation(exact, policy)
+        return exact
+    conflict = Day0AuthorizationPolicyDesignation.objects.filter(
+        designation_version=POLICY_DESIGNATION_VERSION,
+        policy_version=POLICY_VERSION,
+    ).first()
+    if conflict:
+        raise Day0ContractError("Conflicting authorization policy authority designation")
+    try:
+        with transaction.atomic():
+            candidate.save()
+    except IntegrityError:
+        exact = Day0AuthorizationPolicyDesignation.objects.filter(
+            input_fingerprint=candidate.input_fingerprint
+        ).first()
+        if exact is None:
+            raise Day0ContractError(
+                "Conflicting concurrent authorization policy authority designation"
+            )
+        _validate_policy_designation(exact, policy)
+        return exact
+    return candidate
+
+
+@transaction.atomic
+def ensure_authorization_policy() -> Day0AuthorizationPolicy:
+    configuration = canonical_authorization_policy_configuration()
+    fingerprint = authorization_policy_artifact_fingerprint(configuration)
+    if fingerprint != CANONICAL_AUTHORIZATION_POLICY_FINGERPRINT:
+        raise Day0ContractError("Generated v0.1 policy artifact does not match merged governance")
+    policy = Day0AuthorizationPolicy.objects.filter(input_fingerprint=fingerprint).first()
+    if policy is None:
+        policy, _ = Day0AuthorizationPolicy.objects.get_or_create(
+            input_fingerprint=fingerprint,
+            defaults={
+                "policy_version": POLICY_VERSION,
+                "threshold_policy_status": "ACCEPTED",
+                "required_completion_threshold": Decimal(MINIMUM_REQUIRED_SOURCE_COVERAGE),
+                "freshness_policy_status": "ACCEPTED",
+                "required_source_max_age_hours": MAX_FULL_SOURCE_AGE_HOURS,
+                "configuration": configuration,
+            },
+        )
+    _validate_canonical_policy_artifact(policy, configuration, fingerprint)
+    designation = ensure_authorization_policy_designation(policy)
+    _validate_policy_designation(designation, policy)
+    return designation.authoritative_policy
 
 
 @transaction.atomic
@@ -623,24 +729,47 @@ def assess_day0_readiness(
     universe = source_universe or ensure_source_universe()
     if authorization_policy is not None:
         policy = authorization_policy
+        if policy.policy_version == POLICY_VERSION:
+            authoritative = ensure_authorization_policy()
+            if policy.pk != authoritative.pk:
+                raise Day0ContractError(
+                    "New readiness cannot use a non-authoritative v0.1 policy artifact"
+                )
     elif source_universe is not None:
-        _advisory_lock(_sha256({"fixture_policy": str(universe.pk)}))
-        policy = Day0AuthorizationPolicy.objects.filter(
-            policy_version=universe.policy_version
-        ).first()
-        if policy is None:
-            accepted = universe.threshold_policy_status == "ACCEPTED"
-            policy = Day0AuthorizationPolicy.objects.create(
-                policy_version=universe.policy_version,
-                threshold_policy_status=universe.threshold_policy_status,
-                required_completion_threshold=universe.required_completion_threshold,
-                freshness_policy_status="ACCEPTED" if accepted else "PENDING",
-                required_source_max_age_hours=1000000 if accepted else None,
-                configuration={"fixture_compatibility": True},
-                input_fingerprint=_sha256({"fixture_universe": str(universe.pk)}),
-            )
+        if universe.configuration.get("authorization_policy_version") == POLICY_VERSION:
+            policy = ensure_authorization_policy()
+        else:
+            _advisory_lock(_sha256({"fixture_policy": str(universe.pk)}))
+            policy = Day0AuthorizationPolicy.objects.filter(
+                policy_version=universe.policy_version
+            ).first()
+            if policy is None:
+                accepted = universe.threshold_policy_status == "ACCEPTED"
+                policy = Day0AuthorizationPolicy.objects.create(
+                    policy_version=universe.policy_version,
+                    threshold_policy_status=universe.threshold_policy_status,
+                    required_completion_threshold=universe.required_completion_threshold,
+                    freshness_policy_status="ACCEPTED" if accepted else "PENDING",
+                    required_source_max_age_hours=1000000 if accepted else None,
+                    configuration={"fixture_compatibility": True},
+                    input_fingerprint=_sha256({"fixture_universe": str(universe.pk)}),
+                )
     else:
         policy = ensure_authorization_policy()
+    if (
+        policy.policy_version == POLICY_VERSION
+        and policy.configuration.get("authorization_policy_version") == POLICY_VERSION
+    ):
+        designation = Day0AuthorizationPolicyDesignation.objects.filter(
+            designation_version=POLICY_DESIGNATION_VERSION,
+            policy_version=POLICY_VERSION,
+            authoritative_policy=policy,
+        ).first()
+        if designation is None:
+            raise Day0ContractError("Canonical policy has no authority designation")
+        _validate_policy_designation(designation, policy)
+        if designation.effective_at > as_of:
+            raise Day0ContractError("Policy authority is not available at the requested cutoff")
     if universe.universe_version != SOURCE_UNIVERSE_VERSION:
         raise Day0ContractError("Unsupported Day-0 source-universe version")
     if universe.policy_version != policy.policy_version:
