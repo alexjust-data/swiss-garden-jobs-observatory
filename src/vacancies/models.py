@@ -317,7 +317,7 @@ class DedupDecision(AppendOnlyEvidence):
     feature_scores = models.JSONField(default=dict)
     weights = models.JSONField(default=dict)
     blocking_evidence = models.JSONField(default=dict)
-    hard_barriers = models.JSONField(default=list)
+    hard_barriers = models.JSONField(default=list, blank=True)
     evidence = models.JSONField(default=dict)
     created_at = models.DateTimeField(default=timezone.now)
 

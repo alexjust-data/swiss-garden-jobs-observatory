@@ -23,6 +23,7 @@ htmlcov/
 *.sqlite3
 data/raw/
 staticfiles/
+.gate011gc1-artifacts/
 
 # Environment
 .env
