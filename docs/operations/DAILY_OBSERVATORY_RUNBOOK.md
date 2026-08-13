@@ -41,7 +41,7 @@ An interrupted or failed same-cycle continuation requires explicit recovery:
 
 ```bash
 python manage.py run_daily_observatory \
-  --cycle-id <UUID> --trigger RECOVERY --resume --json
+  --cycle-id <UUID> --trigger RECOVERY --resume --timeout-seconds 14400 --json
 ```
 
 Do not retry blindly while another invocation may be active. The PostgreSQL advisory lock refuses a

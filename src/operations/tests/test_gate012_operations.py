@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from contextlib import contextmanager
+from datetime import timedelta
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -24,6 +25,7 @@ from operations.models import (
 )
 from operations.services import (
     CYCLE_VERSION,
+    _ensure_within_timeout,
     _event,
     cycle_configuration,
     cycle_summary,
@@ -237,6 +239,93 @@ def test_retry_requires_identical_configuration() -> None:
         pytest.raises(Exception, match="configuration differs"),
     ):
         run_cycle(cycle_id=item.pk, resume=True)
+
+
+def test_recent_running_cycle_cannot_be_recovered() -> None:
+    src = source()
+    config, fingerprint = configuration("MANUAL", [src])
+    now = timezone.now()
+    item = ObservatoryCycle.objects.create(
+        cycle_version=CYCLE_VERSION,
+        trigger="MANUAL",
+        status="RUNNING",
+        started_at=now,
+        heartbeat_at=now,
+        target_cohort_version="day0-source-universe-v0.2",
+        selected_source_ids=[str(src.pk)],
+        configuration=config,
+        configuration_fingerprint=fingerprint,
+        stage_statuses={},
+    )
+    universe = SimpleNamespace(universe_version="day0-source-universe-v0.2")
+    collector = Mock()
+    with (
+        patch("operations.services.governed_source_cohort", return_value=(universe, [src])),
+        pytest.raises(Exception, match="heartbeat is not stale"),
+    ):
+        run_cycle(
+            cycle_id=item.pk,
+            trigger="RECOVERY",
+            resume=True,
+            collector=collector,
+        )
+    collector.assert_not_called()
+
+
+def test_stale_cycle_recovery_preserves_identity_and_skips_completed_source() -> None:
+    src = source()
+    config, fingerprint = configuration("MANUAL", [src])
+    old = timezone.now() - timedelta(hours=5)
+    item = ObservatoryCycle.objects.create(
+        cycle_version=CYCLE_VERSION,
+        trigger="MANUAL",
+        status="RUNNING",
+        started_at=old,
+        heartbeat_at=old,
+        target_cohort_version="day0-source-universe-v0.2",
+        selected_source_ids=[str(src.pk)],
+        configuration=config,
+        configuration_fingerprint=fingerprint,
+        stage_statuses={},
+    )
+    run = successful_run(src)
+    ObservatorySourceAttempt.objects.create(
+        cycle=item,
+        source=src,
+        attempt_number=1,
+        result="SUCCEEDED",
+        collection_run=run,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        run_status="SUCCEEDED",
+        source_health="HEALTHY",
+        snapshot_complete=True,
+        counter_consistent=True,
+    )
+    universe = SimpleNamespace(universe_version="day0-source-universe-v0.2")
+    collector = Mock()
+    with (
+        patch("operations.services.governed_source_cohort", return_value=(universe, [src])),
+        patch("operations.services.apply_green_continuity", side_effect=RuntimeError("stop")),
+    ):
+        result = run_cycle(
+            cycle_id=item.pk,
+            trigger="RECOVERY",
+            resume=True,
+            collector=collector,
+        )
+    assert result.cycle.pk == item.pk
+    assert result.cycle.trigger == "MANUAL"
+    assert result.cycle.operational_events.filter(code="STALE_CYCLE_DETECTED").exists()
+    assert result.cycle.source_attempts.count() == 1
+    collector.assert_not_called()
+
+
+def test_timeout_guard_fails_closed() -> None:
+    item = cycle()
+    item.started_at = timezone.now() - timedelta(seconds=61)
+    with pytest.raises(Exception, match="exceeded configured"):
+        _ensure_within_timeout(item, timeout_seconds=60, stage="collection")
 
 
 def test_status_is_deterministic_and_preserves_history() -> None:

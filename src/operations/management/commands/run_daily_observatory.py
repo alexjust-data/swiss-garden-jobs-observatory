@@ -31,6 +31,7 @@ class Command(BaseCommand):
         )
         parser.add_argument("--resume", action="store_true")
         parser.add_argument("--delay-seconds", type=float, default=1.0)
+        parser.add_argument("--timeout-seconds", type=int, default=14_400)
         parser.add_argument("--json", action="store_true", dest="as_json")
 
     def handle(self, *args: Any, **options: Any) -> None:
@@ -45,6 +46,7 @@ class Command(BaseCommand):
                 trigger=options["trigger"],
                 resume=bool(options["resume"]),
                 delay_seconds=options["delay_seconds"],
+                timeout_seconds=options["timeout_seconds"],
             )
         except ObservatoryOperationError as exc:
             raise CommandError(f"{exc.code}: {exc}") from exc

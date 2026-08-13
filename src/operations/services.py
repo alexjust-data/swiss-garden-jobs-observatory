@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from django.db import connection
@@ -62,6 +62,7 @@ STAGE_ORDER = (
     "readiness",
 )
 LOCK_NAMESPACE = "daily-observatory-cycle-v0.1:day0-source-universe-v0.2"
+DEFAULT_CYCLE_TIMEOUT_SECONDS = 14_400
 
 
 class ObservatoryOperationError(RuntimeError):
@@ -104,6 +105,24 @@ def _save_stage(cycle: ObservatoryCycle, stage: str, status: str) -> None:
     cycle.stage_statuses = stages
     cycle.heartbeat_at = timezone.now()
     cycle.save()
+
+
+def _ensure_within_timeout(
+    cycle: ObservatoryCycle,
+    *,
+    timeout_seconds: int,
+    stage: str,
+    invocation_started: datetime | None = None,
+) -> None:
+    started = invocation_started or cycle.started_at
+    if started is None:
+        return
+    if timezone.now() - started > timedelta(seconds=timeout_seconds):
+        raise ObservatoryOperationError(
+            stage,
+            "CYCLE_TIMEOUT",
+            f"cycle exceeded configured {timeout_seconds}s timeout",
+        )
 
 
 def _event(
@@ -163,7 +182,12 @@ def _default_collector(source_id: str, **kwargs: Any) -> CollectionRun:
     )
 
 
-def cycle_configuration(trigger: str, source_ids: list[str]) -> dict[str, Any]:
+def cycle_configuration(
+    trigger: str,
+    source_ids: list[str],
+    *,
+    timeout_seconds: int = DEFAULT_CYCLE_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     return {
         "cycle_version": CYCLE_VERSION,
         "trigger": trigger,
@@ -171,6 +195,7 @@ def cycle_configuration(trigger: str, source_ids: list[str]) -> dict[str, Any]:
         "source_ids": sorted(source_ids),
         "stage_order": list(STAGE_ORDER),
         "cutoff_policy": "continuity-available-aligned-pit-v0.1",
+        "whole_cycle_timeout_seconds": timeout_seconds,
         "versions": {
             "coverage": COVERAGE_POLICY_VERSION,
             "freshness": FRESHNESS_POLICY_VERSION,
@@ -323,14 +348,25 @@ def run_cycle(
     trigger: str = ObservatoryCycle.Trigger.MANUAL,
     resume: bool = False,
     delay_seconds: float = 1.0,
+    timeout_seconds: int = DEFAULT_CYCLE_TIMEOUT_SECONDS,
     collector: Callable[..., CollectionRun] = _default_collector,
 ) -> CycleResult:
+    if timeout_seconds < 60:
+        raise ObservatoryOperationError(
+            "cohort", "INVALID_TIMEOUT", "whole-cycle timeout must be at least 60 seconds"
+        )
+    if trigger == ObservatoryCycle.Trigger.RECOVERY and cycle_id is None:
+        raise ObservatoryOperationError(
+            "cohort", "RECOVERY_REQUIRES_CYCLE_ID", "RECOVERY requires --cycle-id"
+        )
     universe, sources = governed_source_cohort()
     source_ids = [str(source.pk) for source in sources]
-    configuration = cycle_configuration(trigger, source_ids)
-    fingerprint = _sha256(configuration)
     cycle = ObservatoryCycle.objects.filter(pk=cycle_id).first() if cycle_id else None
     if cycle:
+        configuration = cycle_configuration(
+            cycle.trigger, source_ids, timeout_seconds=timeout_seconds
+        )
+        fingerprint = _sha256(configuration)
         if cycle.configuration_fingerprint != fingerprint:
             raise ObservatoryOperationError(
                 "cohort", "RETRY_CONFIGURATION_MISMATCH", "cycle configuration differs"
@@ -344,7 +380,27 @@ def run_cycle(
             raise ObservatoryOperationError(
                 "cohort", "RESUME_REQUIRED", "non-success cycle requires --resume"
             )
+        if trigger != ObservatoryCycle.Trigger.RECOVERY:
+            raise ObservatoryOperationError(
+                "cohort", "RECOVERY_TRIGGER_REQUIRED", "resume requires --trigger RECOVERY"
+            )
+        if cycle.status == ObservatoryCycle.Status.RUNNING:
+            heartbeat = cycle.heartbeat_at or cycle.started_at or cycle.requested_at
+            if timezone.now() - heartbeat <= timedelta(seconds=timeout_seconds):
+                raise ObservatoryOperationError(
+                    "cohort", "ACTIVE_CYCLE_RETRY_REFUSED", "cycle heartbeat is not stale"
+                )
+            _event(
+                cycle,
+                "STALE_CYCLE_DETECTED",
+                OperationalEvent.Severity.WARNING,
+                detail={"heartbeat_at": heartbeat.isoformat(), "timeout_seconds": timeout_seconds},
+            )
     else:
+        configuration = cycle_configuration(
+            trigger, source_ids, timeout_seconds=timeout_seconds
+        )
+        fingerprint = _sha256(configuration)
         cycle = ObservatoryCycle.objects.create(
             id=cycle_id or uuid.uuid4(),
             cycle_version=CYCLE_VERSION,
@@ -371,7 +427,38 @@ def run_cycle(
                 detail=cycle.failure_evidence,
             )
             return CycleResult(cycle, False)
-        now = timezone.now()
+        other_running = (
+            ObservatoryCycle.objects.filter(
+                cycle_version=CYCLE_VERSION,
+                target_cohort_version=cycle.target_cohort_version,
+                status=ObservatoryCycle.Status.RUNNING,
+            )
+            .exclude(pk=cycle.pk)
+            .order_by("requested_at")
+            .first()
+        )
+        if other_running is not None:
+            heartbeat = (
+                other_running.heartbeat_at
+                or other_running.started_at
+                or other_running.requested_at
+            )
+            stale = timezone.now() - heartbeat > timedelta(seconds=timeout_seconds)
+            code = "STALE_CYCLE_DETECTED" if stale else "CONCURRENT_CYCLE_RUNNING"
+            cycle.status = ObservatoryCycle.Status.ABORTED_CONCURRENCY
+            cycle.finished_at = timezone.now()
+            cycle.operational_health = ObservatoryCycle.Health.RED
+            cycle.failure_code = code
+            cycle.failure_evidence = {
+                "conflicting_cycle_id": str(other_running.pk),
+                "heartbeat_at": heartbeat.isoformat(),
+                "http_requests": 0,
+            }
+            cycle.save()
+            _event(cycle, code, OperationalEvent.Severity.WARNING, detail=cycle.failure_evidence)
+            return CycleResult(cycle, False)
+        invocation_started = timezone.now()
+        now = invocation_started
         cycle.status = ObservatoryCycle.Status.RUNNING
         cycle.started_at = cycle.started_at or now
         cycle.heartbeat_at = now
@@ -380,6 +467,12 @@ def run_cycle(
         cycle.failure_evidence = {}
         cycle.save()
         _save_stage(cycle, "cohort", "SUCCEEDED")
+        _ensure_within_timeout(
+            cycle,
+            timeout_seconds=timeout_seconds,
+            stage="collection",
+            invocation_started=invocation_started,
+        )
         _save_stage(cycle, "collection", "RUNNING")
         current_failures: list[str] = []
         for source in sources:
@@ -461,9 +554,21 @@ def run_cycle(
                     source=source,
                     detail={"error_type": type(exc).__name__},
                 )
+            _ensure_within_timeout(
+                cycle,
+                timeout_seconds=timeout_seconds,
+                stage="collection",
+                invocation_started=invocation_started,
+            )
         _save_stage(cycle, "collection", "SUCCEEDED")
         try:
             _save_stage(cycle, "green_continuity", "RUNNING")
+            _ensure_within_timeout(
+                cycle,
+                timeout_seconds=timeout_seconds,
+                stage="green_continuity",
+                invocation_started=invocation_started,
+            )
             green = apply_green_continuity(timezone.now())
             _save_stage(cycle, "green_continuity", "SUCCEEDED")
         except Exception as exc:
@@ -478,6 +583,12 @@ def run_cycle(
         dedup_before = DedupReviewDecisionApplication.objects.count()
         try:
             _save_stage(cycle, "dedup", "RUNNING")
+            _ensure_within_timeout(
+                cycle,
+                timeout_seconds=timeout_seconds,
+                stage="dedup",
+                invocation_started=invocation_started,
+            )
             provisional_cutoff = timezone.now()
             provisional_run, provisional_reused = run_deduplication(provisional_cutoff)
             provisional_created = DedupReviewDecisionApplication.objects.count() - dedup_before
@@ -495,6 +606,12 @@ def run_cycle(
         dedup_created = DedupReviewDecisionApplication.objects.count() - dedup_before
         try:
             _save_stage(cycle, "premium", "RUNNING")
+            _ensure_within_timeout(
+                cycle,
+                timeout_seconds=timeout_seconds,
+                stage="premium",
+                invocation_started=invocation_started,
+            )
             premium_run, premium_reused = run_classification(cutoff)
             _save_stage(cycle, "premium", "SUCCEEDED")
         except Exception as exc:
@@ -504,6 +621,12 @@ def run_cycle(
             return CycleResult(cycle, False)
         try:
             _save_stage(cycle, "dashboard", "RUNNING")
+            _ensure_within_timeout(
+                cycle,
+                timeout_seconds=timeout_seconds,
+                stage="dashboard",
+                invocation_started=invocation_started,
+            )
             dashboard, dashboard_reused = build_dashboard_snapshot(
                 as_of=cutoff, dedup_run=dedup_run, premium_run=premium_run
             )
@@ -519,6 +642,12 @@ def run_cycle(
             return CycleResult(cycle, False)
         try:
             _save_stage(cycle, "readiness", "RUNNING")
+            _ensure_within_timeout(
+                cycle,
+                timeout_seconds=timeout_seconds,
+                stage="readiness",
+                invocation_started=invocation_started,
+            )
             readiness, readiness_reused = assess_day0_readiness(
                 as_of=cutoff,
                 dedup_run=dedup_run,
