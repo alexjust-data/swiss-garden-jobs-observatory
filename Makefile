@@ -31,3 +31,9 @@ browser-test:
 build-dashboard-assets:
 	npm ci
 	npm run build-assets
+
+run-daily-observatory:
+	python manage.py run_daily_observatory --trigger MANUAL --json
+
+observatory-status:
+	python manage.py observatory_status --json
