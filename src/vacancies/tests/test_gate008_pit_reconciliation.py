@@ -15,6 +15,7 @@ from vacancies.engine import run_deduplication, run_summary
 from vacancies.evidence import select_posting_evidence
 from vacancies.models import (
     DedupDecision,
+    DedupReviewDecisionApplication,
     DedupReviewItem,
     DedupRunPostingAssignment,
     DedupRunVacancyState,
@@ -27,6 +28,13 @@ from vacancies.models import (
     VacancyProjectionState,
 )
 from vacancies.review import resolve_review
+from vacancies.review_continuity import (
+    FROZEN_CONFIGURATION,
+    DedupContinuityValidationError,
+    UnverifiableLegacyHumanDecisionError,
+    create_dedup_review_application,
+    reconstruct_source_human_material,
+)
 from vacancies.tests.test_gate008 import Adapter, Clock, Fetcher
 
 
@@ -232,7 +240,7 @@ class Gate008PITReconciliationTests(TestCase):
             event_type=VacancyMembershipEvent.EventType.HUMAN_CONFIRM,
         ).exists()
 
-        later_run, _ = run_deduplication(when + timedelta(seconds=1))
+        later_run, _ = run_deduplication(human.created_at + timedelta(seconds=1))
         assert later_run.review_pairs == 0
         assert not DedupReviewItem.objects.filter(status=DedupReviewItem.Status.PENDING).exists()
         assert run_summary(later_run)["effective_vacancies"] == 1
@@ -245,9 +253,9 @@ class Gate008PITReconciliationTests(TestCase):
         self.collect(source, Adapter("B"), when)
         run_deduplication(when)
         review = DedupReviewItem.objects.get(status=DedupReviewItem.Status.PENDING)
-        resolve_review(str(review.pk), merge=False, reason="Distinct assignments")
+        human = resolve_review(str(review.pk), merge=False, reason="Distinct assignments")
 
-        later_run, _ = run_deduplication(when + timedelta(seconds=1))
+        later_run, _ = run_deduplication(human.created_at + timedelta(seconds=1))
         assert later_run.review_pairs == 0
         assert not DedupReviewItem.objects.filter(status=DedupReviewItem.Status.PENDING).exists()
         assert run_summary(later_run)["effective_vacancies"] == 2
@@ -488,7 +496,7 @@ class Gate008PITReconciliationTests(TestCase):
         assert watermark.applied_dedup_run == later_run
         assert watermark.applied_as_of == t2
 
-    def test_lifecycle_change_does_not_inherit_human_decision(self) -> None:
+    def test_pending_absence_preserves_material_human_decision(self) -> None:
         source = self.source("SRC-HUMAN-LIFECYCLE-CHANGE")
         when = datetime(2026, 8, 5, tzinfo=UTC)
         self.collect(source, Adapter("A"), when)
@@ -500,10 +508,97 @@ class Gate008PITReconciliationTests(TestCase):
 
         later = when + timedelta(days=1)
         self.collect_empty(source, later)
-        later_run, _ = run_deduplication(later)
-        later_review = DedupReviewItem.objects.get(algorithm_decision__dedup_run=later_run)
-        later_fingerprint = later_review.algorithm_decision.evidence["pair_evidence_fingerprint"]
+        later_run, _ = run_deduplication(human.created_at + timedelta(seconds=1))
+        assert not DedupReviewItem.objects.filter(algorithm_decision__dedup_run=later_run).exists()
+        inherited = DedupDecision.objects.filter(
+            dedup_run=later_run,
+            evidence__material_version="dedup-review-material-v0.1",
+        ).get()
+        assert inherited.evidence["pair_evidence_fingerprint"] != first_fingerprint
+        assert inherited.inherited_review_application.source_human_decision == human
 
-        assert later_fingerprint != first_fingerprint
-        assert later_run.review_pairs == 1
-        assert later_review.status == DedupReviewItem.Status.PENDING
+    def _legacy_human(self, algorithm: DedupDecision, *, outcome: str) -> DedupDecision:
+        return DedupDecision.objects.create(
+            dedup_run=algorithm.dedup_run,
+            posting_a=algorithm.posting_a,
+            posting_b=algorithm.posting_b,
+            observation_a=algorithm.observation_a,
+            observation_b=algorithm.observation_b,
+            dedup_version=algorithm.dedup_version,
+            normalizer_version=algorithm.normalizer_version,
+            method=DedupDecision.Method.HUMAN,
+            outcome=outcome,
+            score=algorithm.score,
+            feature_scores=algorithm.feature_scores,
+            weights=algorithm.weights,
+            blocking_evidence=algorithm.blocking_evidence,
+            hard_barriers=algorithm.hard_barriers,
+            evidence={"algorithm_decision_id": str(algorithm.pk), "reason": "legacy fixture"},
+        )
+
+    def test_legacy_material_reconstruction_and_direct_authority_xor(self) -> None:
+        source = self.source("SRC-LEGACY-BRIDGE")
+        when = datetime(2026, 8, 6, tzinfo=UTC)
+        self.collect(source, Adapter("A"), when)
+        self.collect(source, Adapter("B"), when)
+        first_run, _ = run_deduplication(when)
+        algorithm = DedupReviewItem.objects.get(
+            algorithm_decision__dedup_run=first_run
+        ).algorithm_decision
+        human = self._legacy_human(algorithm, outcome="KEEP_SEPARATE")
+        proof = reconstruct_source_human_material(human, FROZEN_CONFIGURATION)
+        assert proof.algorithm_decision == algorithm
+
+        later_run, _ = run_deduplication(human.created_at + timedelta(seconds=1))
+        target_review = DedupReviewItem.objects.get(algorithm_decision__dedup_run=later_run)
+        application, created = create_dedup_review_application(
+            target_algorithm_decision=target_review.algorithm_decision,
+            source_human_decision=human,
+            configuration=FROZEN_CONFIGURATION,
+        )
+        assert created
+        assert application.material_fingerprint == proof.material_fingerprint
+        for merge in (False, True):
+            with self.assertRaisesRegex(ValueError, "inherited authority"):
+                resolve_review(str(target_review.pk), merge=merge, reason="must fail closed")
+
+    def test_legacy_bridge_rejects_changed_or_unverifiable_source(self) -> None:
+        source = self.source("SRC-LEGACY-INVALID")
+        when = datetime(2026, 8, 7, tzinfo=UTC)
+        self.collect(source, Adapter("A"), when)
+        self.collect(source, Adapter("B"), when)
+        first_run, _ = run_deduplication(when)
+        algorithm = DedupReviewItem.objects.get(
+            algorithm_decision__dedup_run=first_run
+        ).algorithm_decision
+        human = self._legacy_human(algorithm, outcome="KEEP_SEPARATE")
+        human.evidence = {"reason": "missing source algorithm"}
+        with self.assertRaises(UnverifiableLegacyHumanDecisionError):
+            reconstruct_source_human_material(human, FROZEN_CONFIGURATION)
+
+        human.evidence = {
+            "algorithm_decision_id": str(algorithm.pk),
+            "material_fingerprint": "0" * 64,
+        }
+        with self.assertRaisesRegex(DedupContinuityValidationError, "stored source material"):
+            reconstruct_source_human_material(human, FROZEN_CONFIGURATION)
+
+    def test_dedup_application_model_rejects_forged_authority(self) -> None:
+        source = self.source("SRC-FORGED-APP")
+        when = datetime(2026, 8, 8, tzinfo=UTC)
+        self.collect(source, Adapter("A"), when)
+        self.collect(source, Adapter("B"), when)
+        run, _ = run_deduplication(when)
+        algorithm = DedupReviewItem.objects.get(
+            algorithm_decision__dedup_run=run
+        ).algorithm_decision
+        human = self._legacy_human(algorithm, outcome="KEEP_SEPARATE")
+        forged = DedupReviewDecisionApplication(
+            target_algorithm_decision=algorithm,
+            source_human_decision=human,
+            material_fingerprint="0" * 64,
+            fingerprint_version="wrong-version",
+            evidence={"source_decision_id": "wrong", "target_decision_id": "wrong"},
+        )
+        with self.assertRaises(Exception):
+            forged.save()

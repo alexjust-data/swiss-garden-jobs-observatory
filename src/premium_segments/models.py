@@ -222,6 +222,14 @@ class PremiumSegmentAssessment(AppendOnlyPremiumEvidence):
         blank=True,
         related_name="premium_segment_assessments",
     )
+    green_review_application = models.ForeignKey(
+        "observations.GreenRelevanceReviewDecisionApplication",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="premium_segment_assessments",
+    )
+    green_result_origin = models.CharField(max_length=40, default="ORIGINAL_CLASSIFIER")
     effective_green_result = models.CharField(
         max_length=20,
         choices=[
@@ -307,18 +315,25 @@ class PremiumSegmentAssessment(AppendOnlyPremiumEvidence):
             errors["green_relevance_assessment"] = "green assessment belongs to another observation"
         assessment = self.green_relevance_assessment
         decision = self.green_review_decision
+        application = self.green_review_application
         if assessment is None:
             expected = "MISSING"
             if decision is not None:
                 errors["green_review_decision"] = "decision requires a pinned green assessment"
+            if application is not None:
+                errors["green_review_application"] = "application requires a pinned assessment"
         elif assessment.result != "REVIEW":
             expected = str(assessment.result)
             if decision is not None:
                 errors["green_review_decision"] = "non-REVIEW assessments cannot have decisions"
+            if application is not None:
+                errors["green_review_application"] = (
+                    "non-REVIEW assessments cannot have applications"
+                )
         elif decision is None:
             expected = "REVIEW"
         else:
-            if decision.assessment_id != assessment.pk:
+            if application is None and decision.assessment_id != assessment.pk:
                 errors["green_review_decision"] = "decision belongs to another assessment"
             expected = {
                 "CONFIRMED_GREEN": "GREEN_CONFIRMED",
@@ -327,6 +342,23 @@ class PremiumSegmentAssessment(AppendOnlyPremiumEvidence):
             }[decision.outcome]
             if decision.reviewed_at > self.run.as_of or decision.created_at > self.run.as_of:
                 errors["green_review_decision"] = "decision was not causally available at run as_of"
+            if application is not None:
+                if (
+                    application.target_assessment_id != assessment.pk
+                    or application.source_decision_id != decision.pk
+                ):
+                    errors["green_review_application"] = "application does not pin this evidence"
+                if application.created_at > self.run.as_of:
+                    errors["green_review_application"] = "application was not causally available"
+        expected_origin = (
+            "MATERIAL_IDENTICAL_HUMAN_REUSE"
+            if application
+            else "DIRECT_HUMAN_DECISION"
+            if decision
+            else "ORIGINAL_CLASSIFIER"
+        )
+        if self.green_result_origin != expected_origin:
+            errors["green_result_origin"] = f"expected {expected_origin}"
         if not self.effective_green_result:
             self.effective_green_result = expected
         elif self.effective_green_result != expected:

@@ -20,6 +20,10 @@ class ImmutableGreenRelevanceReviewDecisionError(RuntimeError):
     pass
 
 
+class ImmutableGreenRelevanceReviewDecisionApplicationError(RuntimeError):
+    pass
+
+
 class ImmutablePostingLifecycleEventError(RuntimeError):
     pass
 
@@ -128,6 +132,21 @@ class GreenRelevanceReviewDecisionManager(models.Manager["GreenRelevanceReviewDe
         raise ImmutableGreenRelevanceReviewDecisionError(
             "GreenRelevanceReviewDecision bulk updates are forbidden"
         )
+
+
+class GreenRelevanceReviewDecisionApplicationQuerySet(models.QuerySet):
+    def update(self, **kwargs: Any) -> int:
+        raise ImmutableGreenRelevanceReviewDecisionApplicationError("applications are append-only")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise ImmutableGreenRelevanceReviewDecisionApplicationError(
+            "applications cannot be deleted"
+        )
+
+
+class GreenRelevanceReviewDecisionApplicationManager(models.Manager):
+    def get_queryset(self) -> GreenRelevanceReviewDecisionApplicationQuerySet:
+        return GreenRelevanceReviewDecisionApplicationQuerySet(self.model, using=self._db)
 
 
 class PostingLifecycleEventQuerySet(models.QuerySet["PostingLifecycleEvent"]):
@@ -479,6 +498,11 @@ class GreenRelevanceReviewDecision(models.Model):
             errors["assessment"] = "only REVIEW assessments may be adjudicated"
         if self.reviewed_at and self.created_at and self.reviewed_at > self.created_at:
             errors["reviewed_at"] = "reviewed_at cannot be later than evidence availability"
+        inherited = self.assessment.review_applications.filter(
+            governance_version=self.governance_version
+        )
+        if self.assessment.pk and self.governance_version and inherited.exists():
+            errors["assessment"] = "target already has inherited human authority"
         if not self.reason_code.strip():
             errors["reason_code"] = "reason code is required"
         if not self.reason.strip():
@@ -527,6 +551,106 @@ class GreenRelevanceReviewDecision(models.Model):
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ImmutableGreenRelevanceReviewDecisionError(
             "GreenRelevanceReviewDecision cannot be deleted"
+        )
+
+
+class GreenRelevanceReviewDecisionApplication(models.Model):
+    objects = GreenRelevanceReviewDecisionApplicationManager()
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    target_assessment = models.ForeignKey(
+        GreenRelevanceAssessment, on_delete=models.PROTECT, related_name="review_applications"
+    )
+    source_decision = models.ForeignKey(
+        GreenRelevanceReviewDecision, on_delete=models.PROTECT, related_name="reuse_applications"
+    )
+    material_fingerprint = models.CharField(max_length=64)
+    fingerprint_version = models.CharField(max_length=80)
+    governance_version = models.CharField(max_length=80)
+    application_method = models.CharField(max_length=50, default="MATERIAL_IDENTICAL_HUMAN_REUSE")
+    evidence = models.JSONField(default=dict)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "green_relevance_review_decision_application"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["target_assessment", "governance_version"],
+                name="green_review_application_target_version_unique",
+            )
+        ]
+
+    def clean(self) -> None:
+        super().clean()
+        errors: dict[str, str] = {}
+        from observations.review_continuity import (
+            GREEN_REVIEW_MATERIAL_VERSION,
+            green_review_material_fingerprint,
+        )
+
+        if self.target_assessment.result != GreenRelevanceAssessment.Result.REVIEW:
+            errors["target_assessment"] = "only REVIEW assessments can inherit decisions"
+        if self.fingerprint_version != GREEN_REVIEW_MATERIAL_VERSION:
+            errors["fingerprint_version"] = "unsupported green material version"
+        if self.application_method != "MATERIAL_IDENTICAL_HUMAN_REUSE":
+            errors["application_method"] = "unsupported application method"
+        if self.source_decision.governance_version != self.governance_version:
+            errors["governance_version"] = "source decision governance differs"
+        if self.source_decision.assessment.pk == self.target_assessment.pk:
+            errors["source_decision"] = "direct decisions are not reuse applications"
+        if self.source_decision.created_at > self.created_at:
+            errors["created_at"] = "application predates source decision"
+        if self.source_decision.reviewed_at > self.created_at:
+            errors["created_at"] = "application predates reviewed human knowledge"
+        if self.target_assessment.review_decisions.filter(
+            governance_version=self.governance_version
+        ).exists():
+            errors["target_assessment"] = "target already has a direct decision"
+        required = {
+            "source_raw_sha256",
+            "target_raw_sha256",
+            "source_assessment_id",
+            "target_assessment_id",
+        }
+        if required - set(self.evidence):
+            errors["evidence"] = "application provenance is incomplete"
+        source_assessment = self.source_decision.assessment
+        source_observation = source_assessment.posting_observation
+        target_observation = self.target_assessment.posting_observation
+        if source_observation.posting_id != target_observation.posting_id:
+            errors["target_assessment"] = "governed Posting identity differs"
+        source_fp = green_review_material_fingerprint(
+            source_assessment, governance_version=self.governance_version
+        )
+        target_fp = green_review_material_fingerprint(
+            self.target_assessment, governance_version=self.governance_version
+        )
+        if not (source_fp == target_fp == self.material_fingerprint):
+            errors["material_fingerprint"] = "source/target/stored material differs"
+        expected = {
+            "source_raw_sha256": source_observation.raw_artifact.sha256_digest,
+            "target_raw_sha256": target_observation.raw_artifact.sha256_digest,
+            "source_assessment_id": str(source_assessment.pk),
+            "target_assessment_id": str(self.target_assessment.pk),
+        }
+        mismatched = [key for key, value in expected.items() if self.evidence.get(key) != value]
+        if mismatched:
+            errors["evidence"] = "application provenance differs: " + ", ".join(mismatched)
+        if errors:
+            from django.core.exceptions import ValidationError
+
+            raise ValidationError(errors)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ImmutableGreenRelevanceReviewDecisionApplicationError(
+                "applications are append-only"
+            )
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ImmutableGreenRelevanceReviewDecisionApplicationError(
+            "applications cannot be deleted"
         )
 
 

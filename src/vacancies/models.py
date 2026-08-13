@@ -394,6 +394,47 @@ class DedupReviewItem(models.Model):
         ]
 
 
+class DedupReviewDecisionApplication(AppendOnlyEvidence):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    target_algorithm_decision = models.OneToOneField(
+        DedupDecision, on_delete=models.PROTECT, related_name="inherited_review_application"
+    )
+    source_human_decision = models.ForeignKey(
+        DedupDecision, on_delete=models.PROTECT, related_name="review_reuse_applications"
+    )
+    material_fingerprint = models.CharField(max_length=64)
+    fingerprint_version = models.CharField(max_length=80)
+    application_method = models.CharField(max_length=50, default="MATERIAL_IDENTICAL_HUMAN_REUSE")
+    evidence = models.JSONField(default=dict)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "dedup_review_decision_application"
+
+    def clean(self) -> None:
+        super().clean()
+        if not self.target_algorithm_decision.pk or not self.source_human_decision.pk:
+            return
+        from django.core.exceptions import ValidationError
+
+        from .review_continuity import (
+            FROZEN_CONFIGURATION,
+            DedupContinuityValidationError,
+            validate_dedup_review_application,
+        )
+
+        try:
+            validate_dedup_review_application(self, FROZEN_CONFIGURATION)
+        except DedupContinuityValidationError as exc:
+            raise ValidationError({"evidence": str(exc)}) from exc
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ImmutableVacancyEvidenceError("vacancy evidence is append-only")
+        self.full_clean()
+        models.Model.save(self, *args, **kwargs)
+
+
 class PositionCountEvidence(AppendOnlyEvidence):
     class Method(models.TextChoices):
         EXPLICIT_NUMERIC = "EXPLICIT_NUMERIC", "Explicit numeric"

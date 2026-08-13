@@ -18,6 +18,8 @@ from .normalizer import (
     normalize_url,
 )
 
+DEDUP_REVIEW_MATERIAL_VERSION = "dedup-review-material-v0.1"
+
 
 @dataclass(frozen=True)
 class PostingEvidence:
@@ -172,6 +174,73 @@ def pair_evidence_fingerprint(
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _lifecycle_material(item: PostingEvidence) -> dict[str, Any]:
+    episode = 1
+    closed = False
+    latest = "ACTIVE"
+    last_closed_at = None
+    for event in item.lifecycle_events:
+        if event["event_type"] == "CLOSED_OBSERVED":
+            closed = True
+            latest = "CLOSED_OBSERVED"
+            last_closed_at = event["observed_at"]
+        elif event["event_type"] in {"NEW", "STILL_ACTIVE"}:
+            if closed:
+                episode += 1
+                closed = False
+            latest = "ACTIVE"
+    return {"economic_state": latest, "episode_number": episode, "last_closed_at": last_closed_at}
+
+
+def dedup_review_material_fingerprint(
+    left: PostingEvidence,
+    right: PostingEvidence,
+    configuration: dict[str, Any],
+    *,
+    method: str,
+    score: str,
+    feature_scores: dict[str, str],
+    hard_keys: list[dict[str, str]],
+    hard_barriers: list[dict[str, str]],
+    algorithm_outcome: str,
+) -> str:
+    inputs = []
+    for item in sorted((left, right), key=lambda value: value.posting_id):
+        inputs.append(
+            {
+                "posting_id": item.posting_id,
+                "source_id": item.source_id,
+                "source_native_id": item.source_posting_id,
+                "employer": item.normalized_employer,
+                "title": item.normalized_title,
+                "location": item.normalized_location,
+                "text": item.normalized_text,
+                "pensum_contract_start": normalize_text(item.pensum_contract_start),
+                "canonical_url": item.normalized_url,
+                "redirect_target": item.redirect_target,
+                "requisition_id": item.requisition_id,
+                "requisition_provenance": item.requisition_provenance,
+                "lifecycle": _lifecycle_material(item),
+            }
+        )
+    payload = {
+        "material_version": DEDUP_REVIEW_MATERIAL_VERSION,
+        "dedup_version": DEDUP_VERSION,
+        "normalizer_version": NORMALIZER_VERSION,
+        "configuration": configuration,
+        "inputs": inputs,
+        "method": method,
+        "score": score,
+        "feature_scores": feature_scores,
+        "hard_keys": hard_keys,
+        "hard_barriers": hard_barriers,
+        "algorithm_outcome": algorithm_outcome,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def evidence_snapshot(item: PostingEvidence) -> dict[str, Any]:
