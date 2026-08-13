@@ -1,7 +1,10 @@
 # mypy: disable-error-code="attr-defined"
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from django.core.exceptions import ValidationError
@@ -110,7 +113,7 @@ class Day0AuthorizationPolicy(AppendOnlyDay0Evidence):
         ACCEPTED = "ACCEPTED", "Accepted"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    policy_version = models.CharField(max_length=80, unique=True)
+    policy_version = models.CharField(max_length=80, db_index=True)
     threshold_policy_status = models.CharField(max_length=12, choices=PolicyStatus)
     required_completion_threshold = models.DecimalField(
         max_digits=5, decimal_places=4, null=True, blank=True
@@ -157,6 +160,119 @@ class Day0AuthorizationPolicy(AppendOnlyDay0Evidence):
                 name="day0_policy_freshness_coherent",
             ),
         ]
+
+
+class Day0AuthorizationPolicyDesignation(AppendOnlyDay0Evidence):
+    class AuthorityBasis(models.TextChoices):
+        MERGED_GOVERNANCE_DECISION = (
+            "MERGED_GOVERNANCE_DECISION",
+            "Merged governance decision",
+        )
+
+    REQUIRED_GOVERNANCE_FIELDS = frozenset(
+        {
+            "pr_number",
+            "merged_sha",
+            "merged_at",
+            "final_policy_commit",
+            "final_tree_commit",
+            "adr_path",
+        }
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    designation_version = models.CharField(max_length=80)
+    policy_version = models.CharField(max_length=80)
+    authoritative_policy = models.ForeignKey(
+        Day0AuthorizationPolicy,
+        on_delete=models.PROTECT,
+        related_name="authority_designations",
+    )
+    authority_basis = models.CharField(max_length=40, choices=AuthorityBasis)
+    governance_evidence = models.JSONField(default=dict)
+    effective_at = models.DateTimeField()
+    created_at = models.DateTimeField(default=timezone.now)
+    input_fingerprint = models.CharField(max_length=64, unique=True)
+
+    class Meta:
+        db_table = "day0_authorization_policy_designation"
+        ordering = ["-effective_at", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["designation_version", "policy_version"],
+                name="day0_policy_designation_version_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(input_fingerprint__regex=r"^[0-9a-f]{64}$"),
+                name="day0_policy_designation_fingerprint_valid",
+            ),
+        ]
+
+    def fingerprint_payload(self) -> dict[str, Any]:
+        return {
+            "designation_version": self.designation_version,
+            "policy_version": self.policy_version,
+            "authoritative_policy_fingerprint": self.authoritative_policy.input_fingerprint,
+            "authority_basis": self.authority_basis,
+            "governance_evidence": self.governance_evidence,
+            "effective_at": self.effective_at.isoformat(),
+        }
+
+    def expected_input_fingerprint(self) -> str:
+        canonical = json.dumps(
+            self.fingerprint_payload(),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    def clean(self) -> None:
+        errors: dict[str, str] = {}
+        if (
+            self.authoritative_policy_id
+            and self.policy_version != self.authoritative_policy.policy_version
+        ):
+            errors["policy_version"] = "Designation and artifact policy versions differ."
+        missing = self.REQUIRED_GOVERNANCE_FIELDS - set(self.governance_evidence)
+        if missing:
+            errors["governance_evidence"] = "Missing governance evidence: " + ", ".join(
+                sorted(missing)
+            )
+        if self.authority_basis == self.AuthorityBasis.MERGED_GOVERNANCE_DECISION:
+            merged_at_value = self.governance_evidence.get("merged_at")
+            try:
+                if not isinstance(merged_at_value, str):
+                    raise TypeError
+                merged_at = datetime.strptime(merged_at_value, "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=UTC
+                )
+            except (TypeError, ValueError):
+                errors["governance_evidence"] = (
+                    "Merged-governance evidence requires merged_at as exact UTC "
+                    "YYYY-MM-DDTHH:MM:SSZ."
+                )
+            else:
+                if self.effective_at != merged_at:
+                    errors["effective_at"] = (
+                        "Merged-governance authority must become effective exactly at merged_at."
+                    )
+        if self.effective_at and self.created_at and self.effective_at > self.created_at:
+            errors["effective_at"] = "Authority cannot become effective after its evidence exists."
+        if self.authoritative_policy_id and self.effective_at:
+            expected = self.expected_input_fingerprint()
+            if self.input_fingerprint != expected:
+                errors["input_fingerprint"] = "Designation fingerprint does not match its evidence."
+        conflict = Day0AuthorizationPolicyDesignation.objects.filter(
+            designation_version=self.designation_version,
+            policy_version=self.policy_version,
+        )
+        if self.pk:
+            conflict = conflict.exclude(pk=self.pk)
+        if self.designation_version and self.policy_version and conflict.exists():
+            errors["policy_version"] = "Conflicting authority designation already exists."
+        if errors:
+            raise ValidationError(errors)
 
 
 class Day0SourceUniverseEntry(AppendOnlyDay0Evidence):
