@@ -1,21 +1,26 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime
-from decimal import Decimal
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
-from uuid import UUID
 
-from django.db import connection, transaction
+from django.db import IntegrityError, connection, transaction
+from django.db.migrations.recorder import MigrationRecorder
 from django.db.models import Model
 from django.utils import timezone
 
 from core.models import ReviewAuthorityLineageImport
+from core.review_authority_package import (
+    canonical_value,
+    relationship_graph,
+    row_hash_inventory,
+    sha256,
+    source_snapshot_fingerprint,
+)
 from observations.models import (
     GreenRelevanceAssessment,
     GreenRelevanceReviewDecision,
@@ -32,6 +37,10 @@ from vacancies.review_continuity import (
 )
 
 LINEAGE_VERSION = "review-authority-lineage-v0.1"
+DESIGNATION_VERSION = "review-authority-package-designation-v0.1"
+DESIGNATION_PATH = Path(
+    "docs/day0/gate_011g_c1_review_authority_package_designation_v0_1.json"
+)
 REGISTRY_VERSION = "review-authority-registry-v0.1"
 GATE_SHAS = {
     "gate_011e": "cbf1054b329843ea3fff7eeac77ea9342df60147",
@@ -56,6 +65,54 @@ class ExactAuthorityTransplantNotPossible(ReviewAuthorityLineageError):
     pass
 
 
+def package_designation(package: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "designation_version": DESIGNATION_VERSION,
+        "lineage_version": LINEAGE_VERSION,
+        "package_sha256": package["package_sha256"],
+        "source_snapshot_fingerprint": package["manifest"][
+            "source_snapshot_fingerprint"
+        ],
+        "authority_registry_sha256": sha256(registry),
+        "merged_governance": GATE_SHAS,
+    }
+
+
+def verify_package_designation(
+    package: dict[str, Any], registry: dict[str, Any], designation: dict[str, Any]
+) -> None:
+    if designation != package_designation(package, registry):
+        raise ReviewAuthorityLineageError(
+            "package does not match the independently audited designation"
+        )
+
+
+def lineage_batch_input_fingerprint(
+    *,
+    lineage_version: str,
+    package_sha256: str,
+    authority_registry_sha256: str,
+    source_snapshot_fingerprint: str,
+    target_prestate_fingerprint: str,
+    source_gate_shas: dict[str, Any],
+    imported_authority_counts: dict[str, Any],
+    reused_authority_counts: dict[str, Any],
+    conflict_counts: dict[str, Any],
+) -> str:
+    return sha256(
+        {
+            "lineage_version": lineage_version,
+            "package_sha256": package_sha256,
+            "authority_registry_sha256": authority_registry_sha256,
+            "source_snapshot_fingerprint": source_snapshot_fingerprint,
+            "target_prestate_fingerprint": target_prestate_fingerprint,
+            "source_gate_shas": source_gate_shas,
+            "imported_authority_counts": imported_authority_counts,
+            "reused_authority_counts": reused_authority_counts,
+            "conflict_counts": conflict_counts,
+        }
+    )
+
 @dataclass(frozen=True)
 class ImportResult:
     batch: ReviewAuthorityLineageImport
@@ -67,26 +124,6 @@ class ImportResult:
     reused_green_applications: int
     imported_dedup_applications: int
     reused_dedup_applications: int
-
-
-def canonical_value(value: Any) -> Any:
-    if isinstance(value, datetime | date):
-        return value.isoformat()
-    if isinstance(value, UUID | Decimal):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): canonical_value(value[key]) for key in sorted(value)}
-    if isinstance(value, list | tuple):
-        return [canonical_value(item) for item in value]
-    return value
-
-
-def canonical_json(value: Any) -> str:
-    return json.dumps(canonical_value(value), sort_keys=True, separators=(",", ":"))
-
-
-def sha256(value: Any) -> str:
-    return hashlib.sha256(canonical_json(value).encode()).hexdigest()
 
 
 def model_payload(instance: Model) -> dict[str, Any]:
@@ -138,8 +175,8 @@ def _registry(green: list[GreenRelevanceReviewDecision], dedup: DedupDecision) -
                     decision.assessment,
                     governance_version=decision.governance_version,
                 ),
-                "reviewed_at": decision.reviewed_at.isoformat(),
-                "created_at": decision.created_at.isoformat(),
+                "reviewed_at": canonical_value(decision.reviewed_at),
+                "created_at": canonical_value(decision.created_at),
             }
         )
     proof = reconstruct_source_human_material(dedup, FROZEN_CONFIGURATION)
@@ -165,7 +202,7 @@ def _registry(green: list[GreenRelevanceReviewDecision], dedup: DedupDecision) -
                 "decision_row_sha256": model_payload(dedup)["row_sha256"],
                 "algorithm_row_sha256": model_payload(proof.algorithm_decision)["row_sha256"],
                 "dedup_run_row_sha256": model_payload(dedup.dedup_run)["row_sha256"],
-                "created_at": dedup.created_at.isoformat(),
+                "created_at": canonical_value(dedup.created_at),
             }
         ],
     }
@@ -177,6 +214,42 @@ def export_package() -> tuple[dict[str, Any], dict[str, Any]]:
     with transaction.atomic():
         with connection.cursor() as cursor:
             cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            export_started_at = timezone.now()
+            cursor.execute(
+                """
+                SELECT current_database(), current_setting('server_version_num'),
+                       COALESCE(inet_server_addr()::text, 'local'),
+                       txid_current_snapshot()::text, transaction_timestamp()
+                """
+            )
+            (
+                database_name,
+                server_version_num,
+                server_address,
+                transaction_snapshot,
+                transaction_started_at,
+            ) = cursor.fetchone()
+        migration_inventory = [
+            {"app": app, "name": name}
+            for app, name in MigrationRecorder.Migration.objects.order_by("app", "name")
+            .values_list("app", "name")
+        ]
+        source_snapshot_metadata: dict[str, Any] = {
+            "database_identity": {
+                "vendor": connection.vendor,
+                "database_name": database_name,
+            },
+            "server_identity": {
+                "vendor": connection.vendor,
+                "server_version_num": server_version_num,
+                "server_address_sha256": sha256(str(server_address)),
+            },
+            "transaction_snapshot": transaction_snapshot,
+            "export_started_at": canonical_value(export_started_at),
+            "transaction_started_at": canonical_value(transaction_started_at),
+            "migration_inventory": migration_inventory,
+            "merged_governance": GATE_SHAS,
+        }
         green = list(
             GreenRelevanceReviewDecision.objects.filter(
                 governance_version=GREEN_REVIEW_GOVERNANCE_VERSION
@@ -253,11 +326,21 @@ def export_package() -> tuple[dict[str, Any], dict[str, Any]]:
             "green_applications": _sorted_rows(green_apps),
             "dedup_applications": _sorted_rows(dedup_apps),
         }
-        snapshot_fingerprint = sha256(
-            {
-                name: [row["row_sha256"] for row in values]
-                for name, values in sorted(rows.items())
-            }
+        inventory = row_hash_inventory(rows)
+        graph = relationship_graph(rows, MODEL_MAP)
+        counts = {name: len(values) for name, values in rows.items()}
+        models_included = sorted(
+            {row["model"] for values in rows.values() for row in values}
+        )
+        source_snapshot_metadata["bounded_source_metadata"] = {
+            "row_counts": counts,
+            "models_included": models_included,
+            "green_authority_outcomes": outcomes,
+            "green_authority_count": len(green),
+            "dedup_human_authority_count": len(human_dedup),
+        }
+        snapshot_fingerprint = source_snapshot_fingerprint(
+            source_snapshot_metadata, inventory, graph
         )
         package: dict[str, Any] = {
             "manifest": {
@@ -266,9 +349,7 @@ def export_package() -> tuple[dict[str, Any], dict[str, Any]]:
                 "source_snapshot_fingerprint": snapshot_fingerprint,
                 "merged_governance": GATE_SHAS,
                 "authority_registry_sha256": sha256(registry),
-                "models_included": sorted(
-                    {row["model"] for values in rows.values() for row in values}
-                ),
+                "models_included": models_included,
                 "models_explicitly_excluded": [
                     "sources.source",
                     "observations.collectionrun",
@@ -277,8 +358,10 @@ def export_package() -> tuple[dict[str, Any], dict[str, Any]]:
                     "core.rawartifact",
                     "vacancies.vacancy",
                 ],
-                "counts": {name: len(values) for name, values in rows.items()},
+                "counts": counts,
             },
+            "source_snapshot_metadata": source_snapshot_metadata,
+            "relationship_graph": graph,
             "registry": registry,
             "rows": rows,
         }
@@ -291,6 +374,16 @@ def verify_package(package: dict[str, Any], expected_registry: dict[str, Any]) -
     unsigned = {key: value for key, value in package.items() if key != "package_sha256"}
     if not isinstance(supplied, str) or supplied != sha256(unsigned):
         raise ReviewAuthorityLineageError("package SHA-256 mismatch")
+    expected_top_level = {
+        "manifest",
+        "source_snapshot_metadata",
+        "relationship_graph",
+        "registry",
+        "rows",
+        "package_sha256",
+    }
+    if set(package) != expected_top_level:
+        raise ReviewAuthorityLineageError("package top-level structure differs")
     manifest = package.get("manifest")
     if not isinstance(manifest, dict) or manifest.get("lineage_version") != LINEAGE_VERSION:
         raise ReviewAuthorityLineageError("unsupported lineage package version")
@@ -326,6 +419,86 @@ def verify_package(package: dict[str, Any], expected_registry: dict[str, Any]) -
                 raise ReviewAuthorityLineageError(
                     f"package contains unsupported model: {row.get('model')}"
                 )
+    counts = {name: len(values) for name, values in rows.items()}
+    models_included = sorted(
+        {row["model"] for values in rows.values() for row in values}
+    )
+    if manifest.get("counts") != counts:
+        raise ReviewAuthorityLineageError("manifest counts differ from package rows")
+    if manifest.get("models_included") != models_included:
+        raise ReviewAuthorityLineageError("manifest models differ from package rows")
+    if manifest.get("merged_governance") != GATE_SHAS:
+        raise ReviewAuthorityLineageError("manifest governance differs")
+    graph = package.get("relationship_graph")
+    expected_graph = relationship_graph(rows, MODEL_MAP)
+    if graph != expected_graph:
+        raise ReviewAuthorityLineageError("relationship graph differs from package rows")
+    metadata = package.get("source_snapshot_metadata")
+    if not isinstance(metadata, dict):
+        raise ReviewAuthorityLineageError("source snapshot metadata is absent")
+    required_metadata = {
+        "database_identity",
+        "server_identity",
+        "transaction_snapshot",
+        "export_started_at",
+        "transaction_started_at",
+        "migration_inventory",
+        "merged_governance",
+        "bounded_source_metadata",
+    }
+    if set(metadata) != required_metadata:
+        raise ReviewAuthorityLineageError("source snapshot metadata fields differ")
+    if metadata.get("merged_governance") != GATE_SHAS:
+        raise ReviewAuthorityLineageError("source snapshot governance differs")
+    forbidden_metadata_keys = {"password", "username", "dsn", "secret", "token"}
+
+    def metadata_keys(value: Any) -> set[str]:
+        if isinstance(value, dict):
+            return {str(key).lower() for key in value} | {
+                nested
+                for item in value.values()
+                for nested in metadata_keys(item)
+            }
+        if isinstance(value, list):
+            return {nested for item in value for nested in metadata_keys(item)}
+        return set()
+
+    if metadata_keys(metadata) & forbidden_metadata_keys:
+        raise ReviewAuthorityLineageError("source snapshot metadata contains forbidden keys")
+    if not isinstance(metadata.get("transaction_snapshot"), str) or not metadata[
+        "transaction_snapshot"
+    ]:
+        raise ReviewAuthorityLineageError("transaction snapshot identifier is absent")
+    canonical_timestamp = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z")
+    for timestamp_field in ("export_started_at", "transaction_started_at"):
+        value = metadata.get(timestamp_field)
+        if not isinstance(value, str) or canonical_timestamp.fullmatch(value) is None:
+            raise ReviewAuthorityLineageError(
+                f"source snapshot {timestamp_field} is not canonical UTC"
+            )
+    migrations = metadata.get("migration_inventory")
+    if not isinstance(migrations, list) or migrations != sorted(
+        migrations, key=lambda item: (item.get("app", ""), item.get("name", ""))
+    ):
+        raise ReviewAuthorityLineageError("migration inventory is not canonical")
+    green_outcomes: dict[str, int] = {}
+    for row in rows["green_human_decisions"]:
+        outcome = row.get("fields", {}).get("outcome")
+        green_outcomes[str(outcome)] = green_outcomes.get(str(outcome), 0) + 1
+    expected_bounded_metadata = {
+        "row_counts": counts,
+        "models_included": models_included,
+        "green_authority_outcomes": green_outcomes,
+        "green_authority_count": len(rows["green_human_decisions"]),
+        "dedup_human_authority_count": len(rows["dedup_human_decisions"]),
+    }
+    if metadata.get("bounded_source_metadata") != expected_bounded_metadata:
+        raise ReviewAuthorityLineageError("bounded source metadata differs from package rows")
+    recomputed_snapshot = source_snapshot_fingerprint(
+        metadata, row_hash_inventory(rows), expected_graph
+    )
+    if manifest.get("source_snapshot_fingerprint") != recomputed_snapshot:
+        raise ReviewAuthorityLineageError("source snapshot fingerprint differs")
     if len(rows["green_human_decisions"]) != 55:
         raise ReviewAuthorityLineageError("package does not contain all 55 green authorities")
     if len(rows["dedup_human_decisions"]) != 1:
@@ -424,7 +597,9 @@ def verify_registry_against_merged_governance(
             "raw_sha256": raw_match.group(1),
             "outcome": outcome_tokens[0],
             "reason_code": outcome_tokens[1],
-            "reviewed_at": metadata_tokens[0],
+            "reviewed_at": canonical_value(
+                datetime.fromisoformat(metadata_tokens[0].replace("Z", "+00:00"))
+            ),
             "governance_version": metadata_tokens[1],
         }
     if len(expected) != 55:
@@ -647,18 +822,25 @@ def _verify_existing_batch_rows(package: dict[str, Any]) -> None:
 
 
 def import_package(
-    package: dict[str, Any], expected_registry: dict[str, Any]
+    package: dict[str, Any],
+    expected_registry: dict[str, Any],
+    designation: dict[str, Any] | None = None,
 ) -> ImportResult:
     """Preflight and atomically replicate exact authority into the configured target."""
 
     verify_package(package, expected_registry)
+    accepted_designation = designation or load_json(DESIGNATION_PATH)
+    verify_package_designation(package, expected_registry, accepted_designation)
     existing_batch = ReviewAuthorityLineageImport.objects.filter(
-        package_sha256=package["package_sha256"]
+        lineage_version=LINEAGE_VERSION
     ).first()
     if existing_batch is not None:
+        if existing_batch.package_sha256 != package["package_sha256"]:
+            raise ReviewAuthorityLineageError(
+                "different package already governs this lineage version"
+            )
         if (
-            existing_batch.lineage_version != LINEAGE_VERSION
-            or existing_batch.authority_registry_sha256 != sha256(expected_registry)
+            existing_batch.authority_registry_sha256 != sha256(expected_registry)
             or existing_batch.source_snapshot_fingerprint
             != package["manifest"]["source_snapshot_fingerprint"]
             or existing_batch.source_gate_shas != GATE_SHAS
@@ -666,7 +848,6 @@ def import_package(
             raise ReviewAuthorityLineageError("existing lineage batch conflicts with package")
         _verify_existing_batch_rows(package)
         return _result_from_batch(existing_batch, replay=True)
-
     rows = package["rows"]
     authority_assessment_ids = {
         row["fields"]["assessment_id"] for row in rows["green_human_decisions"]
@@ -761,16 +942,20 @@ def import_package(
                 continue
             _, created = _insert_or_reuse(row, label="derived dedup application")
             (imported if created else reused)["dedup_applications"] += 1
-        batch_input = {
-            "lineage_version": LINEAGE_VERSION,
-            "package_sha256": package["package_sha256"],
-            "authority_registry_sha256": sha256(expected_registry),
-            "source_snapshot_fingerprint": package["manifest"][
+        conflicts = {"total": 0}
+        batch_input_fingerprint = lineage_batch_input_fingerprint(
+            lineage_version=LINEAGE_VERSION,
+            package_sha256=package["package_sha256"],
+            authority_registry_sha256=sha256(expected_registry),
+            source_snapshot_fingerprint=package["manifest"][
                 "source_snapshot_fingerprint"
             ],
-            "target_prestate_fingerprint": target_prestate,
-            "source_gate_shas": GATE_SHAS,
-        }
+            target_prestate_fingerprint=target_prestate,
+            source_gate_shas=GATE_SHAS,
+            imported_authority_counts=imported,
+            reused_authority_counts=reused,
+            conflict_counts=conflicts,
+        )
         batch = ReviewAuthorityLineageImport(
             lineage_version=LINEAGE_VERSION,
             package_sha256=package["package_sha256"],
@@ -782,9 +967,21 @@ def import_package(
             target_prestate_fingerprint=target_prestate,
             imported_authority_counts=imported,
             reused_authority_counts=reused,
-            conflict_counts={"total": 0},
+            conflict_counts=conflicts,
             replicated_at=timezone.now(),
-            input_fingerprint=sha256(batch_input),
+            input_fingerprint=batch_input_fingerprint,
         )
-        batch.save()
+        try:
+            with transaction.atomic():
+                batch.save()
+        except IntegrityError as exc:
+            concurrent = ReviewAuthorityLineageImport.objects.filter(
+                lineage_version=LINEAGE_VERSION
+            ).first()
+            if concurrent is not None and concurrent.package_sha256 == package["package_sha256"]:
+                _verify_existing_batch_rows(package)
+                return _result_from_batch(concurrent, replay=True)
+            raise ReviewAuthorityLineageError(
+                "concurrent lineage package authority conflict"
+            ) from exc
     return _result_from_batch(batch)

@@ -21,7 +21,7 @@ class Migration(migrations.Migration):
                         default=uuid.uuid4, editable=False, primary_key=True, serialize=False
                     ),
                 ),
-                ("lineage_version", models.CharField(max_length=80)),
+                ("lineage_version", models.CharField(max_length=80, unique=True)),
                 ("package_sha256", models.CharField(max_length=64, unique=True)),
                 ("authority_registry_sha256", models.CharField(max_length=64)),
                 ("source_snapshot_fingerprint", models.CharField(max_length=64)),
@@ -36,12 +36,6 @@ class Migration(migrations.Migration):
             options={
                 "db_table": "review_authority_lineage_import",
                 "ordering": ["replicated_at", "pk"],
-                "constraints": [
-                    models.UniqueConstraint(
-                        fields=("lineage_version", "package_sha256"),
-                        name="review_authority_lineage_package_unique",
-                    )
-                ],
             },
         )
     ]

@@ -8,6 +8,7 @@ from django.core.management.base import BaseCommand, CommandError, CommandParser
 from core.review_authority_lineage import (
     ReviewAuthorityLineageError,
     export_package,
+    package_designation,
     verify_registry_against_merged_governance,
 )
 
@@ -18,6 +19,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument("--package-output", required=True)
         parser.add_argument("--registry-output", required=True)
+        parser.add_argument("--designation-output", required=True)
         parser.add_argument(
             "--governance-document",
             default="docs/day0/gate_011e_critical_review_resolution_v0_1.md",
@@ -33,14 +35,26 @@ class Command(BaseCommand):
             raise CommandError(str(exc)) from exc
         package_path = Path(str(options["package_output"]))
         registry_path = Path(str(options["registry_output"]))
+        designation_path = Path(str(options["designation_output"]))
         package_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.parent.mkdir(parents=True, exist_ok=True)
+        designation_path.parent.mkdir(parents=True, exist_ok=True)
         package_path.write_text(
             json.dumps(package, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         registry_path.write_text(
             json.dumps(registry, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        designation_path.write_text(
+            json.dumps(
+                package_designation(package, registry),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
             encoding="utf-8",
         )
         self.stdout.write(

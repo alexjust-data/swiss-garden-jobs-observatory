@@ -19,6 +19,10 @@ class Command(BaseCommand):
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument("--package", required=True)
         parser.add_argument("--registry", required=True)
+        parser.add_argument(
+            "--designation",
+            default="docs/day0/gate_011g_c1_review_authority_package_designation_v0_1.json",
+        )
         parser.add_argument("--dry-run", action="store_true")
         parser.add_argument(
             "--governance-document",
@@ -28,12 +32,13 @@ class Command(BaseCommand):
     def handle(self, *args: object, **options: object) -> None:
         package = load_json(Path(str(options["package"])))
         registry = load_json(Path(str(options["registry"])))
+        designation = load_json(Path(str(options["designation"])))
         try:
             verify_registry_against_merged_governance(
                 registry, Path(str(options["governance_document"]))
             )
             with transaction.atomic():
-                result = import_package(package, registry)
+                result = import_package(package, registry, designation)
                 if bool(options["dry_run"]):
                     transaction.set_rollback(True)
         except ReviewAuthorityLineageError as exc:

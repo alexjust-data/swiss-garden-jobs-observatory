@@ -108,3 +108,55 @@ operating contract remains unchanged.
 - repeated read-only export: same package and snapshot fingerprints;
 - exact package dry-run and repeated import: same lineage batch, zero new rows;
 - real operational database modified before merge: no.
+
+## Independent-audit package correction
+
+Prior audited head: `0e09b1cad62f3c022977a0fe8906da87ffecf2ad`.
+
+The independent audit accepted the 55+1 authority transplant but found that the first package
+format under-bound the source snapshot, trusted manifest snapshot claims, omitted an explicit
+relationship graph, allowed more than one package per lineage version, exposed QuerySet mutation
+of the ledger, and used ordinary `isoformat()` timestamps. The frozen predeclaration contract was
+not changed.
+
+The corrected source export ran inside one PostgreSQL `REPEATABLE READ`, `READ ONLY` transaction
+and binds sanitized database/server identity, transaction snapshot `396084:396084:`, export start
+`2026-08-13T20:51:00.927839Z`, transaction start `2026-08-13T20:51:00.945856Z`, the complete
+Django migration inventory, bounded model/count metadata, canonical row-hash inventory, 1,718
+canonical relationship edges and the frozen merged-governance SHAs. Credentials, usernames and
+DSNs are excluded.
+
+Corrected accepted identities:
+
+- source snapshot: `01d155b681fcb2851010350d3db380f2fad4b7575410eda3648ebe7a4455388e`;
+- authority registry: `922bff765eaf461b3769e674120a2be365960e09c146cfab16771590869ccf55`;
+- package: `a82fb98616f8072b0343f5fc5ce5f7c9d449c4d3e26e619df661c1ce81d6bc92`;
+- package designation file SHA-256: `0472f67845fcc395513a1bc1be7d7ca11161cc0d6c45e8e1c4fad4d34f506e49`.
+
+A new PostgreSQL transaction is intentionally a new snapshot identity. Acceptance no longer
+expects a later export transaction to reproduce the same package. It requires repeated
+serialization/import of this one designated package to be deterministic and idempotent.
+
+On a fresh isolated copy of the operational database, the designated package preflight rolled
+back, the first real import created all 55 green and one dedup human authorities, and the second
+import reused the same lineage batch `5a02f4dd-6762-4964-9e6a-193a70cb59c3` with zero duplicate
+authority or applications. The ledger is immutable through instance, QuerySet and Manager paths;
+`lineage_version` is database-unique and a different package fails before authority mutation.
+
+Corrected target continuity imported 70 exact green applications, regenerated 105 against exact
+target assessments, left seven unmatched, and regenerated one dedup application from the exact
+legacy human authority. No human decision was created.
+
+Corrected causal cutoff: `2026-08-13T21:01:50.011984Z`.
+
+| Artifact | ID | Input fingerprint |
+|---|---|---|
+| DedupRun | `a5a2c22f-0bc3-4ab4-83b7-e1c47972f457` | `f579effe594669d0904b06f48fb99f6809058c000d4229d8658de13a3ee0de38` |
+| PremiumSegmentRun | `31634690-2028-48c6-a6fa-febaff67945b` | `76e10a313a48e936504f3759346cb6ff5d4f96a0b58592ea70557fc40817e8e2` |
+| DashboardSnapshot | `cb6a3336-5cdc-4cf9-b999-cfa93c72125b` | `230b19975f84e48429bc180284990ae054a68cac6fd399720ac623f5db5d3bf4` |
+| Day0ReadinessAssessment | `d0d1700a-56af-42b0-88b8-b4d4c87efaf2` | `0662a9d7b03b54298c30615f0811a3e8760cfe58a8f6d292849a70ecd38ba870` |
+
+Exact replay returned the same four IDs and fingerprints with one artifact per fingerprint.
+The scientific result remains 19 acquisition-eligible Sources, 51 active GREEN, three critical
+green reviews, zero critical dedup reviews, `DAY_0_BLOCKED_BY_DATA_QUALITY`, and null headline.
+The real operational database remained untouched.
