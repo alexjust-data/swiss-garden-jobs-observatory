@@ -40,7 +40,7 @@ class Command(BaseCommand):
             target_fp = green_review_material_fingerprint(
                 target, governance_version=GREEN_REVIEW_GOVERNANCE_VERSION
             )
-            source = None
+            matching_sources: list[GreenRelevanceReviewDecision] = []
             decisions = GreenRelevanceReviewDecision.objects.filter(
                 assessment__posting_observation__posting_id=target.posting_observation.posting_id,
                 governance_version=GREEN_REVIEW_GOVERNANCE_VERSION,
@@ -55,11 +55,17 @@ class Command(BaseCommand):
                     )
                     == target_fp
                 ):
-                    source = candidate
-                    break
-            if source is None:
+                    matching_sources.append(candidate)
+            if not matching_sources:
                 unmatched += 1
                 continue
+            if len(matching_sources) > 1:
+                outcomes = sorted({decision.outcome for decision in matching_sources})
+                raise CommandError(
+                    "CONFLICTING_PRIOR_HUMAN_KNOWLEDGE: "
+                    f"target={target.pk} decisions={len(matching_sources)} outcomes={outcomes}"
+                )
+            source = matching_sources[0]
             apply_materially_identical_green_decision(
                 target_assessment=target, source_decision=source
             )

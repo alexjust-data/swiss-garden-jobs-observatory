@@ -38,3 +38,9 @@ The final aligned cutoff is `2026-08-13T06:34:17.993915Z`. PIT IDs and fingerpri
 | Day0ReadinessAssessment | `5d33f761-5c81-473c-8f35-f806d204f6b0` | `e36dd4e628997ca5e4265f2830ba12fe4118e82f9ce2b26590eaf4abcd49dd72` |
 
 Exact replay returned all four IDs/fingerprints and reused each artifact; continuity created zero duplicates. Day-0 remains `DAY_0_BLOCKED_BY_DATA_QUALITY`: only 20 of 29 required Sources are eligible versus the frozen minimum of 24, and the two inherited-insufficient reviews remain critical. The headline remains null. No blocked Source was requested and no closed classifier, scoring, premium, coverage, freshness, authorization, source-disposition, geography, or Job-Room contract changed.
+
+## Independent-audit enforcement correction
+
+Audit of head `eb3476b2d5174a279877f7d46302395cb66888f2` identified enforcement gaps, not a material-contract defect. Legacy dedup reuse now reconstructs source material from the exact historical algorithm decision and cutoff; missing evidence is `UNVERIFIABLE_LEGACY_HUMAN_DECISION`. Dedup applications have one central create/verify path and are revalidated by the engine. Dedup and green both enforce direct authority XOR inherited authority. Green creation reconciles identical concurrent collisions and rejects ambiguous prior knowledge.
+
+The real legacy bridge reconstructs equal source and target fingerprint `c9f0c0f6a4c0d57062bd15b8024dd434bee2d889a531b74d950277e77d518087`. The corrected aligned cutoff `2026-08-13T07:52:00Z` produced Dedup `d5a44c47-e495-4a0b-b419-824fbba94606`, Premium `3c522be5-464d-4b4c-abc4-87bb90bdda33`, Dashboard `23ae1e19-9dc4-4e58-9e9a-7fa28c0dfcc8` and Readiness `d0500be7-96a6-450a-8089-26ef0ef8a0ae`. Exact replay and one-artifact-per-fingerprint passed; the 37/15/2 lineage and Day-0 consequence are unchanged because the evidence reproduced them.

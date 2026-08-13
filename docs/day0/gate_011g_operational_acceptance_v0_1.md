@@ -53,3 +53,16 @@ Required/implemented/eligible Sources: **29 / 20 / 20**. Structural coverage is 
 Authorization is `DAY_0_BLOCKED_BY_DATA_QUALITY`. Failures are acquisition coverage 20/29 below 24/29 and the two critical green reviews; the nine frozen blocked-source dispositions remain denominator-only evidence. The unauthorized headline is `null`.
 
 An earlier provisional derivation used a cutoff before its continuity application became causally available. It is immutable database evidence but is explicitly excluded. The final cutoff above was fixed only after all applications existed, then replayed after the cutoff with no intervening collection evidence.
+
+## Independent-audit corrected PIT chain
+
+After audit of head `eb3476b2d5174a279877f7d46302395cb66888f2`, validation was hardened without changing the frozen contract or collection corpus. At cutoff `2026-08-13T07:52:00Z`, the corrected engine created and then exactly replayed:
+
+| Layer | ID | Fingerprint |
+|---|---|---|
+| DedupRun | `d5a44c47-e495-4a0b-b419-824fbba94606` | `0ede0abf31d5c064640739eb6d48194c5d4afd837ccc4b58596b5ef413070af8` |
+| PremiumSegmentRun | `3c522be5-464d-4b4c-abc4-87bb90bdda33` | `c6e39be1d14adb17b7649da42630b8e31da278048f266a14fab2001f24ebee8c` |
+| DashboardSnapshot | `23ae1e19-9dc4-4e58-9e9a-7fa28c0dfcc8` | `3ffcd09e91acb99137cab328cd8ddacf2840977e76e5cb7c66d03989ea3c2e41` |
+| Day0ReadinessAssessment | `d0500be7-96a6-450a-8089-26ef0ef8a0ae` | `e9b6cd5bc9e2ed9d86318096d391ebe1928bb2df6a0e944e4fe4dd336d748eb4` |
+
+Every replay returned the same ID/fingerprint and each fingerprint has one artifact. Green continuity created zero duplicates and reused 185 applications. The immutable refresh evidence remained fresh: 20/20 eligible, no blocked Source requested. Final state remains 51 active green vacancies, two critical green reviews, zero critical dedup reviews, Day-0 blocked at 20/29 and headline null.

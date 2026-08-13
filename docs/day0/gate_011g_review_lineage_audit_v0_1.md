@@ -85,3 +85,13 @@ The inherited pair is native IDs `10139013` / `10129828`, target decision `d5a40
 | Day-0 | Not authorized | `DAY_0_BLOCKED_BY_DATA_QUALITY` |
 
 The increase from one to 103 algorithmic dedup reviews is disclosed rather than suppressed: 102 are new pairs without human lineage, but none is capable of changing the 51-vacancy public green count at this cutoff and therefore none is authorization-critical.
+
+## Independent-audit correction
+
+Prior audited head: `eb3476b2d5174a279877f7d46302395cb66888f2`.
+
+The audit found that the draft legacy dedup bridge accepted a missing source material fingerprint and that authority/application validation was not fully fail-closed. The correction leaves the frozen contract byte-identical and now reconstructs the source algorithm decision from immutable `algorithm_decision_id`, its DedupRun cutoff and its two historical PostingEvidence inputs. Application persistence and engine consumption independently validate HUMAN method, supported outcome, pair, versions, causality, provenance and source/target/stored material equality. Direct and inherited authority are mutually exclusive. Green applications now validate their immutable evidence, reconcile identical unique collisions and reject multiple matching historical decisions.
+
+For human decision `74550a24-4075-469c-946a-4ea48c045877`, source algorithm `bb37c095-9591-4920-84b7-2d0b69b3e98b` in run `0f241f99-b1da-4c99-8d44-5d5d992e9f88` at `2026-08-12T10:20:02.339073Z` independently reconstructs `c9f0c0f6a4c0d57062bd15b8024dd434bee2d889a531b74d950277e77d518087`. Corrected target algorithm `14ccda11-6fc5-4c28-8dfd-497bf15c8732` in run `d5a44c47-e495-4a0b-b419-824fbba94606` at `2026-08-13T07:52:00Z` reconstructs the same fingerprint. The bridge therefore remains valid by proof, not by same-pair fallback.
+
+The recomputed lineage remains 37 confirmed-green, 15 confirmed-not-green and two insufficient-as-review; dedup remains one inherited `KEEP_SEPARATE`, 102 new noncritical pairs, zero critical dedup reviews and zero reused `MERGE` decisions.

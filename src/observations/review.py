@@ -71,6 +71,8 @@ def effective_green_result(
             .select_related("source_decision")
             .first()
         )
+        if application is not None:
+            application.full_clean()
         decision = application.source_decision if application else None
     if decision is None or decision.outcome == "INSUFFICIENT_EVIDENCE":
         return EffectiveGreenResult("REVIEW", decision, application)
@@ -99,11 +101,14 @@ def apply_materially_identical_green_decision(
         if (
             existing.source_decision_id == source_decision.pk
             and existing.material_fingerprint == target_fp
+            and existing.fingerprint_version == GREEN_REVIEW_MATERIAL_VERSION
+            and existing.governance_version == version
+            and existing.application_method == "MATERIAL_IDENTICAL_HUMAN_REUSE"
         ):
             return existing
         raise ConflictingGreenReviewDecisionError("conflicting inherited application exists")
     now = timezone.now()
-    return GreenRelevanceReviewDecisionApplication.objects.create(
+    application = GreenRelevanceReviewDecisionApplication(
         target_assessment=target_assessment,
         source_decision=source_decision,
         material_fingerprint=target_fp,
@@ -119,6 +124,24 @@ def apply_materially_identical_green_decision(
             "target_assessment_id": str(target_assessment.pk),
         },
     )
+    try:
+        with transaction.atomic():
+            application.save()
+    except IntegrityError as exc:
+        concurrent = GreenRelevanceReviewDecisionApplication.objects.filter(
+            target_assessment=target_assessment, governance_version=version
+        ).first()
+        if concurrent is not None and (
+            concurrent.source_decision_id == source_decision.pk
+            and concurrent.material_fingerprint == target_fp
+            and concurrent.fingerprint_version == GREEN_REVIEW_MATERIAL_VERSION
+            and concurrent.application_method == "MATERIAL_IDENTICAL_HUMAN_REUSE"
+        ):
+            return concurrent
+        raise ConflictingGreenReviewDecisionError(
+            "conflicting concurrent inherited application exists"
+        ) from exc
+    return application
 
 
 @transaction.atomic

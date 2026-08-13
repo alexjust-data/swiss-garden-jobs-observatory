@@ -411,6 +411,29 @@ class DedupReviewDecisionApplication(AppendOnlyEvidence):
     class Meta:
         db_table = "dedup_review_decision_application"
 
+    def clean(self) -> None:
+        super().clean()
+        if not self.target_algorithm_decision.pk or not self.source_human_decision.pk:
+            return
+        from django.core.exceptions import ValidationError
+
+        from .review_continuity import (
+            FROZEN_CONFIGURATION,
+            DedupContinuityValidationError,
+            validate_dedup_review_application,
+        )
+
+        try:
+            validate_dedup_review_application(self, FROZEN_CONFIGURATION)
+        except DedupContinuityValidationError as exc:
+            raise ValidationError({"evidence": str(exc)}) from exc
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ImmutableVacancyEvidenceError("vacancy evidence is append-only")
+        self.full_clean()
+        models.Model.save(self, *args, **kwargs)
+
 
 class PositionCountEvidence(AppendOnlyEvidence):
     class Method(models.TextChoices):

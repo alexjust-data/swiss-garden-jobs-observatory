@@ -42,17 +42,16 @@ from .normalizer import (
 )
 from .positions import extract_position_count
 from .precedence import source_precedence_rank
+from .review_continuity import (
+    FROZEN_CONFIGURATION,
+    create_dedup_review_application,
+    reconstruct_source_human_material,
+    validate_dedup_review_application,
+)
 from .scoring import WEIGHTS, PairAssessment, assess_pair, is_candidate
 from .snapshots import RunClusters, persist_run_snapshot, snapshot_summary
 
-CONFIGURATION: dict[str, Any] = {
-    "weights": {key: str(value) for key, value in WEIGHTS.items()},
-    "thresholds": {"auto_merge": "0.90", "review": "0.78"},
-    "repost_window_days": REPOST_WINDOW_DAYS,
-    "normalizer_version": NORMALIZER_VERSION,
-    "source_precedence_version": SOURCE_PRECEDENCE_VERSION,
-    "review_material_version": DEDUP_REVIEW_MATERIAL_VERSION,
-}
+CONFIGURATION = FROZEN_CONFIGURATION
 
 
 def canonical_pair(
@@ -97,6 +96,9 @@ def _prior_human_decision(
         .first()
     )
     if direct:
+        proof = reconstruct_source_human_material(direct, CONFIGURATION)
+        if proof.material_fingerprint != material_fingerprint:
+            raise ValueError("direct human material fingerprint is unverified")
         return direct
     application = (
         DedupReviewDecisionApplication.objects.filter(
@@ -111,7 +113,14 @@ def _prior_human_decision(
         .order_by("-created_at")
         .first()
     )
-    return application.source_human_decision if application else None
+    if application is None:
+        return None
+    _, target_proof = validate_dedup_review_application(
+        application, CONFIGURATION, as_of=as_of
+    )
+    if target_proof.material_fingerprint != material_fingerprint:
+        raise ValueError("inherited dedup material fingerprint is unverified")
+    return application.source_human_decision
 
 
 def _posting_closed_event(posting_id: str, as_of: datetime) -> PostingLifecycleEvent | None:
@@ -523,15 +532,10 @@ def run_deduplication(as_of: datetime, dedup_version: str = DEDUP_VERSION) -> tu
                     "material_version": DEDUP_REVIEW_MATERIAL_VERSION,
                 },
             )
-            DedupReviewDecisionApplication.objects.create(
+            create_dedup_review_application(
                 target_algorithm_decision=target,
                 source_human_decision=prior_human,
-                material_fingerprint=material_fingerprint,
-                fingerprint_version=DEDUP_REVIEW_MATERIAL_VERSION,
-                evidence={
-                    "source_decision_id": str(prior_human.pk),
-                    "target_decision_id": str(target.pk),
-                },
+                configuration=CONFIGURATION,
             )
             inherited_decisions[right.posting_id] = prior_human
             if prior_human.outcome == DedupDecision.Outcome.MERGE:

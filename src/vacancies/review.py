@@ -7,6 +7,7 @@ from .engine import merge_vacancies, reconcile_effective_vacancy
 from .evidence import DEDUP_REVIEW_MATERIAL_VERSION
 from .models import (
     DedupDecision,
+    DedupReviewDecisionApplication,
     DedupReviewItem,
     VacancyPostingMembership,
     VacancyProjectionState,
@@ -32,6 +33,12 @@ def resolve_review(review_id: str, *, merge: bool, reason: str) -> DedupDecision
     if review.status != DedupReviewItem.Status.PENDING:
         raise ValueError("Review item has already been resolved")
     algorithm = review.algorithm_decision
+    if DedupReviewDecisionApplication.objects.filter(
+        target_algorithm_decision=algorithm
+    ).exists():
+        raise ValueError(
+            "target already has inherited authority; a future governed revision is required"
+        )
     human = DedupDecision.objects.create(
         dedup_run=algorithm.dedup_run,
         posting_a=algorithm.posting_a,

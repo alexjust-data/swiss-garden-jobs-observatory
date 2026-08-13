@@ -498,6 +498,11 @@ class GreenRelevanceReviewDecision(models.Model):
             errors["assessment"] = "only REVIEW assessments may be adjudicated"
         if self.reviewed_at and self.created_at and self.reviewed_at > self.created_at:
             errors["reviewed_at"] = "reviewed_at cannot be later than evidence availability"
+        inherited = self.assessment.review_applications.filter(
+            governance_version=self.governance_version
+        )
+        if self.assessment.pk and self.governance_version and inherited.exists():
+            errors["assessment"] = "target already has inherited human authority"
         if not self.reason_code.strip():
             errors["reason_code"] = "reason code is required"
         if not self.reason.strip():
@@ -577,14 +582,25 @@ class GreenRelevanceReviewDecisionApplication(models.Model):
     def clean(self) -> None:
         super().clean()
         errors: dict[str, str] = {}
+        from observations.review_continuity import (
+            GREEN_REVIEW_MATERIAL_VERSION,
+            green_review_material_fingerprint,
+        )
+
         if self.target_assessment.result != GreenRelevanceAssessment.Result.REVIEW:
             errors["target_assessment"] = "only REVIEW assessments can inherit decisions"
+        if self.fingerprint_version != GREEN_REVIEW_MATERIAL_VERSION:
+            errors["fingerprint_version"] = "unsupported green material version"
+        if self.application_method != "MATERIAL_IDENTICAL_HUMAN_REUSE":
+            errors["application_method"] = "unsupported application method"
         if self.source_decision.governance_version != self.governance_version:
             errors["governance_version"] = "source decision governance differs"
         if self.source_decision.assessment.pk == self.target_assessment.pk:
             errors["source_decision"] = "direct decisions are not reuse applications"
         if self.source_decision.created_at > self.created_at:
             errors["created_at"] = "application predates source decision"
+        if self.source_decision.reviewed_at > self.created_at:
+            errors["created_at"] = "application predates reviewed human knowledge"
         if self.target_assessment.review_decisions.filter(
             governance_version=self.governance_version
         ).exists():
@@ -597,6 +613,28 @@ class GreenRelevanceReviewDecisionApplication(models.Model):
         }
         if required - set(self.evidence):
             errors["evidence"] = "application provenance is incomplete"
+        source_assessment = self.source_decision.assessment
+        source_observation = source_assessment.posting_observation
+        target_observation = self.target_assessment.posting_observation
+        if source_observation.posting_id != target_observation.posting_id:
+            errors["target_assessment"] = "governed Posting identity differs"
+        source_fp = green_review_material_fingerprint(
+            source_assessment, governance_version=self.governance_version
+        )
+        target_fp = green_review_material_fingerprint(
+            self.target_assessment, governance_version=self.governance_version
+        )
+        if not (source_fp == target_fp == self.material_fingerprint):
+            errors["material_fingerprint"] = "source/target/stored material differs"
+        expected = {
+            "source_raw_sha256": source_observation.raw_artifact.sha256_digest,
+            "target_raw_sha256": target_observation.raw_artifact.sha256_digest,
+            "source_assessment_id": str(source_assessment.pk),
+            "target_assessment_id": str(self.target_assessment.pk),
+        }
+        mismatched = [key for key, value in expected.items() if self.evidence.get(key) != value]
+        if mismatched:
+            errors["evidence"] = "application provenance differs: " + ", ".join(mismatched)
         if errors:
             from django.core.exceptions import ValidationError
 
