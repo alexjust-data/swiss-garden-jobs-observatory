@@ -755,6 +755,20 @@ def assess_day0_readiness(
                 )
     else:
         policy = ensure_authorization_policy()
+    if (
+        policy.policy_version == POLICY_VERSION
+        and policy.configuration.get("authorization_policy_version") == POLICY_VERSION
+    ):
+        designation = Day0AuthorizationPolicyDesignation.objects.filter(
+            designation_version=POLICY_DESIGNATION_VERSION,
+            policy_version=POLICY_VERSION,
+            authoritative_policy=policy,
+        ).first()
+        if designation is None:
+            raise Day0ContractError("Canonical policy has no authority designation")
+        _validate_policy_designation(designation, policy)
+        if designation.effective_at > as_of:
+            raise Day0ContractError("Policy authority is not available at the requested cutoff")
     if universe.universe_version != SOURCE_UNIVERSE_VERSION:
         raise Day0ContractError("Unsupported Day-0 source-universe version")
     if universe.policy_version != policy.policy_version:

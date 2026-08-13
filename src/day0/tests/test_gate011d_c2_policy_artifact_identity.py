@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -179,6 +180,28 @@ def test_final_v01_threshold_and_structural_semantics_are_unchanged() -> None:
     assert policy.configuration["derived_canton_floor"] == 17
 
 
+def test_designation_cannot_influence_cutoff_before_effective_at() -> None:
+    canonical = ensure_authorization_policy()
+    data, snapshot = upstream(
+        suffix="c2-pre-authority",
+        as_of=datetime(2026, 8, 12, 8, 0, tzinfo=UTC),
+    )
+    source_universe = universe(accepted=True, threshold=Decimal("0.8000"))
+    add_entry(source_universe, data["source"])
+
+    with pytest.raises(Day0ContractError, match="not available at the requested cutoff"):
+        assess_day0_readiness(
+            as_of=data["as_of"],
+            dedup_run=data["dedup"],
+            premium_run=data["premium_run"],
+            dashboard_snapshot=snapshot,
+            source_universe=source_universe,
+            authorization_policy=canonical,
+        )
+
+    assert Day0AuthorizationPolicyDesignation.objects.get().effective_at > data["as_of"]
+
+
 def test_designation_rejects_forged_fingerprint() -> None:
     policy = create_policy(canonical_authorization_policy_configuration())
     designation = designation_for(policy)
@@ -206,12 +229,16 @@ def test_policy_and_designation_are_immutable() -> None:
         designation.delete()
 
 
-def test_historical_readiness_and_exact_api_remain_pinned_to_legacy_artifact() -> None:
+def test_historical_readiness_and_exact_api_remain_pinned_to_legacy_artifact(
+    monkeypatch,
+) -> None:
     legacy = create_policy(legacy_configuration())
     data, snapshot = upstream(suffix="c2-history")
     source_universe = universe(accepted=True, threshold=Decimal("0.8000"))
     add_entry(source_universe, data["source"])
-    historical, _ = assess(data, snapshot, source_universe)
+    with monkeypatch.context() as historical_context:
+        historical_context.setattr("day0.services.POLICY_VERSION", "historical-fixture-only")
+        historical, _ = assess(data, snapshot, source_universe)
     assert historical.authorization_policy.pk == legacy.pk
 
     client = Client()
