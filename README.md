@@ -172,10 +172,21 @@ Run Django and open http://127.0.0.1:8000/jobs/. Public endpoints are:
     GET /api/v1/dashboard/snapshots/<snapshot_uuid>/vacancies/<run_vacancy_key>/
     GET /postings/<posting_uuid>/?snapshot=<snapshot_uuid>
 
-DASHBOARD_MAP_STYLE_URL may contain an explicitly licensed MapLibre style URL.
-When empty, the page uses a local blank style and the complete public table remains usable.
-Set DASHBOARD_MAP_ATTRIBUTION to the attribution required by the configured provider.
-Automated tests never contact a tile provider.
+The default `DASHBOARD_MAP_PROVIDER=maplibre` uses the vendored MapLibre client with the
+free official swisstopo WMTS basemap. No API key or billing account is required. Keep
+`DASHBOARD_MAP_ATTRIBUTION=© swisstopo` visible. `DASHBOARD_MAP_STYLE_URL` may still point
+to another explicitly licensed style; when it is empty, the official Swiss map is used.
+
+Every safely mappable marker includes an `Open in Google Maps` link built with the public
+latitude/longitude and the key-free Google Maps URLs interface. The embedded Google Maps
+JavaScript provider remains an optional development path and requires its own key/billing:
+
+    DASHBOARD_MAP_PROVIDER=google
+    GOOGLE_MAPS_API_KEY=<browser-restricted-key>
+
+Both providers receive only the governed public-display coordinates returned by the public
+GeoJSON endpoint. Raw/private addresses and unresolved locations are never sent to a map
+provider. Automated tests stub all tile and map-provider traffic.
 
 Run the browser acceptance independently with:
 

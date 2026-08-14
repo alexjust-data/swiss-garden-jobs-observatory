@@ -24,7 +24,9 @@
         data-current-url="{% url 'dashboard:current' %}"
         data-snapshot-id="{% if snapshot %}{{ snapshot.id }}{% endif %}"
         data-map-style="{{ map_style_url }}"
-        data-map-attribution="{{ map_attribution }}">
+        data-map-attribution="{{ map_attribution }}"
+        data-map-provider="{{ map_provider }}"
+        data-google-maps-api-key="{{ google_maps_api_key }}">
     <section class="scope-banner" aria-label="Source coverage notice">
       <strong>Observed sources, not a market census.</strong>
       <p>{{ scope_notice }}</p>
@@ -39,10 +41,10 @@
     </section>
 
     <section class="headline-grid" aria-label="Day-0 market indicators">
-      <article><span>ACTIVE UNIQUE</span><strong>â€”</strong><small>Pending GATE-011 Day-0</small></article>
-      <article><span>NEW 24H</span><strong>â€”</strong><small>Pending adequate coverage</small></article>
-      <article><span>REAPPEARED</span><strong>â€”</strong><small>Pending Day-0 authorization</small></article>
-      <article><span>SWISS COVERAGE</span><strong>â€”</strong><small>Not yet defensible</small></article>
+      <article><span>ACTIVE UNIQUE</span><strong>—</strong><small>Pending GATE-011 Day-0</small></article>
+      <article><span>NEW 24H</span><strong>—</strong><small>Pending adequate coverage</small></article>
+      <article><span>REAPPEARED</span><strong>—</strong><small>Pending Day-0 authorization</small></article>
+      <article><span>SWISS COVERAGE</span><strong>—</strong><small>Not yet defensible</small></article>
     </section>
 
     <form id="filters" class="filters" aria-label="Job filters">
@@ -76,7 +78,7 @@
           <div><p class="eyebrow">SAME SNAPSHOT / SAME FILTERS</p><h2>Public green vacancies</h2></div>
           <span id="result-count" class="count-chip">0 records</span>
         </div>
-        <div id="quality-note" class="quality-note" role="status" aria-live="polite">Loading immutable snapshotâ€¦</div>
+        <div id="quality-note" class="quality-note" role="status" aria-live="polite">Loading immutable snapshot…</div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Role</th><th>Place</th><th>Observed</th><th>Source</th></tr></thead>
@@ -90,7 +92,7 @@
 
   <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
   <aside id="job-drawer" class="drawer" aria-modal="true" aria-labelledby="drawer-title" hidden>
-    <button id="drawer-close" class="drawer-close" aria-label="Close job details">Close Ã—</button>
+    <button id="drawer-close" class="drawer-close" aria-label="Close job details">Close ×</button>
     <div id="drawer-content"></div>
   </aside>
 

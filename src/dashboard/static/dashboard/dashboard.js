@@ -21,15 +21,43 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
   let activeTrigger = null;
   let map = null;
   let mapReady = false;
+  const mapProvider = app.dataset.mapProvider || "maplibre";
+  const googleMapsApiKey = app.dataset.googleMapsApiKey || "";
+  const defaultMapEmptyMessage = mapEmpty.textContent;
+  let mapUnavailableMessage = "";
+  let googleMarkers = [];
+  let googleInfoWindow = null;
   let latestGeoJSON = { type: "FeatureCollection", features: [] };
   let dataController = null;
   let requestSequence = 0;
 
-  function blankStyle() {
+  function swisstopoStyle() {
     return {
       version: 8,
-      sources: {},
-      layers: [{ id: "background", type: "background", paint: { "background-color": "#dfe5d6" } }]
+      sources: {
+        swisstopo: {
+          type: "raster",
+          tiles: [
+            "https://wmts.geo.admin.ch/1.0.0/" +
+            "ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg"
+          ],
+          tileSize: 256,
+          maxzoom: 18,
+          attribution: "© swisstopo"
+        }
+      },
+      layers: [
+        {
+          id: "background",
+          type: "background",
+          paint: { "background-color": "#dfe5d6" }
+        },
+        {
+          id: "swisstopo-basemap",
+          type: "raster",
+          source: "swisstopo"
+        }
+      ]
     };
   }
 
@@ -128,17 +156,31 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
       const role = document.createElement("td");
       role.append(text("span", record.title, "role-title"));
       role.append(text("span", record.employer, "role-employer"));
-      const place = text("td", record.municipality || record.canton || "Unresolved");
+      const place = document.createElement("td");
+      place.append(text("span", record.municipality || record.canton || "Unresolved", "place-name"));
+      if (record.mapping_status !== "MAPPABLE") {
+        const labels = {
+          LOCATION_UNRESOLVED: "Location unresolved",
+          LOCATION_REVIEW: "Location requires review",
+          PUBLIC_COORDINATES_MISSING: "Public coordinates missing",
+          PRIVACY_RESOLUTION_MISSING: "Privacy resolution pending",
+          LOCATION_HIDDEN: "Private location hidden"
+        };
+        const label = labels[record.mapping_status] || "Not safely mappable";
+        const badge = text("span", "Not shown on map · " + label, "location-map-status");
+        badge.setAttribute("aria-label", "Map status: " + label);
+        place.append(badge);
+      }
       const observed = text("td", record.first_observed.slice(0, 10));
       const source = text("td", record.source_name);
       row.append(role, place, observed, source);
 
       const activate = function () {
-        if (record.mapping_status === "MAPPABLE" && map) {
+        if (record.mapping_status === "MAPPABLE") {
           const feature = latestGeoJSON.features.find(function (item) {
             return item.properties.run_vacancy_key === record.run_vacancy_key;
           });
-          if (feature) map.easeTo({ center: feature.geometry.coordinates, zoom: 11 });
+          if (feature) focusMapFeature(feature);
         }
         openDetail(record.detail_url, row).catch(showError);
       };
@@ -155,7 +197,18 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
     resultEmpty.hidden = records.length !== 0;
   }
 
-  function popupNode(properties) {
+  function googleMapsUrl(coordinates) {
+    if (!Array.isArray(coordinates) || coordinates.length !== 2) return "";
+    const longitude = Number(coordinates[0]);
+    const latitude = Number(coordinates[1]);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return "";
+    const url = new URL("https://www.google.com/maps/search/");
+    url.searchParams.set("api", "1");
+    url.searchParams.set("query", latitude + "," + longitude);
+    return url.href;
+  }
+
+  function popupNode(properties, coordinates) {
     const root = document.createElement("div");
     root.append(text("strong", properties.title));
     root.append(text("div", properties.employer));
@@ -178,26 +231,194 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
     actions.append(detail);
     const external = safeExternalLink(properties.external_url, properties.source_link_label);
     if (external) actions.append(external);
+    const googleMaps = safeExternalLink(googleMapsUrl(coordinates), "Open in Google Maps");
+    if (googleMaps) actions.append(googleMaps);
     root.append(actions);
     return root;
   }
 
+  function showMapMessage(message) {
+    mapUnavailableMessage = message;
+    mapEmpty.hidden = false;
+    mapEmpty.textContent = message;
+  }
+
+  function loadGoogleMaps(apiKey) {
+    if (window.google && window.google.maps) return Promise.resolve(window.google.maps);
+    return new Promise(function (resolve, reject) {
+      const callbackName = "__swissGardenGoogleMapsReady";
+      const existing = document.querySelector('script[data-google-maps-loader="true"]');
+      if (existing) {
+        existing.addEventListener("error", function () {
+          reject(new Error("Google Maps failed to load"));
+        }, { once: true });
+        return;
+      }
+      window[callbackName] = function () {
+        delete window[callbackName];
+        resolve(window.google.maps);
+      };
+      const script = document.createElement("script");
+      script.dataset.googleMapsLoader = "true";
+      script.async = true;
+      script.defer = true;
+      script.src = "https://maps.googleapis.com/maps/api/js?key=" +
+        encodeURIComponent(apiKey) + "&callback=" + callbackName + "&v=weekly";
+      script.addEventListener("error", function () {
+        delete window[callbackName];
+        reject(new Error("Google Maps failed to load"));
+      }, { once: true });
+      document.head.append(script);
+    });
+  }
+
+  function googleClusterCell(zoom) {
+    if (zoom <= 7) return 0.6;
+    if (zoom <= 9) return 0.18;
+    if (zoom <= 11) return 0.05;
+    return 0;
+  }
+
+  function googleFeaturePosition(feature) {
+    return {
+      lat: Number(feature.geometry.coordinates[1]),
+      lng: Number(feature.geometry.coordinates[0])
+    };
+  }
+
+  function groupedGoogleFeatures() {
+    const cell = googleClusterCell(map.getZoom() || 7);
+    const groups = new Map();
+    latestGeoJSON.features.forEach(function (feature) {
+      const position = googleFeaturePosition(feature);
+      const key = cell === 0
+        ? feature.properties.run_vacancy_key
+        : Math.round(position.lat / cell) + ":" + Math.round(position.lng / cell);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(feature);
+    });
+    return Array.from(groups.values());
+  }
+
+  function clearGoogleMarkers() {
+    googleMarkers.forEach(function (marker) { marker.setMap(null); });
+    googleMarkers = [];
+  }
+
+  function renderGoogleMarkers(fitToData) {
+    if (mapProvider !== "google" || !mapReady || !window.google || !window.google.maps) return;
+    clearGoogleMarkers();
+    if (!latestGeoJSON.features.length) return;
+
+    const bounds = new window.google.maps.LatLngBounds();
+    groupedGoogleFeatures().forEach(function (features) {
+      const positions = features.map(googleFeaturePosition);
+      const position = {
+        lat: positions.reduce(function (sum, item) { return sum + item.lat; }, 0) / positions.length,
+        lng: positions.reduce(function (sum, item) { return sum + item.lng; }, 0) / positions.length
+      };
+      const isCluster = features.length > 1;
+      const approximate = !isCluster && Boolean(features[0].properties.approximate_location);
+      const marker = new window.google.maps.Marker({
+        map: map,
+        position: position,
+        title: isCluster
+          ? features.length + " safely mappable vacancies"
+          : features[0].properties.title,
+        label: isCluster ? { text: String(features.length), color: "#fffef8" } : undefined,
+        icon: {
+          path: window.google.maps.SymbolPath.CIRCLE,
+          scale: isCluster ? 18 : 9,
+          fillColor: approximate ? "#dce966" : "#164d38",
+          fillOpacity: 1,
+          strokeColor: "#fffef8",
+          strokeWeight: 2
+        }
+      });
+      marker.addListener("click", function () {
+        if (isCluster) {
+          map.panTo(position);
+          map.setZoom(Math.min((map.getZoom() || 7) + 2, 14));
+          return;
+        }
+        googleInfoWindow.setContent(
+          popupNode(features[0].properties, features[0].geometry.coordinates)
+        );
+        googleInfoWindow.open(map, marker);
+      });
+      googleMarkers.push(marker);
+      bounds.extend(position);
+    });
+
+    if (fitToData) {
+      if (latestGeoJSON.features.length === 1) {
+        map.setCenter(googleFeaturePosition(latestGeoJSON.features[0]));
+        map.setZoom(11);
+      } else {
+        map.fitBounds(bounds, 40);
+      }
+    }
+  }
+
+  function initGoogleMap() {
+    if (!googleMapsApiKey) {
+      showMapMessage(
+        "Google Maps is selected but GOOGLE_MAPS_API_KEY is not configured. " +
+        "The complete public table remains available."
+      );
+      return;
+    }
+    loadGoogleMaps(googleMapsApiKey).then(function (maps) {
+      map = new maps.Map(document.getElementById("map"), {
+        center: { lat: 46.82, lng: 8.23 },
+        zoom: 7,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: true
+      });
+      googleInfoWindow = new maps.InfoWindow();
+      mapReady = true;
+      mapUnavailableMessage = "";
+      map.addListener("idle", function () { renderGoogleMarkers(false); });
+      updateMap();
+    }).catch(function () {
+      showMapMessage(
+        "Google Maps could not be loaded. The complete public table remains available."
+      );
+    });
+  }
+
+  function focusMapFeature(feature) {
+    if (!mapReady || !map) return;
+    if (mapProvider === "google") {
+      map.panTo(googleFeaturePosition(feature));
+      map.setZoom(11);
+      return;
+    }
+    map.easeTo({ center: feature.geometry.coordinates, zoom: 11 });
+  }
+
   function initMap() {
-    if (!window.maplibregl) {
+    if (mapProvider === "google") initGoogleMap();
+    else initMapLibre();
+  }
+
+  function initMapLibre() {
+    if (!maplibregl || typeof maplibregl.Map !== "function") {
       mapEmpty.hidden = false;
       mapEmpty.textContent = "Map library unavailable. The complete table remains available.";
       return;
     }
     const configured = app.dataset.mapStyle;
-    map = new window.maplibregl.Map({
+    map = new maplibregl.Map({
       container: "map",
-      style: configured || blankStyle(),
+      style: configured || swisstopoStyle(),
       center: [8.23, 46.82],
       zoom: 6.4,
       attributionControl: false
     });
-    map.addControl(new window.maplibregl.NavigationControl(), "top-right");
-    map.addControl(new window.maplibregl.AttributionControl({
+    map.addControl(new maplibregl.NavigationControl(), "top-right");
+    map.addControl(new maplibregl.AttributionControl({
       compact: true,
       customAttribution: app.dataset.mapAttribution || "MapLibre"
     }));
@@ -252,9 +473,11 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
       });
       map.on("click", "vacancy-points", function (event) {
         if (!event.features || !event.features.length) return;
-        new window.maplibregl.Popup()
+        new maplibregl.Popup()
           .setLngLat(event.features[0].geometry.coordinates)
-          .setDOMContent(popupNode(event.features[0].properties))
+          .setDOMContent(
+            popupNode(event.features[0].properties, event.features[0].geometry.coordinates)
+          )
           .addTo(map);
       });
       updateMap();
@@ -268,8 +491,18 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
 
   function updateMap() {
     mapCount.textContent = latestGeoJSON.features.length + " markers";
-    mapEmpty.hidden = latestGeoJSON.features.length !== 0;
-    if (mapReady && map.getSource("vacancies")) {
+    if (mapUnavailableMessage) {
+      mapEmpty.hidden = false;
+      mapEmpty.textContent = mapUnavailableMessage;
+    } else {
+      mapEmpty.textContent = defaultMapEmptyMessage;
+      mapEmpty.hidden = latestGeoJSON.features.length !== 0;
+    }
+    if (mapProvider === "google") {
+      renderGoogleMarkers(true);
+      return;
+    }
+    if (mapReady && map && map.getSource("vacancies")) {
       map.getSource("vacancies").setData(latestGeoJSON);
     }
   }
@@ -305,8 +538,8 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
     updateMap();
     quality.setAttribute("aria-busy", "false");
     quality.textContent =
-      table.counts.mappable + " safely mappable Â· " +
-      table.counts.unmappable + " public but unmapped Â· snapshot " +
+      table.counts.mappable + " safely mappable · " +
+      table.counts.unmappable + " public but unmapped · snapshot " +
       table.as_of + ". Headline market counters remain pending Day-0.";
   }
 
@@ -346,10 +579,12 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
   window.dashboardApp = {
     openDetail: openDetail,
     openMapFixture: function (feature) {
-      const node = popupNode(feature.properties);
+      const node = popupNode(feature.properties, feature.geometry.coordinates);
       const button = node.querySelector("button");
       button.click();
-    }
+    },
+    googleMapsUrl: googleMapsUrl,
+    renderRowsFixture: renderRows
   };
 
   restoreParams();

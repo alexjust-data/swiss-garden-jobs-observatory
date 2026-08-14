@@ -13,7 +13,7 @@ import pytest
 from django.contrib.admin.sites import AdminSite
 from django.core.management import call_command
 from django.db import close_old_connections
-from django.test import Client, RequestFactory
+from django.test import Client, RequestFactory, override_settings
 from django.urls import reverse
 
 from dashboard.admin import DashboardSnapshotAdmin
@@ -334,6 +334,33 @@ def test_jobs_page_has_disclaimer_day_zero_pending_and_accessibility(client: Cli
     assert "Pending GATE-011 Day-0" in html
     assert 'aria-modal="true"' in html
     assert "MapLibre" not in html or "maplibre" in html.lower()
+
+
+@pytest.mark.django_db
+@override_settings(
+    DASHBOARD_MAP_PROVIDER="google",
+    GOOGLE_MAPS_API_KEY="test-browser-restricted-key",
+)
+def test_jobs_page_exposes_governed_google_provider_without_location_payload(
+    client: Client,
+) -> None:
+    data = create_dashboard_upstream(
+        location_status="RESOLVED",
+        public_coordinates=(47.501, 8.701),
+    )
+    build_dashboard_snapshot(
+        as_of=data["as_of"], dedup_run=data["dedup"], premium_run=data["premium_run"]
+    )
+
+    html = client.get("/jobs/").content.decode()
+
+    assert 'data-map-provider="google"' in html
+    assert 'data-google-maps-api-key="test-browser-restricted-key"' in html
+    assert "47.501" not in html
+    assert "8.701" not in html
+    assert "â€”" not in html
+    assert "â€¦" not in html
+    assert "Ã—" not in html
 
 
 @pytest.mark.django_db

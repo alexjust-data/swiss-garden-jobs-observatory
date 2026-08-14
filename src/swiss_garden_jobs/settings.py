@@ -109,5 +109,11 @@ CORE_RAW_OBJECT_STORE_PATH = _env("JOB_OBSERVATORY_RAW_STORE_PATH", str(BASE_DIR
 DASHBOARD_MAP_STYLE_URL = _env("DASHBOARD_MAP_STYLE_URL")
 DASHBOARD_MAP_ATTRIBUTION = _env(
     "DASHBOARD_MAP_ATTRIBUTION",
-    "Map data provider attribution must be configured with DASHBOARD_MAP_STYLE_URL",
+    "© swisstopo",
 )
+DASHBOARD_MAP_PROVIDER = _env("DASHBOARD_MAP_PROVIDER", "maplibre").lower()
+if DASHBOARD_MAP_PROVIDER not in {"maplibre", "google"}:
+    raise ImproperlyConfigured(
+        "DASHBOARD_MAP_PROVIDER must be either 'maplibre' or 'google'"
+    )
+GOOGLE_MAPS_API_KEY = _env("GOOGLE_MAPS_API_KEY")
