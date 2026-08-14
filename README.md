@@ -79,18 +79,36 @@ Expected response:
 {"status":"ok","service":"swiss-garden-jobs-observatory"}
 ```
 
-## Implemented scope
+## Current operational status
 
 - Django and Django REST Framework modular monolith.
 - PostgreSQL-only runtime configuration.
 - Immutable local RAW object storage with SHA-256 helpers.
+- Governed multi-source FULL_SOURCE collectors and immutable lifecycle evidence.
+- Material-identical green and dedup human-review continuity.
+- Auditable Dedup, Premium, Dashboard, and Day-0 PIT artifacts.
+- One scheduler-safe daily Observatory Cycle and persisted operational status.
 - Health endpoint.
 - Frozen v0.4 reference data import and validation.
 - Django admin for sources and reference datasets.
 - pytest, Ruff, mypy and GitHub Actions.
 
-No collectors, scraping, vacancy ingestion, deduplication, salary observations, geocoding,
-dashboard, scheduler or AI classification are implemented.
+The governed Day-0 universe currently has 29 required Sources: 20 implemented and nine blocked by
+their frozen source dispositions. The minimum authorization coverage is 24/29. This structural
+coverage state is distinct from whether the daily pipeline itself is healthy. Job-Room remains
+inactive and salary extraction is not part of daily operation.
+
+Run one complete cycle manually and inspect its persisted status with:
+
+```bash
+python manage.py run_daily_observatory --trigger MANUAL --json
+python manage.py observatory_status --json
+```
+
+Execution is intended to be scheduled externally; Django does not contain a scheduler daemon. See
+`docs/operations/DAILY_OBSERVATORY_RUNBOOK.md` and `docs/operations/SCHEDULER_RUNBOOK.md`. Frozen
+scientific governance is under `docs/research/v0_4/`; versioned operational governance is under
+`docs/operations/`.
 
 ## GATE-003: manual Winterthur point-in-time collector
 

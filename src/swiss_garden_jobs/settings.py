@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     "premium_segments.apps.PremiumSegmentsConfig",
     "dashboard.apps.DashboardConfig",
     "day0.apps.Day0Config",
+    "operations.apps.OperationsConfig",
 ]
 
 MIDDLEWARE = [
