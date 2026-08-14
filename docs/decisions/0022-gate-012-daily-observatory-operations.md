@@ -77,7 +77,7 @@ database, passed Django and reference checks, and reproduced the accepted cycle 
 artifacts without altering the operational database.
 
 The first PR head revealed a Python 3.12 mypy-only `TextChoices` inference mismatch. Operational
-calls now pass explicit `.value` strings and the management command declares its three trigger values
+calls now convert members with `str(...)` and the management command declares its three trigger values
 explicitly. This changes neither persisted values nor execution semantics; focused and full tests
 remained green.
 

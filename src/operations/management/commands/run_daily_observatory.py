@@ -29,11 +29,11 @@ class Command(BaseCommand):
         parser.add_argument(
             "--trigger",
             choices=[
-                ObservatoryCycle.Trigger.MANUAL.value,
-                ObservatoryCycle.Trigger.SCHEDULED.value,
-                ObservatoryCycle.Trigger.RECOVERY.value,
+                str(ObservatoryCycle.Trigger.MANUAL),
+                str(ObservatoryCycle.Trigger.SCHEDULED),
+                str(ObservatoryCycle.Trigger.RECOVERY),
             ],
-            default=ObservatoryCycle.Trigger.MANUAL.value,
+            default=str(ObservatoryCycle.Trigger.MANUAL),
         )
         parser.add_argument("--resume", action="store_true")
         parser.add_argument("--delay-seconds", type=float, default=1.0)

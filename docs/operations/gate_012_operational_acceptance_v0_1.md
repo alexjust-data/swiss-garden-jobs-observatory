@@ -82,8 +82,8 @@ same-cycle idempotency; it is not a synthetic second daily observation.
 
 The first published acceptance head, `2e423f41d40d1fc9bb76626c23ec743c2b22a70a`, exposed a
 Python 3.12 mypy inference difference: Django `TextChoices` members passed to explicitly typed string
-parameters were inferred as label/value tuples. The correction uses each member's explicit `.value`
-and an explicit three-value trigger choice list. Runtime values and scientific semantics are
+parameters were inferred as label/value tuples. The final correction converts each member with `str(...)`
+and uses an explicit three-value trigger choice list. Runtime values and scientific semantics are
 unchanged. Full pytest again passed 433 tests after the correction.
 
 The backup/restore smoke used a PostgreSQL 16 custom dump of the post-cycle operational database:

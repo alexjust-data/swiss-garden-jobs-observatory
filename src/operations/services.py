@@ -325,7 +325,7 @@ def _seal_failure(
     cycle.failure_evidence = {"stage": stage, "error": _bounded_error(exc)}
     cycle.save()
     _event(
-        cycle, "CYCLE_FAILED", OperationalEvent.Severity.ERROR.value, detail=cycle.failure_evidence
+        cycle, "CYCLE_FAILED", str(OperationalEvent.Severity.ERROR), detail=cycle.failure_evidence
     )
 
 
@@ -347,7 +347,7 @@ def _previous_success(cycle: ObservatoryCycle) -> ObservatoryCycle | None:
 def run_cycle(
     *,
     cycle_id: uuid.UUID | None = None,
-    trigger: str = ObservatoryCycle.Trigger.MANUAL.value,
+    trigger: str = str(ObservatoryCycle.Trigger.MANUAL),
     resume: bool = False,
     delay_seconds: float = 1.0,
     timeout_seconds: int = DEFAULT_CYCLE_TIMEOUT_SECONDS,
@@ -395,7 +395,7 @@ def run_cycle(
             _event(
                 cycle,
                 "STALE_CYCLE_DETECTED",
-                OperationalEvent.Severity.WARNING.value,
+                str(OperationalEvent.Severity.WARNING),
                 detail={"heartbeat_at": heartbeat.isoformat(), "timeout_seconds": timeout_seconds},
             )
     else:
@@ -423,7 +423,7 @@ def run_cycle(
             _event(
                 cycle,
                 "CYCLE_FAILED",
-                OperationalEvent.Severity.WARNING.value,
+                str(OperationalEvent.Severity.WARNING),
                 detail=cycle.failure_evidence,
             )
             return CycleResult(cycle, False)
@@ -454,7 +454,7 @@ def run_cycle(
             }
             cycle.save()
             _event(
-                cycle, code, OperationalEvent.Severity.WARNING.value, detail=cycle.failure_evidence
+                cycle, code, str(OperationalEvent.Severity.WARNING), detail=cycle.failure_evidence
             )
             return CycleResult(cycle, False)
         invocation_started = timezone.now()
@@ -529,7 +529,7 @@ def run_cycle(
                     _event(
                         cycle,
                         "SOURCE_INCOMPLETE",
-                        OperationalEvent.Severity.WARNING.value,
+                        str(OperationalEvent.Severity.WARNING),
                         source=source,
                         detail={"run": str(run.pk)},
                     )
@@ -550,7 +550,7 @@ def run_cycle(
                 _event(
                     cycle,
                     "SOURCE_DEGRADED",
-                    OperationalEvent.Severity.WARNING.value,
+                    str(OperationalEvent.Severity.WARNING),
                     source=source,
                     detail={"error_type": type(exc).__name__},
                 )
@@ -575,7 +575,7 @@ def run_cycle(
             _seal_failure(
                 cycle,
                 "green_continuity",
-                ObservatoryCycle.Status.FAILED_CONTINUITY.value,
+                str(ObservatoryCycle.Status.FAILED_CONTINUITY),
                 "GREEN_CONTINUITY_FAILED",
                 exc,
             )
@@ -602,7 +602,7 @@ def run_cycle(
             _save_stage(cycle, "dedup_continuity", "SUCCEEDED")
         except Exception as exc:
             _seal_failure(
-                cycle, "dedup", ObservatoryCycle.Status.FAILED_DEDUP.value, "DEDUP_FAILED", exc
+                cycle, "dedup", str(ObservatoryCycle.Status.FAILED_DEDUP), "DEDUP_FAILED", exc
             )
             return CycleResult(cycle, False)
         dedup_created = DedupReviewDecisionApplication.objects.count() - dedup_before
@@ -620,7 +620,7 @@ def run_cycle(
             _seal_failure(
                 cycle,
                 "premium",
-                ObservatoryCycle.Status.FAILED_PREMIUM.value,
+                str(ObservatoryCycle.Status.FAILED_PREMIUM),
                 "PREMIUM_FAILED",
                 exc,
             )
@@ -641,7 +641,7 @@ def run_cycle(
             _seal_failure(
                 cycle,
                 "dashboard",
-                ObservatoryCycle.Status.FAILED_DASHBOARD.value,
+                str(ObservatoryCycle.Status.FAILED_DASHBOARD),
                 "DASHBOARD_BUILD_FAILED",
                 exc,
             )
@@ -665,7 +665,7 @@ def run_cycle(
             _seal_failure(
                 cycle,
                 "readiness",
-                ObservatoryCycle.Status.FAILED_READINESS.value,
+                str(ObservatoryCycle.Status.FAILED_READINESS),
                 "READINESS_FAILED",
                 exc,
             )
@@ -714,7 +714,7 @@ def run_cycle(
                 _event(
                     cycle,
                     "AUTHORIZATION_CHANGED",
-                    OperationalEvent.Severity.WARNING.value,
+                    str(OperationalEvent.Severity.WARNING),
                     detail={"from": old, "to": readiness.readiness_status},
                 )
         return CycleResult(cycle, False)
