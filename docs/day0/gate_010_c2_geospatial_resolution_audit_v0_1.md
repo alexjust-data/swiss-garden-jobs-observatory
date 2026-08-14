@@ -111,8 +111,9 @@ shows the bounded warning while preserving the vacancy table.
 
 ## Final validation
 
-- full pytest suite: 482 passed in 106.90 seconds;
-- focused GATE-010-C2 suite: 7 passed, including real PostgreSQL concurrent convergence;
+- full pytest suite after independent-audit correction: 485 passed in 125.74 seconds;
+- focused C2 and legacy geospatial suites: 20 passed, including protected-request adversarial
+  coverage, batch-wide no-write conflict preflight and real PostgreSQL concurrent convergence;
 - browser acceptance: 4 passed;
 - Ruff: passed;
 - mypy: passed for 161 source files;
@@ -123,3 +124,32 @@ shows the bounded warning while preserving the vacancy table.
 - isolated geospatial resolution, causal PIT reconstruction and exact replay: passed;
 - Source collection HTTP: zero;
 - real operational database modified: no.
+
+## Independent-audit correction
+
+The first independently audited implementation head was
+`7decee4155999cc2113f5eac5b4e9e61843a6dbe`. Independent review found two
+fail-closed enforcement gaps that did not occur in the accepted 51-observation corpus:
+
+1. protected SearchServer requests preferred raw locality/region over the governed Municipality
+   and canton even though those raw fields were excluded from protected input material;
+2. an existing-resolution fingerprint conflict was checked per target, so earlier targets could
+   theoretically persist before a later conflict stopped the batch.
+
+The correction preserves `geospatial-v0.1` and the frozen C2 contract. Protected provider
+requests now use only the governed Municipality name and canton and make no provider request when
+that governed Municipality is absent. Candidate matching in that path likewise avoids raw
+postcode/locality/region material.
+
+One canonical pure input-material/fingerprint implementation is shared by resolver execution and
+the batch. Before dry-run reporting or live resolution, the batch computes every target
+fingerprint and compares every existing governed identity. Any conflict terminates before the
+first provider request, cache/RAW write, resolution or review item, independently of target order.
+
+The original isolated acceptance and PIT artifacts remain historical evidence and were not
+modified. Its corpus contained zero protected contexts and zero pre-existing target resolutions,
+so neither corrected path affected its measured 1 / 21 / 29 result.
+
+The corrected exact-corpus replay reused all 51 resolution IDs, created no resolution, cache, RAW
+or review evidence and made zero provider requests. Dedup, Premium, Dashboard and Readiness reused
+their exact accepted IDs and fingerprints, with one artifact per fingerprint.

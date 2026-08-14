@@ -102,8 +102,29 @@ This correction adds no external runtime script origin, Google dependency or sci
 
 ## Validation
 
-The clean final head passed the complete 482-test suite, all seven focused C2 tests, four browser
+The clean pre-audit head passed the complete 482-test suite, all seven focused C2 tests, four browser
 tests, Ruff, mypy across 161 source files, Django check and migration-drift validation. Django
 staticfiles resolves all four tracked MapLibre distribution/license files. Reference data was
 imported twice with identical counts into the isolated acceptance database. The real operational
 database was not modified and no Source collector HTTP request was made.
+
+## Independent-audit correction
+
+Independent audit of head `7decee4155999cc2113f5eac5b4e9e61843a6dbe` found that protected
+request construction could prefer raw locality/region over governed Municipality/canton, and that
+existing-resolution conflicts were checked sequentially rather than across the complete batch
+before mutation.
+
+The authoritative protected projection is now Municipality name plus canton with `origins=gg25`;
+without a governed Municipality it performs no provider request. Resolver execution and batch
+preflight share one canonical resolution input-material/fingerprint function. The batch validates
+all existing identities before any target execution, including in dry-run mode, and fails without
+provider, cache, RAW, resolution or review writes on any conflict. This enforcement correction
+does not alter the frozen contract, thresholds, public-context behavior or historical acceptance
+artifacts.
+
+After correction, the complete suite passed 485 tests. The 20 combined focused C2 and legacy
+geospatial tests cover both protected contexts, raw-field canaries, the no-Municipality no-request
+path, canonical fingerprint equality, order-independent batch preflight, zero partial writes and
+real PostgreSQL concurrency. Exact isolated replay reused the same 51 resolutions and four PIT
+artifacts with zero provider requests or new evidence.

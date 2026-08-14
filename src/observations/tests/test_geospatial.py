@@ -17,6 +17,9 @@ from observations.geospatial import (
     GeospatialResolutionError,
     GeospatialResolver,
     LocationPrivacyContext,
+    build_url,
+    normalized_request,
+    resolution_input_fingerprint,
     validate_coordinates,
 )
 from observations.models import (
@@ -121,8 +124,11 @@ class Gate006Tests(TestCase):
         street: str = "",
         locality: str = "Winterthur",
         postcode: str = "8400",
+        region: str = "ZH",
         country: str = "CH",
         geo: tuple[float, float] | None = None,
+        raw_location: str | None = None,
+        include_municipality: bool = True,
     ) -> PostingObservation:
         selected = source or self.source
         now = datetime(2026, 8, 8, 8, tzinfo=UTC)
@@ -164,14 +170,15 @@ class Gate006Tests(TestCase):
             title="Gardener",
             location_street=street,
             location_locality=locality,
+            location_region=region,
             location_postal_code=postcode,
             location_country=country,
-            municipality=self.municipality,
+            municipality=self.municipality if include_municipality else None,
             raw_artifact=artifact,
             structured_payload={"@type": "JobPosting", "jobLocation": location},
             contract_payload={
                 "schema_version": "1.2",
-                "raw_location": f"{street} {postcode} {locality}",
+                "raw_location": raw_location or f"{street} {postcode} {locality}",
                 "normalized_location": {
                     "bfs_code": 230,
                     "municipality": "Winterthur",
@@ -364,6 +371,103 @@ class Gate006Tests(TestCase):
         assert resolution.public_display_latitude is None
         assert resolution.public_display_longitude is None
         assert resolution.privacy_display_level == "HIDDEN"
+
+    def test_protected_request_uses_only_governed_municipality_for_both_contexts(
+        self,
+    ) -> None:
+        canaries = (
+            "PRIVATE-STREET-CANARY",
+            "PRIVATE-POSTCODE-CANARY",
+            "PRIVATE-LOCALITY-CANARY",
+            "PRIVATE-REGION-CANARY",
+            "PRIVATE-RAW-CANARY",
+        )
+        fingerprints: list[str] = []
+        requests: list[dict[str, object]] = []
+        for index, privacy_context in enumerate(
+            (
+                LocationPrivacyContext.PRIVATE_RESIDENCE,
+                LocationPrivacyContext.CONFIDENTIAL_PRIVATE_RESIDENCE,
+            )
+        ):
+            observation = self.observation(
+                f"protected-canary-{index}",
+                street=canaries[0],
+                postcode=canaries[1],
+                locality=canaries[2],
+                region=canaries[3],
+                raw_location=canaries[4],
+            )
+            request = normalized_request(observation, privacy_context)
+            assert request is not None
+            assert request["searchText"] == "Winterthur ZH"
+            assert request["origins"] == "gg25"
+            fingerprints.append(resolution_input_fingerprint(observation, privacy_context))
+            requests.append(request)
+            alternate = self.observation(
+                f"protected-canary-alternate-{index}",
+                street="OTHER-PRIVATE-STREET",
+                postcode="OTHER-PRIVATE-POSTCODE",
+                locality="OTHER-PRIVATE-LOCALITY",
+                region="OTHER-PRIVATE-REGION",
+                raw_location="OTHER-PRIVATE-RAW",
+            )
+            assert resolution_input_fingerprint(alternate, privacy_context) == fingerprints[-1]
+            assert normalized_request(alternate, privacy_context) == request
+
+            client = FakeClient(payload(origin="gg25"))
+            resolution = self.resolver(client).resolve(observation, privacy_context)
+            cache = GeocoderCacheEntry.objects.get(
+                pk=resolution.evidence["geocoder"]["cache_entry_id"]
+            )
+            bounded = json.dumps(
+                {
+                    "request": request,
+                    "url": build_url(request),
+                    "requested_url": cache.requested_url,
+                    "final_url": cache.final_url,
+                    "resolution": resolution.evidence,
+                    "review": (
+                        resolution.review_item.candidate_evidence
+                        if hasattr(resolution, "review_item")
+                        else []
+                    ),
+                },
+                sort_keys=True,
+            )
+            assert all(canary not in bounded for canary in canaries)
+            assert resolution.public_display_latitude is None
+            assert resolution.public_display_longitude is None
+            assert resolution.privacy_display_level == "HIDDEN"
+
+        assert requests[0] == requests[1]
+        assert fingerprints[0] != fingerprints[1]
+
+    def test_protected_request_without_governed_municipality_fails_without_provider(
+        self,
+    ) -> None:
+        client = FakeClient()
+        observation = self.observation(
+            "protected-no-municipality",
+            street="PRIVATE-STREET-CANARY",
+            locality="PRIVATE-LOCALITY-CANARY",
+            postcode="PRIVATE-POSTCODE-CANARY",
+            region="PRIVATE-REGION-CANARY",
+            raw_location="PRIVATE-RAW-CANARY",
+            include_municipality=False,
+        )
+        resolution = self.resolver(client).resolve(
+            observation,
+            LocationPrivacyContext.PRIVATE_RESIDENCE,
+        )
+        assert normalized_request(
+            observation, LocationPrivacyContext.PRIVATE_RESIDENCE
+        ) is None
+        assert client.calls == 0
+        assert resolution.resolution_status == "UNRESOLVED"
+        assert resolution.privacy_display_level == "HIDDEN"
+        assert resolution.public_display_latitude is None
+        assert resolution.public_display_longitude is None
 
     def test_append_only_and_source_evidence_unchanged(self) -> None:
         observation = self.observation()

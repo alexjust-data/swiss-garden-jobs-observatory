@@ -10,6 +10,7 @@ from observations.geospatial import (
     GeospatialResolver,
     LocationPrivacyContext,
     ResolutionStats,
+    resolution_input_fingerprint,
 )
 from observations.models import PostingLocationResolution, PostingObservation
 from premium_segments.models import PremiumSegmentAssessment, PremiumSegmentRun
@@ -106,13 +107,37 @@ def resolve_premium_run_locations(
     selected_assessment_ids = tuple(str(item.pk) for item in targets)
     selected_observation_ids = tuple(str(item.posting_observation.pk) for item in targets)
     privacy_contexts = Counter(item.privacy_context for item in targets)
+    active_resolver = resolver
+    resolver_version = active_resolver.resolver_version if active_resolver else RESOLVER_VERSION
+    if resolver_version != RESOLVER_VERSION:
+        raise GeospatialBatchError("resolver version does not match the frozen C2 contract")
+    target_fingerprints = {
+        (item.posting_observation.pk, item.privacy_context): resolution_input_fingerprint(
+            item.posting_observation,
+            LocationPrivacyContext(item.privacy_context),
+            resolver_version=resolver_version,
+        )
+        for item in targets
+    }
     existing_by_key = {
         (item.posting_observation.pk, item.privacy_context): item
         for item in PostingLocationResolution.objects.filter(
             posting_observation_id__in=[item.posting_observation.pk for item in targets],
-            resolver_version=RESOLVER_VERSION,
+            resolver_version=resolver_version,
+            privacy_context__in=list(privacy_contexts),
         ).select_related("posting_observation")
     }
+    conflicting = sorted(
+        f"{observation_id}:{privacy_context}"
+        for (observation_id, privacy_context), existing in existing_by_key.items()
+        if existing.input_fingerprint
+        != target_fingerprints[(observation_id, privacy_context)]
+    )
+    if conflicting:
+        raise GeospatialBatchError(
+            "existing location resolution conflicts with current governed input: "
+            + ",".join(conflicting)
+        )
     already_present = sum(
         (item.posting_observation.pk, item.privacy_context) in existing_by_key
         for item in targets
@@ -122,33 +147,30 @@ def resolve_premium_run_locations(
     before_unique: set[str] = set()
     before_cache_hits = 0
     before_network_requests = 0
-    if not dry_run:
-        active_resolver = resolver or GeospatialResolver()
-        if active_resolver.resolver_version != RESOLVER_VERSION:
-            raise GeospatialBatchError("resolver version does not match the frozen C2 contract")
-        before_unique = set(active_resolver.stats.unique_geocoder_requests)
-        before_cache_hits = active_resolver.stats.cache_hits
-        before_network_requests = active_resolver.stats.network_requests
-        for assessment in targets:
-            resolutions.append(
-                active_resolver.resolve(
-                    assessment.posting_observation,
-                    LocationPrivacyContext(assessment.privacy_context),
-                )
-            )
-
-    statuses = Counter(item.resolution_status for item in resolutions)
-    precisions = Counter(item.location_precision for item in resolutions)
-    display_levels = Counter(item.privacy_display_level for item in resolutions)
     unique_geocoder_requests = 0
     cache_hits = 0
     network_requests = 0
     if not dry_run:
+        execution_resolver: Resolver = active_resolver or GeospatialResolver()
+        before_unique = set(execution_resolver.stats.unique_geocoder_requests)
+        before_cache_hits = execution_resolver.stats.cache_hits
+        before_network_requests = execution_resolver.stats.network_requests
+        for assessment in targets:
+            resolutions.append(
+                execution_resolver.resolve(
+                    assessment.posting_observation,
+                    LocationPrivacyContext(assessment.privacy_context),
+                )
+            )
         unique_geocoder_requests = len(
-            active_resolver.stats.unique_geocoder_requests - before_unique
+            execution_resolver.stats.unique_geocoder_requests - before_unique
         )
-        cache_hits = active_resolver.stats.cache_hits - before_cache_hits
-        network_requests = active_resolver.stats.network_requests - before_network_requests
+        cache_hits = execution_resolver.stats.cache_hits - before_cache_hits
+        network_requests = execution_resolver.stats.network_requests - before_network_requests
+
+    statuses = Counter(item.resolution_status for item in resolutions)
+    precisions = Counter(item.location_precision for item in resolutions)
+    display_levels = Counter(item.privacy_display_level for item in resolutions)
     mappable = sum(
         item.resolution_status == PostingLocationResolution.ResolutionStatus.RESOLVED
         and item.privacy_display_level

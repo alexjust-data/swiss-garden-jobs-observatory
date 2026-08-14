@@ -262,11 +262,73 @@ def multiple(observation: PostingObservation) -> bool:
     return ";" in value or any(marker in value for marker in MULTIPLE_MARKERS)
 
 
+def resolution_input_material(
+    observation: PostingObservation,
+    privacy_context: LocationPrivacyContext,
+    *,
+    resolver_version: str = RESOLVER_VERSION,
+) -> dict[str, object]:
+    municipality = observation.municipality
+    municipality_bfs = municipality.pk if municipality else None
+    municipality_name = municipality.municipality_name if municipality else ""
+    municipality_canton = municipality.canton_code if municipality else ""
+    common: dict[str, object] = {
+        "resolver": resolver_version,
+        "privacy_context": privacy_context.value,
+        "source": str(observation.source.pk),
+        "bfs": municipality_bfs,
+        "municipality": municipality_name,
+        "canton": municipality_canton,
+    }
+    if privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL:
+        return {**common, "country": observation.location_country}
+    return {
+        **common,
+        "street": observation.location_street,
+        "locality": observation.location_locality,
+        "region": observation.location_region,
+        "postcode": observation.location_postal_code,
+        "country": observation.location_country,
+        "jobLocation": observation.structured_payload.get("jobLocation"),
+    }
+
+
+def resolution_input_fingerprint(
+    observation: PostingObservation,
+    privacy_context: LocationPrivacyContext,
+    *,
+    resolver_version: str = RESOLVER_VERSION,
+) -> str:
+    return fingerprint(
+        resolution_input_material(
+            observation,
+            privacy_context,
+            resolver_version=resolver_version,
+        )
+    )
+
+
 def normalized_request(
     observation: PostingObservation,
     privacy_context: LocationPrivacyContext,
 ) -> dict[str, object] | None:
     municipality = observation.municipality
+    protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
+    if protected:
+        if municipality is None:
+            return None
+        query = f"{municipality.municipality_name} {municipality.canton_code}".strip()
+        if not query:
+            return None
+        return {
+            "geometryFormat": "geojson",
+            "lang": "de",
+            "limit": 10,
+            "origins": "gg25",
+            "searchText": " ".join(query.split()),
+            "sr": 4326,
+            "type": "locations",
+        }
     locality = observation.location_locality.strip() or (
         municipality.municipality_name if municipality else ""
     )
@@ -275,12 +337,7 @@ def normalized_request(
     region = observation.location_region.strip() or (
         municipality.canton_code if municipality else ""
     )
-    protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
-    origins = None
-    if protected and locality:
-        query = f"{locality} {region}".strip()
-        origins = "gg25"
-    elif street and not multiple(observation):
+    if street and not multiple(observation):
         query = " ".join(x for x in (street, postcode, locality) if x)
     elif postcode and locality:
         query = f"{postcode} {locality}"
@@ -298,8 +355,6 @@ def normalized_request(
         "sr": 4326,
         "type": "locations",
     }
-    if origins is not None:
-        request["origins"] = origins
     return request
 
 
@@ -359,35 +414,18 @@ class GeospatialResolver:
     ) -> PostingLocationResolution:
         protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
         municipality = observation.municipality
-        municipality_bfs = municipality.pk if municipality else None
         municipality_name = municipality.municipality_name if municipality else ""
         municipality_canton = municipality.canton_code if municipality else ""
-        if protected:
-            input_value = {
-                "resolver": self.resolver_version,
-                "privacy_context": privacy_context.value,
-                "source": str(observation.source.pk),
-                "bfs": municipality_bfs,
-                "municipality": municipality_name,
-                "canton": municipality_canton,
-                "country": observation.location_country,
-            }
-        else:
-            input_value = {
-                "resolver": self.resolver_version,
-                "privacy_context": privacy_context.value,
-                "source": str(observation.source.pk),
-                "bfs": municipality_bfs,
-                "municipality": municipality_name,
-                "canton": municipality_canton,
-                "street": observation.location_street,
-                "locality": observation.location_locality,
-                "region": observation.location_region,
-                "postcode": observation.location_postal_code,
-                "country": observation.location_country,
-                "jobLocation": observation.structured_payload.get("jobLocation"),
-            }
-        input_fingerprint = fingerprint(input_value)
+        input_value = resolution_input_material(
+            observation,
+            privacy_context,
+            resolver_version=self.resolver_version,
+        )
+        input_fingerprint = resolution_input_fingerprint(
+            observation,
+            privacy_context,
+            resolver_version=self.resolver_version,
+        )
         existing = PostingLocationResolution.objects.filter(
             posting_observation=observation,
             resolver_version=self.resolver_version,
@@ -475,9 +513,17 @@ class GeospatialResolver:
             "raw_sha256": cache.raw_artifact.sha256_digest,
             "final_url": cache.final_url,
         }
-        name = normalize(municipality_name or observation.location_locality)
-        canton = (municipality_canton or observation.location_region).upper()
-        postcode = observation.location_postal_code.strip()
+        name = normalize(
+            municipality_name
+            if protected
+            else (municipality_name or observation.location_locality)
+        )
+        canton = (
+            municipality_canton
+            if protected
+            else (municipality_canton or observation.location_region)
+        ).upper()
+        postcode = "" if protected else observation.location_postal_code.strip()
         matches = [
             item
             for item in found
@@ -543,12 +589,17 @@ class GeospatialResolver:
                 )
             evidence["_resolved_bfs"] = municipality_matches[0].pk
         precision = (
-            "REMOTE_OR_MULTIPLE"
-            if multiple(observation)
+            "MUNICIPALITY"
+            if protected
             else (
-                "EXACT_WORK_ADDRESS"
-                if observation.location_street.strip() and selected.origin.casefold() == "address"
-                else ("POSTCODE" if postcode else "MUNICIPALITY")
+                "REMOTE_OR_MULTIPLE"
+                if multiple(observation)
+                else (
+                    "EXACT_WORK_ADDRESS"
+                    if observation.location_street.strip()
+                    and selected.origin.casefold() == "address"
+                    else ("POSTCODE" if postcode else "MUNICIPALITY")
+                )
             )
         )
         evidence["selected_candidate"] = review_candidate_evidence([selected], privacy_context)[0]
