@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Protocol
 from uuid import UUID
+
+from django.conf import settings
+from django.db import connection, transaction
 
 from observations.geospatial import (
     RESOLVER_VERSION,
@@ -65,9 +69,7 @@ class GeospatialBatchResult:
 
 def _targets(run: PremiumSegmentRun) -> list[PremiumSegmentAssessment]:
     targets = list(
-        PremiumSegmentAssessment.objects.filter(
-            run=run, effective_green_result="GREEN_CONFIRMED"
-        )
+        PremiumSegmentAssessment.objects.filter(run=run, effective_green_result="GREEN_CONFIRMED")
         .select_related("posting_observation__source", "posting_observation__municipality")
         .order_by("posting_observation_id", "pk")
     )
@@ -90,6 +92,17 @@ def _targets(run: PremiumSegmentRun) -> list[PremiumSegmentAssessment]:
     return targets
 
 
+def _validate_raw_store_scope() -> None:
+    database_name = str(connection.settings_dict.get("NAME", ""))
+    operational_database = str(settings.JOB_OBSERVATORY_OPERATIONAL_DB_NAME)
+    configured_root = Path(settings.CORE_RAW_OBJECT_STORE_PATH).resolve()
+    production_default = (settings.BASE_DIR / "data" / "raw").resolve()
+    if database_name != operational_database and configured_root == production_default:
+        raise GeospatialBatchError(
+            "non-operational database must use an explicit isolated RAW store"
+        )
+
+
 def resolve_premium_run_locations(
     premium_run_id: UUID | str,
     *,
@@ -108,6 +121,8 @@ def resolve_premium_run_locations(
     selected_observation_ids = tuple(str(item.posting_observation.pk) for item in targets)
     privacy_contexts = Counter(item.privacy_context for item in targets)
     active_resolver = resolver
+    if active_resolver is None:
+        _validate_raw_store_scope()
     resolver_version = active_resolver.resolver_version if active_resolver else RESOLVER_VERSION
     if resolver_version != RESOLVER_VERSION:
         raise GeospatialBatchError("resolver version does not match the frozen C2 contract")
@@ -130,8 +145,7 @@ def resolve_premium_run_locations(
     conflicting = sorted(
         f"{observation_id}:{privacy_context}"
         for (observation_id, privacy_context), existing in existing_by_key.items()
-        if existing.input_fingerprint
-        != target_fingerprints[(observation_id, privacy_context)]
+        if existing.input_fingerprint != target_fingerprints[(observation_id, privacy_context)]
     )
     if conflicting:
         raise GeospatialBatchError(
@@ -139,8 +153,7 @@ def resolve_premium_run_locations(
             + ",".join(conflicting)
         )
     already_present = sum(
-        (item.posting_observation.pk, item.privacy_context) in existing_by_key
-        for item in targets
+        (item.posting_observation.pk, item.privacy_context) in existing_by_key for item in targets
     )
 
     resolutions: list[PostingLocationResolution] = []
@@ -155,13 +168,20 @@ def resolve_premium_run_locations(
         before_unique = set(execution_resolver.stats.unique_geocoder_requests)
         before_cache_hits = execution_resolver.stats.cache_hits
         before_network_requests = execution_resolver.stats.network_requests
-        for assessment in targets:
-            resolutions.append(
-                execution_resolver.resolve(
-                    assessment.posting_observation,
-                    LocationPrivacyContext(assessment.privacy_context),
-                )
-            )
+        try:
+            with transaction.atomic():
+                for assessment in targets:
+                    resolutions.append(
+                        execution_resolver.resolve(
+                            assessment.posting_observation,
+                            LocationPrivacyContext(assessment.privacy_context),
+                        )
+                    )
+        except Exception as exc:
+            raise GeospatialBatchError(
+                "geospatial batch failed and all new database evidence was rolled back: "
+                f"{type(exc).__name__}"
+            ) from exc
         unique_geocoder_requests = len(
             execution_resolver.stats.unique_geocoder_requests - before_unique
         )
@@ -173,8 +193,7 @@ def resolve_premium_run_locations(
     display_levels = Counter(item.privacy_display_level for item in resolutions)
     mappable = sum(
         item.resolution_status == PostingLocationResolution.ResolutionStatus.RESOLVED
-        and item.privacy_display_level
-        != PostingLocationResolution.PrivacyDisplayLevel.HIDDEN
+        and item.privacy_display_level != PostingLocationResolution.PrivacyDisplayLevel.HIDDEN
         and item.public_display_latitude is not None
         and item.public_display_longitude is not None
         for item in resolutions

@@ -3,23 +3,30 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Barrier
 from unittest.mock import patch
 
 import pytest
+from django.conf import settings
 from django.core.management import call_command
 from django.db import close_old_connections, connection
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
+from core.hashing import sha256_hex
 from core.models import RawArtifact
 from core.storage import RawObjectStore
 from dashboard.tests.factories import create_dashboard_upstream
 from observations.geospatial import (
+    PROVIDER,
+    PROVIDER_VERSION,
     GeocoderFetchedResponse,
     GeospatialResolutionError,
     GeospatialResolver,
     LocationPrivacyContext,
+    fingerprint,
+    normalized_request,
     resolution_input_fingerprint,
 )
 from observations.geospatial_batch import GeospatialBatchError, resolve_premium_run_locations
@@ -65,6 +72,15 @@ class FakeClient:
         return GeocoderFetchedResponse(url, url, 200, "application/json", body)
 
 
+class RegionFailingClient(FakeClient):
+    def fetch(self, request: dict[str, object]) -> GeocoderFetchedResponse:
+        if str(request.get("searchText", "")).endswith("BE"):
+            self.calls += 1
+            self.requests.append(request)
+            raise GeospatialResolutionError("injected second-target provider failure")
+        return super().fetch(request)
+
+
 class Gate010C2BatchTests(TestCase):
     def setUp(self) -> None:
         self.raw = TemporaryDirectory()
@@ -90,7 +106,11 @@ class Gate010C2BatchTests(TestCase):
 
     def test_non_green_assessment_is_not_selected(self) -> None:
         upstream = create_dashboard_upstream(green_result="NOT_GREEN", suffix="c2-not-green")
-        result = resolve_premium_run_locations(upstream["premium_run"].pk, dry_run=True)
+        result = resolve_premium_run_locations(
+            upstream["premium_run"].pk,
+            dry_run=True,
+            resolver=self.resolver(FakeClient()),
+        )
         assert result.selected == 0
         assert result.selected_observation_ids == ()
 
@@ -113,9 +133,7 @@ class Gate010C2BatchTests(TestCase):
         assert PostingLocationResolution.objects.count() == 1
 
     def test_protected_contexts_without_municipality_fail_closed_without_network(self) -> None:
-        for index, context in enumerate(
-            ("PRIVATE_RESIDENCE", "CONFIDENTIAL_PRIVATE_RESIDENCE")
-        ):
+        for index, context in enumerate(("PRIVATE_RESIDENCE", "CONFIDENTIAL_PRIVATE_RESIDENCE")):
             upstream = create_dashboard_upstream(
                 privacy_context=context,
                 suffix=f"c2-private-{index}",
@@ -211,17 +229,252 @@ class Gate010C2BatchTests(TestCase):
     def test_management_command_emits_deterministic_json_dry_run(self) -> None:
         upstream = create_dashboard_upstream(suffix="c2-command")
         output = StringIO()
-        call_command(
-            "resolve_premium_locations",
-            premium_run=str(upstream["premium_run"].pk),
-            dry_run=True,
-            json=True,
-            stdout=output,
-        )
+        with override_settings(CORE_RAW_OBJECT_STORE_PATH=Path(self.raw.name)):
+            call_command(
+                "resolve_premium_locations",
+                premium_run=str(upstream["premium_run"].pk),
+                dry_run=True,
+                json=True,
+                stdout=output,
+            )
         payload = json.loads(output.getvalue())
         assert payload["batch_version"] == "geospatial-resolution-batch-v0.1"
         assert payload["selected"] == 1
         assert payload["created"] == 0
+
+    def test_non_operational_database_cannot_use_default_raw_store(self) -> None:
+        upstream = create_dashboard_upstream(suffix="c3-raw-scope")
+        with override_settings(
+            CORE_RAW_OBJECT_STORE_PATH=settings.BASE_DIR / "data" / "raw",
+            JOB_OBSERVATORY_OPERATIONAL_DB_NAME="not-this-test-database",
+        ):
+            with self.assertRaisesRegex(
+                GeospatialBatchError,
+                "non-operational database must use an explicit isolated RAW store",
+            ):
+                resolve_premium_run_locations(upstream["premium_run"].pk, dry_run=True)
+        assert PostingLocationResolution.objects.count() == 0
+
+    def test_exact_orphan_raw_bytes_are_reused_and_registered_locally(self) -> None:
+        upstream = create_dashboard_upstream(suffix="c3-orphan")
+        client = FakeClient()
+        request = normalized_request(
+            upstream["observation"],
+            LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL,
+        )
+        assert request is not None
+        response = client.fetch(request)
+        client.calls = 0
+        client.requests.clear()
+        request_digest = fingerprint(
+            {"provider": PROVIDER, "version": PROVIDER_VERSION, "request": request}
+        )
+        body_digest = sha256_hex(response.body)
+        key = (
+            f"geocoder/{PROVIDER.lower()}/{PROVIDER_VERSION}/"
+            f"{request_digest}-{body_digest[:16]}.json"
+        )
+        path = RawObjectStore(self.raw.name).write_bytes(key, response.body)
+        original_mtime = path.stat().st_mtime_ns
+
+        result = resolve_premium_run_locations(
+            upstream["premium_run"].pk,
+            resolver=self.resolver(client),
+        )
+
+        artifact = RawArtifact.objects.get(object_key=key)
+        assert result.created == 1
+        assert client.calls == 1
+        assert path.stat().st_mtime_ns == original_mtime
+        assert artifact.sha256_digest == body_digest
+        assert GeocoderCacheEntry.objects.get(raw_artifact=artifact)
+
+    def test_conflicting_orphan_raw_bytes_fail_without_overwrite_or_db_evidence(
+        self,
+    ) -> None:
+        upstream = create_dashboard_upstream(suffix="c3-orphan-conflict")
+        client = FakeClient()
+        request = normalized_request(
+            upstream["observation"],
+            LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL,
+        )
+        assert request is not None
+        response = client.fetch(request)
+        client.calls = 0
+        client.requests.clear()
+        request_digest = fingerprint(
+            {"provider": PROVIDER, "version": PROVIDER_VERSION, "request": request}
+        )
+        body_digest = sha256_hex(response.body)
+        key = (
+            f"geocoder/{PROVIDER.lower()}/{PROVIDER_VERSION}/"
+            f"{request_digest}-{body_digest[:16]}.json"
+        )
+        conflicting = b'{"conflicting":"bytes"}'
+        store = RawObjectStore(self.raw.name)
+        store.write_bytes(key, conflicting)
+        baseline = {
+            "raw": RawArtifact.objects.count(),
+            "cache": GeocoderCacheEntry.objects.count(),
+            "resolution": PostingLocationResolution.objects.count(),
+            "review": GeocodingReviewItem.objects.count(),
+        }
+
+        with self.assertRaisesRegex(GeospatialBatchError, "rolled back"):
+            resolve_premium_run_locations(
+                upstream["premium_run"].pk,
+                resolver=self.resolver(client),
+            )
+
+        assert store.read_bytes(key) == conflicting
+        assert RawArtifact.objects.count() == baseline["raw"]
+        assert GeocoderCacheEntry.objects.count() == baseline["cache"]
+        assert PostingLocationResolution.objects.count() == baseline["resolution"]
+        assert GeocodingReviewItem.objects.count() == baseline["review"]
+
+    def test_existing_cache_is_revalidated_against_immutable_raw_bytes(self) -> None:
+        first = create_dashboard_upstream(suffix="c3-cache-first")
+        second = create_dashboard_upstream(suffix="c3-cache-second")
+        client = FakeClient()
+        resolver = self.resolver(client)
+        resolver.resolve(first["observation"])
+        cache = GeocoderCacheEntry.objects.get()
+        raw_path = resolver.raw_store.object_path(cache.raw_artifact.object_key)
+        raw_path.write_bytes(b'{"tampered":"payload"}')
+        baseline = PostingLocationResolution.objects.count()
+
+        with self.assertRaisesRegex(
+            GeospatialResolutionError,
+            "existing geocoder RAW object conflicts",
+        ):
+            resolver.resolve(second["observation"])
+
+        assert PostingLocationResolution.objects.count() == baseline
+        assert client.calls == 1
+
+    def test_batch_provider_failure_rolls_back_every_new_database_row(self) -> None:
+        first = create_dashboard_upstream(location_region="ZH", suffix="c3-batch-a")
+        second = create_dashboard_upstream(location_region="BE", suffix="c3-batch-b")
+        second_premium = second["premium"]
+        combined = PremiumSegmentAssessment.objects.create(
+            run=first["premium_run"],
+            posting_observation=second["observation"],
+            green_relevance_assessment=second["green"],
+            green_result_origin=second_premium.green_result_origin,
+            effective_green_result=second_premium.effective_green_result,
+            segment=second_premium.segment,
+            assessment_status=second_premium.assessment_status,
+            method=second_premium.method,
+            evidence_strength=second_premium.evidence_strength,
+            matched_signal_ids=second_premium.matched_signal_ids,
+            matched_fields_and_scopes=second_premium.matched_fields_and_scopes,
+            matched_evidence=second_premium.matched_evidence,
+            prohibited_inferences=second_premium.prohibited_inferences,
+            privacy_context=second_premium.privacy_context,
+            evidence=second_premium.evidence,
+            created_at=second_premium.created_at,
+        )
+        baseline = {
+            "raw": RawArtifact.objects.count(),
+            "cache": GeocoderCacheEntry.objects.count(),
+            "resolution": PostingLocationResolution.objects.count(),
+            "review": GeocodingReviewItem.objects.count(),
+        }
+        client = RegionFailingClient()
+        resolver = self.resolver(client)
+        with patch(
+            "observations.geospatial_batch._targets",
+            return_value=[first["premium"], combined],
+        ):
+            with self.assertRaisesRegex(GeospatialBatchError, "rolled back"):
+                resolve_premium_run_locations(
+                    first["premium_run"].pk,
+                    resolver=resolver,
+                )
+
+        assert client.calls == 2
+        assert RawArtifact.objects.count() == baseline["raw"]
+        assert GeocoderCacheEntry.objects.count() == baseline["cache"]
+        assert PostingLocationResolution.objects.count() == baseline["resolution"]
+        assert GeocodingReviewItem.objects.count() == baseline["review"]
+
+    def test_batch_raw_conflict_rolls_back_database_in_both_orders(self) -> None:
+        first = create_dashboard_upstream(location_region="ZH", suffix="c3-raw-batch-a")
+        second = create_dashboard_upstream(location_region="BE", suffix="c3-raw-batch-b")
+        second_premium = second["premium"]
+        combined = PremiumSegmentAssessment.objects.create(
+            run=first["premium_run"],
+            posting_observation=second["observation"],
+            green_relevance_assessment=second["green"],
+            green_result_origin=second_premium.green_result_origin,
+            effective_green_result=second_premium.effective_green_result,
+            segment=second_premium.segment,
+            assessment_status=second_premium.assessment_status,
+            method=second_premium.method,
+            evidence_strength=second_premium.evidence_strength,
+            matched_signal_ids=second_premium.matched_signal_ids,
+            matched_fields_and_scopes=second_premium.matched_fields_and_scopes,
+            matched_evidence=second_premium.matched_evidence,
+            prohibited_inferences=second_premium.prohibited_inferences,
+            privacy_context=second_premium.privacy_context,
+            evidence=second_premium.evidence,
+            created_at=second_premium.created_at,
+        )
+        baseline = {
+            "raw": RawArtifact.objects.count(),
+            "cache": GeocoderCacheEntry.objects.count(),
+            "resolution": PostingLocationResolution.objects.count(),
+            "review": GeocodingReviewItem.objects.count(),
+        }
+        request = normalized_request(
+            second["observation"],
+            LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL,
+        )
+        assert request is not None
+        response = FakeClient().fetch(request)
+        request_digest = fingerprint(
+            {"provider": PROVIDER, "version": PROVIDER_VERSION, "request": request}
+        )
+        body_digest = sha256_hex(response.body)
+        key = (
+            f"geocoder/{PROVIDER.lower()}/{PROVIDER_VERSION}/"
+            f"{request_digest}-{body_digest[:16]}.json"
+        )
+        conflicting = b'{"conflicting":"batch-bytes"}'
+
+        for index, order in enumerate(([first["premium"], combined], [combined, first["premium"]])):
+            raw_root = Path(self.raw.name) / f"raw-conflict-order-{index}"
+            store = RawObjectStore(raw_root)
+            store.write_bytes(key, conflicting)
+            client = FakeClient()
+            with patch("observations.geospatial_batch._targets", return_value=order):
+                with self.assertRaisesRegex(GeospatialBatchError, "rolled back"):
+                    resolve_premium_run_locations(
+                        first["premium_run"].pk,
+                        resolver=GeospatialResolver(client=client, raw_store=store),
+                    )
+            assert client.calls == (2 if index == 0 else 1)
+            assert store.read_bytes(key) == conflicting
+            assert RawArtifact.objects.count() == baseline["raw"]
+            assert GeocoderCacheEntry.objects.count() == baseline["cache"]
+            assert PostingLocationResolution.objects.count() == baseline["resolution"]
+            assert GeocodingReviewItem.objects.count() == baseline["review"]
+
+        reverse_client = RegionFailingClient()
+        with patch(
+            "observations.geospatial_batch._targets",
+            return_value=[combined, first["premium"]],
+        ):
+            with self.assertRaisesRegex(GeospatialBatchError, "rolled back"):
+                resolve_premium_run_locations(
+                    first["premium_run"].pk,
+                    resolver=self.resolver(reverse_client),
+                )
+        assert reverse_client.calls == 1
+        assert RawArtifact.objects.count() == baseline["raw"]
+        assert GeocoderCacheEntry.objects.count() == baseline["cache"]
+        assert PostingLocationResolution.objects.count() == baseline["resolution"]
+        assert GeocodingReviewItem.objects.count() == baseline["review"]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -252,10 +505,7 @@ def test_concurrent_identical_resolution_converges_on_postgresql() -> None:
 
     assert len(set(resolution_ids)) == 1
     assert (
-        PostingLocationResolution.objects.filter(
-            posting_observation_id=observation_id
-        ).count()
-        == 1
+        PostingLocationResolution.objects.filter(posting_observation_id=observation_id).count() == 1
     )
     assert GeocoderCacheEntry.objects.count() == 1
     assert sum(client.calls for client in clients) == 1
