@@ -13,9 +13,10 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument("--json", action="store_true", dest="as_json")
+        parser.add_argument("--include-volatile", action="store_true")
 
     def handle(self, *args: Any, **options: Any) -> None:
-        payload = observatory_status()
+        payload = observatory_status(include_volatile=bool(options["include_volatile"]))
         if options["as_json"]:
             self.stdout.write(json.dumps(payload, sort_keys=True))
             return

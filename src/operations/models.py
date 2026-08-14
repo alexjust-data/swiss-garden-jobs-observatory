@@ -26,6 +26,37 @@ class AppendOnlyOperationalManager(models.Manager[Any]):
         return AppendOnlyOperationalQuerySet(self.model, using=self._db)
 
 
+class ObservatoryCycleQuerySet(models.QuerySet[Any]):
+    """Disallow mutation APIs that bypass ObservatoryCycle.save()."""
+
+    def update(self, **kwargs: Any) -> int:
+        raise ImmutableOperationalEvidenceError("cycle queryset mutation is forbidden")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise ImmutableOperationalEvidenceError("cycles cannot be deleted")
+
+    def bulk_update(
+        self,
+        objs: Any,
+        fields: Any,
+        batch_size: int | None = None,
+    ) -> int:
+        raise ImmutableOperationalEvidenceError("cycle bulk mutation is forbidden")
+
+
+class ObservatoryCycleManager(models.Manager[Any]):
+    def get_queryset(self) -> ObservatoryCycleQuerySet:
+        return ObservatoryCycleQuerySet(self.model, using=self._db)
+
+    def bulk_update(
+        self,
+        objs: Any,
+        fields: Any,
+        batch_size: int | None = None,
+    ) -> int:
+        raise ImmutableOperationalEvidenceError("cycle bulk mutation is forbidden")
+
+
 class AppendOnlyOperationalEvidence(models.Model):
     objects = AppendOnlyOperationalManager()
 
@@ -43,6 +74,8 @@ class AppendOnlyOperationalEvidence(models.Model):
 
 
 class ObservatoryCycle(models.Model):
+    objects = ObservatoryCycleManager()
+
     source_attempts: models.Manager[ObservatorySourceAttempt]
     operational_events: models.Manager[OperationalEvent]
 

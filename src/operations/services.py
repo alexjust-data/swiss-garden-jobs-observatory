@@ -47,6 +47,7 @@ from sources.models import Source
 from vacancies.engine import run_deduplication
 from vacancies.models import DedupReviewDecisionApplication
 from vacancies.normalizer import DEDUP_VERSION, NORMALIZER_VERSION
+from vacancies.review_continuity import DedupContinuityValidationError
 
 from .models import ObservatoryCycle, ObservatorySourceAttempt, OperationalEvent
 
@@ -70,6 +71,10 @@ class ObservatoryOperationError(RuntimeError):
         super().__init__(message)
         self.stage = stage
         self.code = code
+
+
+class CycleTimeoutError(ObservatoryOperationError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -118,7 +123,7 @@ def _ensure_within_timeout(
     if started is None:
         return
     if timezone.now() - started > timedelta(seconds=timeout_seconds):
-        raise ObservatoryOperationError(
+        raise CycleTimeoutError(
             stage,
             "CYCLE_TIMEOUT",
             f"cycle exceeded configured {timeout_seconds}s timeout",
@@ -327,6 +332,50 @@ def _seal_failure(
     _event(
         cycle, "CYCLE_FAILED", str(OperationalEvent.Severity.ERROR), detail=cycle.failure_evidence
     )
+    if status == ObservatoryCycle.Status.FAILED_CONTINUITY:
+        _event(
+            cycle,
+            "CONTINUITY_CONFLICT",
+            str(OperationalEvent.Severity.ERROR),
+            detail=cycle.failure_evidence,
+        )
+    if status == ObservatoryCycle.Status.FAILED_DASHBOARD:
+        _event(
+            cycle,
+            "DASHBOARD_BUILD_FAILED",
+            str(OperationalEvent.Severity.ERROR),
+            detail=cycle.failure_evidence,
+        )
+
+
+def _is_dedup_continuity_failure(exc: BaseException) -> bool:
+    return isinstance(exc, DedupContinuityValidationError) or (
+        "CONFLICTING_PRIOR_HUMAN_KNOWLEDGE" in str(exc)
+    )
+
+
+def _seal_timeout(cycle: ObservatoryCycle, exc: CycleTimeoutError) -> None:
+    status_by_stage = {
+        "collection": ObservatoryCycle.Status.FAILED_COLLECTION,
+        "green_continuity": ObservatoryCycle.Status.FAILED_CONTINUITY,
+        "dedup_continuity": ObservatoryCycle.Status.FAILED_CONTINUITY,
+        "dedup": ObservatoryCycle.Status.FAILED_DEDUP,
+        "premium": ObservatoryCycle.Status.FAILED_PREMIUM,
+        "dashboard": ObservatoryCycle.Status.FAILED_DASHBOARD,
+        "readiness": ObservatoryCycle.Status.FAILED_READINESS,
+    }
+    status = status_by_stage.get(exc.stage, ObservatoryCycle.Status.FAILED_COLLECTION)
+    _seal_failure(cycle, exc.stage, str(status), "CYCLE_TIMEOUT", exc)
+
+
+def _eligible_source_ids(readiness: Day0ReadinessAssessment) -> list[str] | None:
+    market_state = readiness.metrics.get("day0_market_state")
+    eligible_value = (
+        market_state.get("eligible_source_ids") if isinstance(market_state, dict) else None
+    )
+    if not isinstance(eligible_value, list):
+        return None
+    return sorted(str(source_id) for source_id in eligible_value)
 
 
 def _previous_success(cycle: ObservatoryCycle) -> ObservatoryCycle | None:
@@ -467,12 +516,16 @@ def run_cycle(
         cycle.failure_evidence = {}
         cycle.save()
         _save_stage(cycle, "cohort", "SUCCEEDED")
-        _ensure_within_timeout(
-            cycle,
-            timeout_seconds=timeout_seconds,
-            stage="collection",
-            invocation_started=invocation_started,
-        )
+        try:
+            _ensure_within_timeout(
+                cycle,
+                timeout_seconds=timeout_seconds,
+                stage="collection",
+                invocation_started=invocation_started,
+            )
+        except CycleTimeoutError as exc:
+            _seal_timeout(cycle, exc)
+            return CycleResult(cycle, False)
         _save_stage(cycle, "collection", "RUNNING")
         current_failures: list[str] = []
         for source in sources:
@@ -554,12 +607,16 @@ def run_cycle(
                     source=source,
                     detail={"error_type": type(exc).__name__},
                 )
-            _ensure_within_timeout(
-                cycle,
-                timeout_seconds=timeout_seconds,
-                stage="collection",
-                invocation_started=invocation_started,
-            )
+            try:
+                _ensure_within_timeout(
+                    cycle,
+                    timeout_seconds=timeout_seconds,
+                    stage="collection",
+                    invocation_started=invocation_started,
+                )
+            except CycleTimeoutError as exc:
+                _seal_timeout(cycle, exc)
+                return CycleResult(cycle, False)
         _save_stage(cycle, "collection", "SUCCEEDED")
         try:
             _save_stage(cycle, "green_continuity", "RUNNING")
@@ -571,6 +628,9 @@ def run_cycle(
             )
             green = apply_green_continuity(timezone.now())
             _save_stage(cycle, "green_continuity", "SUCCEEDED")
+        except CycleTimeoutError as exc:
+            _seal_timeout(cycle, exc)
+            return CycleResult(cycle, False)
         except Exception as exc:
             _seal_failure(
                 cycle,
@@ -600,10 +660,31 @@ def run_cycle(
                 cutoff = provisional_cutoff
             _save_stage(cycle, "dedup", "SUCCEEDED")
             _save_stage(cycle, "dedup_continuity", "SUCCEEDED")
+        except CycleTimeoutError as exc:
+            _seal_timeout(cycle, exc)
+            return CycleResult(cycle, False)
         except Exception as exc:
-            _seal_failure(
-                cycle, "dedup", str(ObservatoryCycle.Status.FAILED_DEDUP), "DEDUP_FAILED", exc
-            )
+            stages = dict(cycle.stage_statuses)
+            if _is_dedup_continuity_failure(exc):
+                stages["dedup"] = "FAILED"
+                cycle.stage_statuses = stages
+                _seal_failure(
+                    cycle,
+                    "dedup_continuity",
+                    str(ObservatoryCycle.Status.FAILED_CONTINUITY),
+                    "DEDUP_CONTINUITY_FAILED",
+                    exc,
+                )
+            else:
+                stages["dedup_continuity"] = "SKIPPED"
+                cycle.stage_statuses = stages
+                _seal_failure(
+                    cycle,
+                    "dedup",
+                    str(ObservatoryCycle.Status.FAILED_DEDUP),
+                    "DEDUP_FAILED",
+                    exc,
+                )
             return CycleResult(cycle, False)
         dedup_created = DedupReviewDecisionApplication.objects.count() - dedup_before
         try:
@@ -616,6 +697,9 @@ def run_cycle(
             )
             premium_run, premium_reused = run_classification(cutoff)
             _save_stage(cycle, "premium", "SUCCEEDED")
+        except CycleTimeoutError as exc:
+            _seal_timeout(cycle, exc)
+            return CycleResult(cycle, False)
         except Exception as exc:
             _seal_failure(
                 cycle,
@@ -637,6 +721,9 @@ def run_cycle(
                 as_of=cutoff, dedup_run=dedup_run, premium_run=premium_run
             )
             _save_stage(cycle, "dashboard", "SUCCEEDED")
+        except CycleTimeoutError as exc:
+            _seal_timeout(cycle, exc)
+            return CycleResult(cycle, False)
         except Exception as exc:
             _seal_failure(
                 cycle,
@@ -661,6 +748,9 @@ def run_cycle(
                 dashboard_snapshot=dashboard,
             )
             _save_stage(cycle, "readiness", "SUCCEEDED")
+        except CycleTimeoutError as exc:
+            _seal_timeout(cycle, exc)
+            return CycleResult(cycle, False)
         except Exception as exc:
             _seal_failure(
                 cycle,
@@ -707,9 +797,33 @@ def run_cycle(
             },
         }
         cycle.save()
+        if readiness.required_freshness_valid_count < readiness.implemented_required_source_count:
+            _event(
+                cycle,
+                "FRESHNESS_EXPIRED",
+                str(OperationalEvent.Severity.WARNING),
+                detail={
+                    "fresh": readiness.required_freshness_valid_count,
+                    "implemented": readiness.implemented_required_source_count,
+                },
+            )
         previous = _previous_success(cycle)
         if previous and previous.readiness_assessment:
-            old = previous.readiness_assessment.readiness_status
+            previous_readiness = previous.readiness_assessment
+            previous_eligible = _eligible_source_ids(previous_readiness)
+            current_eligible = _eligible_source_ids(readiness)
+            if (
+                previous_eligible is not None
+                and current_eligible is not None
+                and len(previous_eligible) != len(current_eligible)
+            ):
+                _event(
+                    cycle,
+                    "ELIGIBLE_SOURCE_COUNT_CHANGED",
+                    str(OperationalEvent.Severity.WARNING),
+                    detail={"from": len(previous_eligible), "to": len(current_eligible)},
+                )
+            old = previous_readiness.readiness_status
             if old != readiness.readiness_status:
                 _event(
                     cycle,
@@ -718,6 +832,82 @@ def run_cycle(
                     detail={"from": old, "to": readiness.readiness_status},
                 )
         return CycleResult(cycle, False)
+
+
+def _persisted_status_surface(
+    cycle: ObservatoryCycle, attempts: list[ObservatorySourceAttempt]
+) -> dict[str, Any]:
+    latest_by_source: dict[str, ObservatorySourceAttempt] = {}
+    for attempt in sorted(attempts, key=lambda item: item.attempt_number):
+        latest_by_source[str(getattr(attempt, "source_id"))] = attempt
+    selected = set(cycle.selected_source_ids)
+    healthy = sorted(
+        source_id
+        for source_id, attempt in latest_by_source.items()
+        if attempt.result == ObservatorySourceAttempt.Result.SUCCEEDED
+        and attempt.source_health == CollectionRun.SourceHealthStatus.HEALTHY
+        and attempt.snapshot_complete
+        and attempt.counter_consistent
+    )
+    incomplete = sorted(
+        source_id
+        for source_id, attempt in latest_by_source.items()
+        if getattr(attempt, "collection_run_id", None) is not None
+        and (not attempt.snapshot_complete or not attempt.counter_consistent)
+    )
+    outage = sorted(
+        source_id
+        for source_id, attempt in latest_by_source.items()
+        if attempt.source_health == CollectionRun.SourceHealthStatus.OUTAGE
+    )
+    degraded = sorted(
+        source_id
+        for source_id, attempt in latest_by_source.items()
+        if attempt.source_health == CollectionRun.SourceHealthStatus.DEGRADED
+    )
+    failed = sorted(
+        source_id
+        for source_id, attempt in latest_by_source.items()
+        if attempt.result == ObservatorySourceAttempt.Result.FAILED
+    )
+    readiness = cycle.readiness_assessment
+    eligible: list[str] | None = None
+    fresh: list[str] | None = None
+    if readiness:
+        eligible = _eligible_source_ids(readiness)
+        if readiness.selected_collection_run_ids:
+            fresh = sorted(
+                {
+                    str(source_id)
+                    for source_id in CollectionRun.objects.filter(
+                        pk__in=readiness.selected_collection_run_ids,
+                        source_id__in=selected,
+                    ).values_list("source_id", flat=True)
+                }
+            )
+    return {
+        "source_cohort_health": {
+            "selected": sorted(selected),
+            "healthy": healthy,
+            "incomplete": incomplete,
+            "degraded": degraded,
+            "outage": outage,
+            "failed": failed,
+            "missing_attempt_evidence": sorted(selected - set(latest_by_source)),
+            "fresh": fresh,
+            "eligible": eligible,
+        },
+        "critical_reviews": {
+            "green": readiness.critical_green_review_count if readiness else None,
+            "dedup": readiness.critical_dedup_review_count if readiness else None,
+            "other": readiness.other_critical_review_count if readiness else None,
+        },
+        "authorization": readiness.readiness_status if readiness else None,
+        "authorization_blockers": readiness.blockers if readiness else None,
+        "headline_available": bool(
+            readiness and readiness.readiness_status == Day0ReadinessAssessment.Status.AUTHORIZED
+        ),
+    }
 
 
 def cycle_summary(cycle: ObservatoryCycle, *, reused: bool = False) -> dict[str, Any]:
@@ -767,13 +957,15 @@ def cycle_summary(cycle: ObservatoryCycle, *, reused: bool = False) -> dict[str,
         },
         "day0": readiness_summary(readiness, False) if readiness else None,
         "quality_state": cycle.quality_state,
+        "status_surface": _persisted_status_surface(cycle, attempts),
         "failure": {"code": cycle.failure_code, "evidence": cycle.failure_evidence},
         "exact_cycle_retry_reused": reused,
     }
 
 
-def observatory_status(at: datetime | None = None) -> dict[str, Any]:
-    now = at or timezone.now()
+def observatory_status(
+    at: datetime | None = None, *, include_volatile: bool = False
+) -> dict[str, Any]:
     latest = ObservatoryCycle.objects.first()
     last_success = (
         ObservatoryCycle.objects.filter(
@@ -785,13 +977,10 @@ def observatory_status(at: datetime | None = None) -> dict[str, Any]:
         .order_by("-finished_at")
         .first()
     )
-    return {
+    payload = {
         "latest_cycle": cycle_summary(latest) if latest else None,
         "last_successful_cycle_id": str(last_success.pk) if last_success else None,
         "last_successful_cycle_at": last_success.finished_at.isoformat()
-        if last_success and last_success.finished_at
-        else None,
-        "cycle_age_seconds": int((now - last_success.finished_at).total_seconds())
         if last_success and last_success.finished_at
         else None,
         "pit_cutoff": last_success.final_cutoff.isoformat()
@@ -800,3 +989,12 @@ def observatory_status(at: datetime | None = None) -> dict[str, Any]:
         "implemented_sources": len(last_success.selected_source_ids) if last_success else None,
         "quality_state": last_success.quality_state if last_success else None,
     }
+    if include_volatile or at is not None:
+        status_as_of = at or timezone.now()
+        payload["volatile_status"] = {
+            "as_of": status_as_of.isoformat(),
+            "cycle_age_seconds": int((status_as_of - last_success.finished_at).total_seconds())
+            if last_success and last_success.finished_at
+            else None,
+        }
+    return payload

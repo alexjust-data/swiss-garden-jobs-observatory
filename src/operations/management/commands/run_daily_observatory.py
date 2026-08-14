@@ -45,7 +45,7 @@ class Command(BaseCommand):
         try:
             cycle_id = uuid.UUID(raw_id) if raw_id else None
         except ValueError as exc:
-            raise CommandError("--cycle-id must be a UUID") from exc
+            raise CommandError("--cycle-id must be a UUID", returncode=9) from exc
         try:
             result = run_cycle(
                 cycle_id=cycle_id,
@@ -55,7 +55,7 @@ class Command(BaseCommand):
                 timeout_seconds=options["timeout_seconds"],
             )
         except ObservatoryOperationError as exc:
-            raise CommandError(f"{exc.code}: {exc}") from exc
+            raise CommandError(f"{exc.code}: {exc}", returncode=9) from exc
         payload = cycle_summary(result.cycle, reused=result.reused)
         if options["as_json"]:
             self.stdout.write(json.dumps(payload, sort_keys=True))

@@ -86,3 +86,29 @@ remained green.
 GATE-012 does not change frozen research, green classifier/review/material semantics,
 `dedup-v0.1`, dedup continuity, Premium, coverage/freshness/authorization, geography, blocked-source
 dispositions, or Job-Room. The operating contract remains byte-identical to its isolated commit.
+
+
+## Independent-audit correction to operational enforcement
+
+Audit of PR head `67bf640dd35f68d6d0d266b289b83b4866b8ab7b` found no defect in the
+accepted live PIT result, but found enforcement paths that did not yet satisfy the frozen operating
+contract. Cycle QuerySet mutation is now prohibited, invalid operational state uses exit code 9,
+and dedup authority conflicts are classified as continuity failures rather than algorithmic Dedup
+failures. Governed timeouts seal the active stage instead of leaving a cycle `RUNNING`; actual
+process crashes remain distinguishable and use the frozen stale-recovery path.
+
+`observatory_status --json` now returns a deterministic persisted core. Live wall-clock age is
+available only as explicitly separated `volatile_status` metadata. The persisted status surface
+reports exact Source-health categories, freshness/eligibility evidence, critical reviews,
+authorization blockers and headline availability without converting absent evidence into zero.
+
+The acceptance suite now exercises the full predeclared failure matrix and uses a second genuine
+PostgreSQL connection to hold the advisory lock. The losing invocation refuses before collector
+activity. Timeout boundaries preserve earlier append-only attempts, authorization-transition
+events occur only on change, and the known structural coverage blocker remains deduplicated.
+
+Final correction validation passed 471 full tests, 56 focused/adversarial GATE-012 tests, the real PostgreSQL lock test, Playwright, Ruff, mypy, Django, migration drift, existing/clean PostgreSQL paths, double reference import, deterministic status replay and exact same-cycle retry without HTTP.
+
+No migration, scientific semantic change, Source request, new human adjudication or mutation of
+live cycle `72630745-5100-4f63-92b9-d8e2e35c2a0b` was required. The operating contract remains
+byte-identical with blob `f6c839e10b6a6b35fc2e1ec4439bf6e33c1108a6`.

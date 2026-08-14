@@ -95,3 +95,51 @@ The backup/restore smoke used a PostgreSQL 16 custom dump of the post-cycle oper
 
 The restored database required no migrations, accepted the reference import twice with identical
 counts, passed Django check, and exposed cycle `72630745-5100-4f63-92b9-d8e2e35c2a0b` with the
+same pinned downstream artifacts.
+
+## Independent-audit enforcement correction
+
+Independent audit of head `67bf640dd35f68d6d0d266b289b83b4866b8ab7b` accepted the live cycle
+and aligned PIT evidence, then identified six operating-contract enforcement gaps. The correction:
+
+- forbids `ObservatoryCycle` mutation through `QuerySet.update()`, `QuerySet.delete()` and
+  `bulk_update()` while retaining instance-validated `PLANNED`/`RUNNING`/failure recovery
+  transitions;
+- returns governed CLI exit code 9 for invalid UUID, timeout, cohort, retry, resume and stale-cycle
+  state, while preserving codes 0 and 2 through 8;
+- distinguishes dedup review-authority conflicts as `FAILED_CONTINUITY`/exit 4 from mechanical
+  `FAILED_DEDUP`/exit 5 and emits the bounded `CONTINUITY_CONFLICT` event;
+- seals governed whole-cycle timeouts at the active stage with RED health, failure evidence,
+  heartbeat/finish time and retained Source attempts;
+- separates deterministic persisted status from opt-in `volatile_status` age metadata; and
+- completes the predeclared adversarial matrix, including genuine PostgreSQL advisory-lock
+  contention through an independent database connection.
+
+The status surface now derives healthy, incomplete, degraded, outage, failed, fresh and eligible
+categories, critical-review dimensions, authorization, blockers and headline availability from
+persisted cycle attempts and readiness evidence. Missing attempt/readiness evidence is explicit;
+it is not represented as an inferred zero.
+
+The correction performed no Source HTTP and did not mutate cycle
+`72630745-5100-4f63-92b9-d8e2e35c2a0b` or any of its pinned artifacts. The live acceptance facts
+remain 19/29 eligible, 51 active GREEN, three critical green reviews, zero critical dedup reviews,
+`DAY_0_BLOCKED_BY_DATA_QUALITY`, and a null headline.
+
+Correction validation at the implementation stage:
+
+- full pytest after the audit correction: 471 passed;
+- focused and adversarial GATE-012: 56 passed;
+- real PostgreSQL advisory-lock loser: zero collector calls and zero Source attempts;
+- exit-code, timeout and deterministic-status matrices: passed;
+- Ruff operations: passed;
+- Playwright Chromium: 1 passed;
+- mypy full project: passed, 158 source files;
+- Django check: passed;
+- migration drift: none;
+- existing PostgreSQL migration and double reference import: passed;
+- clean PostgreSQL migration and double reference import: passed;
+- exact same-cycle retry: same cycle/artifacts, no Source HTTP;
+- deterministic status replay: identical SHA-256 output.
+
+The final exact Git head is pinned in PR #26 metadata and the independent-audit handoff after the
+documentation commit; embedding a commit's own SHA inside that same commit would be self-referential.
