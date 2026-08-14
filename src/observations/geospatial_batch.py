@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ from uuid import UUID
 from django.conf import settings
 from django.db import connection, transaction
 
+from core.storage import RawObjectStore
 from observations.geospatial import (
     RESOLVER_VERSION,
     GeospatialResolver,
@@ -29,6 +31,7 @@ class GeospatialBatchError(RuntimeError):
 class Resolver(Protocol):
     resolver_version: str
     stats: ResolutionStats
+    raw_store: RawObjectStore
 
     def resolve(
         self,
@@ -92,14 +95,40 @@ def _targets(run: PremiumSegmentRun) -> list[PremiumSegmentAssessment]:
     return targets
 
 
-def _validate_raw_store_scope() -> None:
+def _root_identity(path: str | Path) -> str:
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+def _validate_raw_store_scope(
+    resolver: Resolver | None,
+    *,
+    dry_run: bool,
+) -> None:
     database_name = str(connection.settings_dict.get("NAME", ""))
     operational_database = str(settings.JOB_OBSERVATORY_OPERATIONAL_DB_NAME)
-    configured_root = Path(settings.CORE_RAW_OBJECT_STORE_PATH).resolve()
-    production_default = (settings.BASE_DIR / "data" / "raw").resolve()
-    if database_name != operational_database and configured_root == production_default:
+    operational_root = _root_identity(settings.JOB_OBSERVATORY_OPERATIONAL_RAW_STORE_PATH)
+    if resolver is None:
+        execution_root = _root_identity(settings.CORE_RAW_OBJECT_STORE_PATH)
+    else:
+        raw_store = getattr(resolver, "raw_store", None)
+        base_path = getattr(raw_store, "base_path", None)
+        if base_path is None:
+            if dry_run:
+                return
+            raise GeospatialBatchError(
+                "mutable geospatial resolver must expose its effective RAW store"
+            )
+        execution_root = _root_identity(base_path)
+
+    if database_name == operational_database:
+        if execution_root != operational_root:
+            raise GeospatialBatchError(
+                "operational database must use its designated operational RAW store"
+            )
+        return
+    if execution_root == operational_root:
         raise GeospatialBatchError(
-            "non-operational database must use an explicit isolated RAW store"
+            "non-operational database must use a distinct isolated RAW store"
         )
 
 
@@ -121,8 +150,7 @@ def resolve_premium_run_locations(
     selected_observation_ids = tuple(str(item.posting_observation.pk) for item in targets)
     privacy_contexts = Counter(item.privacy_context for item in targets)
     active_resolver = resolver
-    if active_resolver is None:
-        _validate_raw_store_scope()
+    _validate_raw_store_scope(active_resolver, dry_run=dry_run)
     resolver_version = active_resolver.resolver_version if active_resolver else RESOLVER_VERSION
     if resolver_version != RESOLVER_VERSION:
         raise GeospatialBatchError("resolver version does not match the frozen C2 contract")

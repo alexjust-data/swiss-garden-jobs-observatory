@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for implementation; isolated operational acceptance and independent audit pending.
+Implementation and independent-audit correction complete; final independent audit pending.
 
 ## Context
 
@@ -25,8 +25,10 @@ complete bytes is reusable storage; a same key with different bytes is a conflic
 never transfers database authority. Local RAW and cache rows are created or reused only after
 complete current-execution identity validation.
 
-Mutable non-operational databases may not use the production default RAW root. Tests may inject a
-temporary store directly; operational-copy acceptance must configure an explicit isolated root.
+The actual operational RAW root is explicitly designated independently from the mutable execution
+root. Every mutable batch validates the effective store, including injected resolvers.
+Non-operational databases may use only an explicitly distinct root; sharing the designated
+operational root fails before provider activity or evidence mutation.
 
 After complete C2 target and existing-resolution preflight, every live
 `resolve_premium_locations` invocation places all new RAW metadata, cache rows, resolutions and
@@ -78,6 +80,21 @@ Acceptance also established the platform implementation: Windows uses same-volum
 no-overwrite os.rename, while POSIX uses atomic hard-link publication. Both use an fsynced
 same-directory temporary with a short bounded name.
 
-Windows-invalid logical filename components are mapped to a collision-free physical name under a
-reserved ~raw~ prefix. The database object_key remains unchanged. A literal percent sequence
-cannot collide with an escaped colon, and legacy Windows paths remain readable.
+Windows physical names use a compact lower-case ASCII representation that is injective under
+case-insensitive filename semantics. Canonical lower-case components remain compact; components
+that could alias are represented under a reserved ~raw~ prefix with delimited UTF-8 hex escapes.
+The database object key remains unchanged, backslash is rejected as a second separator, and
+legacy Windows paths remain readable.
+
+## Independent-audit correction
+
+At audited head 10f4732d4b9a3b6d48d36f46e4f894d5089e6ab2, independent review found that
+the initial conditional Windows mapping did not distinguish all case pairs, custom operational
+roots and injected resolvers were not fully bound to RAW lineage, and cache validation trusted a
+safe-but-not-deterministic requested URL and mutually consistent unaccepted content types.
+
+The final implementation closes those paths without changing geospatial-v0.1 or the historical
+incident. Cache and fetched-response acceptance now independently bind exact request URL, final
+same-origin URL, status, accepted content type, bytes, SHA, size and parsed payload. The existing
+isolated 51-resolution corpus and all four downstream PIT artifacts replay exactly with zero
+provider requests. No real operational evidence was modified.

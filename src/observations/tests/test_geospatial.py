@@ -75,7 +75,7 @@ class FakeClient:
     def fetch(self, request: dict[str, object]) -> GeocoderFetchedResponse:
         self.calls += 1
         self.requests.append(request)
-        url = "https://api3.geo.admin.ch/rest/services/api/SearchServer?type=locations"
+        url = build_url(request)
         return GeocoderFetchedResponse(url, url, 200, "application/json", self.body)
 
 
@@ -460,9 +460,7 @@ class Gate006Tests(TestCase):
             observation,
             LocationPrivacyContext.PRIVATE_RESIDENCE,
         )
-        assert normalized_request(
-            observation, LocationPrivacyContext.PRIVATE_RESIDENCE
-        ) is None
+        assert normalized_request(observation, LocationPrivacyContext.PRIVATE_RESIDENCE) is None
         assert client.calls == 0
         assert resolution.resolution_status == "UNRESOLVED"
         assert resolution.privacy_display_level == "HIDDEN"

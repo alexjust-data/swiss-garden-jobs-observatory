@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from core.hashing import sha256_file, sha256_hex
-from core.storage import RawObjectAlreadyExistsError, RawObjectStore
+from core.storage import (
+    RawObjectAlreadyExistsError,
+    RawObjectStore,
+    _encode_windows_physical_part,
+)
 
 
 def test_raw_object_store_reuses_only_identical_bytes(tmp_path: Path) -> None:
@@ -98,6 +102,63 @@ def test_windows_forbidden_characters_have_collision_free_physical_names(
     assert colon_path != percent_path
     assert store.read_bytes(colon_key) == b"colon"
     assert store.read_bytes(percent_key) == b"percent"
+    assert _encode_windows_physical_part("detail-court:70001-hash").casefold() != (
+        _encode_windows_physical_part("detail-court%3A70001-hash").casefold()
+    )
     if os.name == "nt":
-        assert colon_path.name == "~raw~detail-court%3A70001-hash"
-        assert percent_path.name == "detail-court%3A70001-hash"
+        assert colon_path.name == _encode_windows_physical_part("detail-court:70001-hash")
+        assert percent_path.name == _encode_windows_physical_part("detail-court%3A70001-hash")
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    (
+        ("Foo", "foo"),
+        ("CON", "con"),
+        ("A:B", "a:b"),
+        ("A:B", "A%3AB"),
+        ("name.", "name"),
+        ("name ", "name"),
+        ("~raw~literal", "literal"),
+        ("Ä", "ä"),
+    ),
+)
+def test_windows_physical_components_are_injective_after_case_folding(
+    tmp_path: Path,
+    left: str,
+    right: str,
+) -> None:
+    left_physical = _encode_windows_physical_part(left)
+    right_physical = _encode_windows_physical_part(right)
+
+    assert left_physical.casefold() != right_physical.casefold()
+    assert not left_physical.endswith((" ", "."))
+    assert not right_physical.endswith((" ", "."))
+
+    store = RawObjectStore(tmp_path / "raw")
+    left_key = f"identity/{left}"
+    right_key = f"identity/{right}"
+    left_path = store.write_bytes(left_key, b"left")
+    right_path = store.write_bytes(right_key, b"right")
+    assert left_path != right_path
+    assert store.read_bytes(left_key) == b"left"
+    assert store.read_bytes(right_key) == b"right"
+
+
+def test_backslash_is_not_a_second_logical_separator(tmp_path: Path) -> None:
+    store = RawObjectStore(tmp_path / "raw")
+
+    with pytest.raises(ValueError, match="canonical '/' separators"):
+        store.object_path(r"identity\child")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="legacy physical layout is Windows-specific")
+def test_windows_legacy_physical_object_remains_readable(tmp_path: Path) -> None:
+    store = RawObjectStore(tmp_path / "raw")
+    object_key = "legacy/detail:1.json"
+    legacy_path = store._legacy_object_paths(object_key)[0]
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_bytes(b"legacy")
+
+    assert not store.object_path(object_key).exists()
+    assert store.read_bytes(object_key) == b"legacy"

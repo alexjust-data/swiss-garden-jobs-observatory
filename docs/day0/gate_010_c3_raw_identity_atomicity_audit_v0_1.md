@@ -132,15 +132,64 @@ writes. Source collector HTTP remained zero.
 
 ## Final validation
 
-- full pytest at final implementation state: 495 passed in 268.93 seconds;
-- focused storage/geospatial/browser: 35 passed;
-- original LU and GL failing collector regressions: passed;
+- pre-independent-audit full pytest: 495 passed in 268.93 seconds;
+- final corrected full pytest: 511 passed in 106.49 seconds;
+- focused storage/C2/C3/legacy geospatial: 47 passed;
+- browser: four passed;
+- original LU and GL collector regression module: eight passed;
 - concurrent identical Windows publication stress: 20/20 repeated passes;
 - Ruff: passed;
-- mypy: passed for 161 source files;
+- exact GitHub CI mypy inventory: passed for 162 source files;
+- local correction mypy inventory: passed for 161 source files;
 - Django system check: passed;
 - migration drift: none;
 - PostgreSQL existing-copy migration check: passed;
-- reference import on existing copy, twice: passed with identical counts;
-- isolated geospatial exact retry: zero provider requests;
+- PostgreSQL clean migration: passed;
+- reference import on existing and clean databases, twice each: passed with identical counts;
+- isolated geospatial exact retry: 51 existing, zero created, zero provider requests;
 - corrected downstream exact replay: all four IDs and fingerprints reused.
+## Independent-audit correction after 10f4732d
+
+Independent audit accepted the C3 architecture and historical 12+39 recovery, then identified
+three enforcement gaps at head 10f4732d4b9a3b6d48d36f46e4f894d5089e6ab2:
+
+1. the first Windows physical mapping could alias logical components under case-insensitive
+   filename semantics;
+2. RAW-root isolation compared only with the repository default and could be bypassed by a custom
+   production root or an injected resolver;
+3. cache acceptance did not prove the exact deterministic requested URL or restrict mutually
+   consistent cache/RAW content types to the SearchServer contract.
+
+The correction leaves RawArtifact.object_key unchanged. Canonical lower-case ASCII components
+remain compact; every component requiring representation receives a reserved ~raw~ prefix and
+delimited lower-case UTF-8 hex escapes. The resulting physical alphabet is stable under Windows
+case folding and covers upper/lower case pairs, DOS device names, forbidden characters, literal
+percent, the reserved prefix, trailing dot/space and Unicode case pairs. Backslash is rejected as
+a second logical separator. Pre-correction Windows paths remain read-compatible and are never
+silently overwritten or migrated.
+
+JOB_OBSERVATORY_OPERATIONAL_RAW_STORE_PATH now designates the actual operational root
+independently from the mutable execution root. Every batch validates the effective
+RawObjectStore.base_path, including injected resolvers. A non-operational database using the
+designated operational root fails before provider activity or evidence mutation; an explicitly
+distinct isolated root is accepted. Mutable arbitrary resolvers without a verifiable store fail
+closed.
+
+Cache reuse now recomputes request fingerprint, normalized request and exact build_url(request),
+validates the same-origin final URL, HTTP 200, an accepted application/json or
+application/geo+json content type, deterministic object key, full bytes, SHA-256, size and parsed
+payload. The same acceptance checks are independently applied to newly fetched responses before
+RAW publication or metadata creation.
+
+Adversarial tests cover Foo/foo, CON/con, A:B/a:b, percent versus forbidden-character encoding,
+reserved names, trailing dot/space, the reserved prefix and a Unicode case pair. They also cover
+custom/default operational roots, injected same/distinct stores, forged same-origin requested
+URLs, parseable text/plain responses, and metadata-conflict rollback in both target orders.
+Twenty repeated 24-way Windows publication runs converged without partial objects or
+temporary-file leakage.
+
+The preserved isolated acceptance copy was replayed after the correction. Geospatial execution
+found all 51 identities, created zero resolutions/cache/RAW/review evidence and made zero provider
+requests. Dedup, Premium, Dashboard and Readiness at 2026-08-14T17:33:00Z reused the exact IDs
+and fingerprints recorded above. The real operational database and the twelve incident rows
+remain unchanged.

@@ -12,8 +12,48 @@ class RawObjectAlreadyExistsError(FileExistsError):
     pass
 
 
+WINDOWS_PHYSICAL_PREFIX = "~raw~"
+WINDOWS_MAX_COMPONENT_LENGTH = 255
+
+
 def _encode_windows_physical_part(part: str) -> str:
-    marker = "~raw~"
+    """Encode one logical component injectively under Windows name folding.
+
+    Canonical lower-case ASCII components remain compact. Every component that
+    could alias after Windows case folding or filename normalization receives a
+    reserved prefix and delimited lower-case UTF-8 hex escapes.
+    """
+
+    stable = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_.")
+    stem = part.split(".", 1)[0]
+    reserved = {"con", "prn", "aux", "nul"} | {
+        f"{prefix}{number}" for prefix in ("com", "lpt") for number in range(1, 10)
+    }
+    if (
+        all(character in stable for character in part)
+        and not part.endswith((" ", "."))
+        and stem not in reserved
+    ):
+        return part
+    trailing_start = len(part.rstrip(" ."))
+    encoded_parts = [
+        (
+            character
+            if character in stable and not (index >= trailing_start and character in " .")
+            else "~" + character.encode("utf-8").hex() + "~"
+        )
+        for index, character in enumerate(part)
+    ]
+    encoded = WINDOWS_PHYSICAL_PREFIX + "".join(encoded_parts)
+    if len(encoded) > WINDOWS_MAX_COMPONENT_LENGTH:
+        raise ValueError("Object key component is too long for the Windows RAW store")
+    return encoded
+
+
+def _legacy_windows_physical_part(part: str) -> str:
+    """Return the pre-correction Windows mapping for read compatibility."""
+
+    marker = WINDOWS_PHYSICAL_PREFIX
     forbidden = '<>:"|?*'
     stem = part.split(".", 1)[0].upper()
     reserved = {"CON", "PRN", "AUX", "NUL"} | {
@@ -64,8 +104,13 @@ class RawObjectStore:
         )
         return self._bounded_path(physical_parts)
 
-    def _legacy_object_path(self, object_key: str) -> Path:
-        return self._bounded_path(self._validated_parts(object_key))
+    def _legacy_object_paths(self, object_key: str) -> tuple[Path, ...]:
+        parts = self._validated_parts(object_key)
+        candidates = (
+            self._bounded_path([_legacy_windows_physical_part(part) for part in parts]),
+            self._bounded_path(parts),
+        )
+        return tuple(dict.fromkeys(candidates))
 
     @staticmethod
     def _validated_parts(object_key: str) -> list[str]:
@@ -74,7 +119,9 @@ class RawObjectStore:
         if PurePosixPath(object_key).is_absolute() or PureWindowsPath(object_key).is_absolute():
             raise ValueError("Absolute object keys are not allowed")
 
-        parts = object_key.replace("\\", "/").split("/")
+        if "\\" in object_key:
+            raise ValueError("Object keys must use canonical '/' separators")
+        parts = object_key.split("/")
         if any(part in {"", ".", ".."} for part in parts):
             raise ValueError("Object key contains an unsafe path segment")
         return parts
@@ -98,14 +145,6 @@ class RawObjectStore:
 
     def write_bytes(self, object_key: str, content: bytes) -> Path:
         path = self.object_path(object_key)
-        if os.name == "nt":
-            legacy_path = self._legacy_object_path(object_key)
-            if legacy_path != path and legacy_path.exists():
-                if legacy_path.read_bytes() != content:
-                    raise RawObjectAlreadyExistsError(
-                        f"RAW object already exists with conflicting bytes: {object_key}"
-                    )
-                return legacy_path
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
         try:
@@ -137,7 +176,8 @@ class RawObjectStore:
     def read_bytes(self, object_key: str) -> bytes:
         path = self.object_path(object_key)
         if os.name == "nt" and not path.exists():
-            legacy_path = self._legacy_object_path(object_key)
-            if legacy_path != path and legacy_path.exists():
-                path = legacy_path
+            for legacy_path in self._legacy_object_paths(object_key):
+                if legacy_path != path and legacy_path.exists():
+                    path = legacy_path
+                    break
         return path.read_bytes()

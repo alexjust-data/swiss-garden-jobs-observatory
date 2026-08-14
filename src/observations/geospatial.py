@@ -33,6 +33,7 @@ HOST = "api3.geo.admin.ch"
 ENDPOINT = "https://api3.geo.admin.ch/rest/services/api/SearchServer"
 USER_AGENT = "SwissGardenJobsObservatory/0.1 (+https://github.com/alexjust-data/swiss-garden-jobs-observatory)"
 MAX_RESPONSE_BYTES = 1024 * 1024
+ACCEPTED_CONTENT_TYPES = frozenset({"application/json", "application/geo+json"})
 PRIVACY_POLICY_VERSION = "location-privacy-v0.1"
 
 
@@ -167,6 +168,30 @@ class GeoAdminSearchServerClient:
         ):
             raise GeospatialResolutionError("invalid SearchServer HTTP response")
         return GeocoderFetchedResponse(url, final_url, status, content_type, body)
+
+
+def validated_response_payload(
+    request: dict[str, object],
+    response: GeocoderFetchedResponse,
+) -> object:
+    expected_requested_url = build_url(request)
+    if response.requested_url != expected_requested_url:
+        raise GeospatialResolutionError(
+            "SearchServer requested URL does not match the normalized request"
+        )
+    validate_url(response.final_url)
+    if (
+        response.status_code != 200
+        or response.content_type not in ACCEPTED_CONTENT_TYPES
+        or len(response.body) > MAX_RESPONSE_BYTES
+    ):
+        raise GeospatialResolutionError("invalid SearchServer HTTP response")
+    try:
+        payload = json.loads(response.body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GeospatialResolutionError("invalid SearchServer JSON") from exc
+    candidates(payload)
+    return payload
 
 
 def number(value: object) -> float | None:
@@ -629,15 +654,7 @@ class GeospatialResolver:
             return entry
         self.stats.network_requests += 1
         response = self.client.fetch(request)
-        validate_url(response.requested_url)
-        validate_url(response.final_url)
-        if response.status_code != 200 or len(response.body) > MAX_RESPONSE_BYTES:
-            raise GeospatialResolutionError("invalid SearchServer response")
-        try:
-            payload = json.loads(response.body)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise GeospatialResolutionError("invalid SearchServer JSON") from exc
-        candidates(payload)
+        payload = validated_response_payload(request, response)
         digest = sha256_hex(response.body)
         key = (
             f"geocoder/{PROVIDER.lower()}/{PROVIDER_VERSION}/"
@@ -684,31 +701,39 @@ class GeospatialResolver:
         entry: GeocoderCacheEntry,
         request: dict[str, object],
     ) -> None:
+        expected_request_fingerprint = fingerprint(
+            {"provider": PROVIDER, "version": PROVIDER_VERSION, "request": request}
+        )
+        expected_requested_url = build_url(request)
         if (
             entry.provider != PROVIDER
             or entry.provider_version != PROVIDER_VERSION
             or entry.normalized_request != request
+            or entry.request_fingerprint != expected_request_fingerprint
+            or entry.requested_url != expected_requested_url
             or entry.http_status != 200
+            or entry.content_type not in ACCEPTED_CONTENT_TYPES
             or entry.content_type != entry.raw_artifact.content_type
         ):
             raise GeospatialResolutionError("existing geocoder cache metadata conflicts")
-        validate_url(entry.requested_url)
         validate_url(entry.final_url)
-        path = self.raw_store.object_path(entry.raw_artifact.object_key)
         expected_object_key = (
             f"geocoder/{PROVIDER.lower()}/{PROVIDER_VERSION}/"
             f"{entry.request_fingerprint}-{entry.raw_artifact.sha256_digest[:16]}.json"
         )
+        try:
+            raw_bytes = self.raw_store.read_bytes(entry.raw_artifact.object_key)
+        except (OSError, ValueError) as exc:
+            raise GeospatialResolutionError("existing geocoder RAW object conflicts") from exc
         if (
             entry.raw_artifact.object_key != expected_object_key
             or len(entry.raw_artifact.sha256_digest) != 64
-            or not path.is_file()
-            or path.stat().st_size != entry.raw_artifact.byte_size
-            or sha256_file(path) != entry.raw_artifact.sha256_digest
+            or len(raw_bytes) != entry.raw_artifact.byte_size
+            or sha256_hex(raw_bytes) != entry.raw_artifact.sha256_digest
         ):
             raise GeospatialResolutionError("existing geocoder RAW object conflicts")
         try:
-            payload = json.loads(path.read_bytes())
+            payload = json.loads(raw_bytes)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise GeospatialResolutionError("existing geocoder RAW JSON is invalid") from exc
         candidates(payload)

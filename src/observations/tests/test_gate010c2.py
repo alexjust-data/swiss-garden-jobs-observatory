@@ -25,6 +25,7 @@ from observations.geospatial import (
     GeospatialResolutionError,
     GeospatialResolver,
     LocationPrivacyContext,
+    build_url,
     fingerprint,
     normalized_request,
     resolution_input_fingerprint,
@@ -68,7 +69,7 @@ class FakeClient:
             },
             sort_keys=True,
         ).encode()
-        url = "https://api3.geo.admin.ch/rest/services/api/SearchServer?type=locations"
+        url = build_url(request)
         return GeocoderFetchedResponse(url, url, 200, "application/json", body)
 
 
@@ -79,6 +80,55 @@ class RegionFailingClient(FakeClient):
             self.requests.append(request)
             raise GeospatialResolutionError("injected second-target provider failure")
         return super().fetch(request)
+
+
+class StaticResponseClient:
+    def __init__(self, response: GeocoderFetchedResponse) -> None:
+        self.response = response
+        self.calls = 0
+
+    def fetch(self, request: dict[str, object]) -> GeocoderFetchedResponse:
+        self.calls += 1
+        return self.response
+
+
+def install_cache_fixture(
+    resolver: GeospatialResolver,
+    observation: PostingObservation,
+    *,
+    requested_url: str | None = None,
+    content_type: str = "application/json",
+) -> GeocoderCacheEntry:
+    request = normalized_request(
+        observation,
+        LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL,
+    )
+    assert request is not None
+    response = FakeClient().fetch(request)
+    request_digest = fingerprint(
+        {"provider": PROVIDER, "version": PROVIDER_VERSION, "request": request}
+    )
+    body_digest = sha256_hex(response.body)
+    key = f"geocoder/{PROVIDER.lower()}/{PROVIDER_VERSION}/{request_digest}-{body_digest[:16]}.json"
+    resolver.raw_store.write_bytes(key, response.body)
+    artifact = RawArtifact.objects.create(
+        object_key=key,
+        sha256_digest=body_digest,
+        byte_size=len(response.body),
+        content_type=content_type,
+    )
+    return GeocoderCacheEntry.objects.create(
+        provider=PROVIDER,
+        provider_version=PROVIDER_VERSION,
+        normalized_request=request,
+        request_fingerprint=request_digest,
+        requested_url=requested_url or build_url(request),
+        final_url=build_url(request),
+        http_status=200,
+        content_type=content_type,
+        raw_artifact=artifact,
+        response_payload=json.loads(response.body),
+    )
 
 
 class Gate010C2BatchTests(TestCase):
@@ -250,7 +300,7 @@ class Gate010C2BatchTests(TestCase):
         ):
             with self.assertRaisesRegex(
                 GeospatialBatchError,
-                "non-operational database must use an explicit isolated RAW store",
+                "non-operational database must use a distinct isolated RAW store",
             ):
                 resolve_premium_run_locations(upstream["premium_run"].pk, dry_run=True)
         assert PostingLocationResolution.objects.count() == 0
@@ -475,6 +525,211 @@ class Gate010C2BatchTests(TestCase):
         assert GeocoderCacheEntry.objects.count() == baseline["cache"]
         assert PostingLocationResolution.objects.count() == baseline["resolution"]
         assert GeocodingReviewItem.objects.count() == baseline["review"]
+
+    def test_custom_operational_raw_root_is_enforced_for_default_store(self) -> None:
+        upstream = create_dashboard_upstream(suffix="c3-custom-root")
+        operational_root = Path(self.raw.name) / "operational"
+        isolated_root = Path(self.raw.name) / "isolated"
+        operational_root.mkdir()
+        isolated_root.mkdir()
+        common = {
+            "JOB_OBSERVATORY_OPERATIONAL_DB_NAME": "not-this-test-database",
+            "JOB_OBSERVATORY_OPERATIONAL_RAW_STORE_PATH": operational_root,
+        }
+        with override_settings(
+            **common,
+            CORE_RAW_OBJECT_STORE_PATH=operational_root,
+        ):
+            with self.assertRaisesRegex(
+                GeospatialBatchError,
+                "non-operational database must use a distinct isolated RAW store",
+            ):
+                resolve_premium_run_locations(upstream["premium_run"].pk, dry_run=True)
+        with override_settings(
+            **common,
+            CORE_RAW_OBJECT_STORE_PATH=isolated_root,
+        ):
+            result = resolve_premium_run_locations(upstream["premium_run"].pk, dry_run=True)
+        assert result.selected == 1
+        assert PostingLocationResolution.objects.count() == 0
+
+    def test_injected_resolver_cannot_bypass_operational_raw_root_scope(self) -> None:
+        upstream = create_dashboard_upstream(suffix="c3-injected-root")
+        operational_root = Path(self.raw.name) / "designated-operational"
+        isolated_root = Path(self.raw.name) / "designated-isolated"
+        operational_root.mkdir()
+        isolated_root.mkdir()
+        client = FakeClient()
+        baseline_raw = RawArtifact.objects.count()
+        common = {
+            "JOB_OBSERVATORY_OPERATIONAL_DB_NAME": "not-this-test-database",
+            "JOB_OBSERVATORY_OPERATIONAL_RAW_STORE_PATH": operational_root,
+        }
+        with override_settings(**common):
+            with self.assertRaisesRegex(
+                GeospatialBatchError,
+                "non-operational database must use a distinct isolated RAW store",
+            ):
+                resolve_premium_run_locations(
+                    upstream["premium_run"].pk,
+                    resolver=GeospatialResolver(
+                        client=client,
+                        raw_store=RawObjectStore(operational_root),
+                    ),
+                )
+            result = resolve_premium_run_locations(
+                upstream["premium_run"].pk,
+                dry_run=True,
+                resolver=GeospatialResolver(
+                    client=client,
+                    raw_store=RawObjectStore(isolated_root),
+                ),
+            )
+        assert result.selected == 1
+        assert client.calls == 0
+        assert PostingLocationResolution.objects.count() == 0
+        assert RawArtifact.objects.count() == baseline_raw
+        assert GeocoderCacheEntry.objects.count() == 0
+
+    def test_cache_rejects_same_origin_but_non_deterministic_requested_url(self) -> None:
+        upstream = create_dashboard_upstream(suffix="c3-cache-url")
+        resolver = self.resolver(FakeClient())
+        request = normalized_request(
+            upstream["observation"],
+            LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL,
+        )
+        assert request is not None
+        wrong_request = dict(request)
+        wrong_request["searchText"] = "Zurich ZH"
+        install_cache_fixture(
+            resolver,
+            upstream["observation"],
+            requested_url=build_url(wrong_request),
+        )
+
+        with self.assertRaisesRegex(
+            GeospatialResolutionError,
+            "cache metadata conflicts",
+        ):
+            resolver.resolve(upstream["observation"])
+        assert PostingLocationResolution.objects.count() == 0
+
+    def test_cache_rejects_unaccepted_content_type_even_with_valid_json(self) -> None:
+        upstream = create_dashboard_upstream(suffix="c3-cache-content-type")
+        resolver = self.resolver(FakeClient())
+        install_cache_fixture(
+            resolver,
+            upstream["observation"],
+            content_type="text/plain",
+        )
+
+        with self.assertRaisesRegex(
+            GeospatialResolutionError,
+            "cache metadata conflicts",
+        ):
+            resolver.resolve(upstream["observation"])
+        assert PostingLocationResolution.objects.count() == 0
+
+    def test_fetched_response_requires_exact_requested_url_and_content_type(self) -> None:
+        for index, defect in enumerate(("requested_url", "content_type")):
+            upstream = create_dashboard_upstream(suffix=f"c3-response-{index}")
+            baseline_raw = RawArtifact.objects.count()
+            request = normalized_request(
+                upstream["observation"],
+                LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL,
+            )
+            assert request is not None
+            valid = FakeClient().fetch(request)
+            response = GeocoderFetchedResponse(
+                (
+                    "https://api3.geo.admin.ch/rest/services/api/SearchServer"
+                    "?type=locations&searchText=wrong"
+                    if defect == "requested_url"
+                    else valid.requested_url
+                ),
+                valid.final_url,
+                valid.status_code,
+                "text/plain" if defect == "content_type" else valid.content_type,
+                valid.body,
+            )
+            client = StaticResponseClient(response)
+            resolver = GeospatialResolver(
+                client=client,
+                raw_store=RawObjectStore(Path(self.raw.name) / f"response-{index}"),
+            )
+            with self.assertRaises(GeospatialResolutionError):
+                resolver.resolve(upstream["observation"])
+            assert client.calls == 1
+            assert RawArtifact.objects.count() == baseline_raw
+        assert PostingLocationResolution.objects.count() == 0
+        assert GeocoderCacheEntry.objects.count() == 0
+        assert GeocodingReviewItem.objects.count() == 0
+
+    def test_batch_raw_metadata_conflict_rolls_back_database_in_both_orders(self) -> None:
+        first = create_dashboard_upstream(location_region="ZH", suffix="c3-meta-a")
+        second = create_dashboard_upstream(location_region="BE", suffix="c3-meta-b")
+        second_premium = second["premium"]
+        combined = PremiumSegmentAssessment.objects.create(
+            run=first["premium_run"],
+            posting_observation=second["observation"],
+            green_relevance_assessment=second["green"],
+            green_result_origin=second_premium.green_result_origin,
+            effective_green_result=second_premium.effective_green_result,
+            segment=second_premium.segment,
+            assessment_status=second_premium.assessment_status,
+            method=second_premium.method,
+            evidence_strength=second_premium.evidence_strength,
+            matched_signal_ids=second_premium.matched_signal_ids,
+            matched_fields_and_scopes=second_premium.matched_fields_and_scopes,
+            matched_evidence=second_premium.matched_evidence,
+            prohibited_inferences=second_premium.prohibited_inferences,
+            privacy_context=second_premium.privacy_context,
+            evidence=second_premium.evidence,
+            created_at=second_premium.created_at,
+        )
+        request = normalized_request(
+            second["observation"],
+            LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL,
+        )
+        assert request is not None
+        response = FakeClient().fetch(request)
+        request_digest = fingerprint(
+            {"provider": PROVIDER, "version": PROVIDER_VERSION, "request": request}
+        )
+        body_digest = sha256_hex(response.body)
+        key = (
+            f"geocoder/{PROVIDER.lower()}/{PROVIDER_VERSION}/"
+            f"{request_digest}-{body_digest[:16]}.json"
+        )
+        baseline_artifact = RawArtifact.objects.create(
+            object_key=key,
+            sha256_digest=body_digest,
+            byte_size=len(response.body),
+            content_type="text/plain",
+        )
+        baseline = {
+            "raw": RawArtifact.objects.count(),
+            "cache": GeocoderCacheEntry.objects.count(),
+            "resolution": PostingLocationResolution.objects.count(),
+            "review": GeocodingReviewItem.objects.count(),
+        }
+
+        for index, order in enumerate(([first["premium"], combined], [combined, first["premium"]])):
+            raw_root = Path(self.raw.name) / f"metadata-order-{index}"
+            store = RawObjectStore(raw_root)
+            store.write_bytes(key, response.body)
+            client = FakeClient()
+            with patch("observations.geospatial_batch._targets", return_value=order):
+                with self.assertRaisesRegex(GeospatialBatchError, "rolled back"):
+                    resolve_premium_run_locations(
+                        first["premium_run"].pk,
+                        resolver=GeospatialResolver(client=client, raw_store=store),
+                    )
+            assert RawArtifact.objects.get(pk=baseline_artifact.pk).content_type == "text/plain"
+            assert RawArtifact.objects.count() == baseline["raw"]
+            assert GeocoderCacheEntry.objects.count() == baseline["cache"]
+            assert PostingLocationResolution.objects.count() == baseline["resolution"]
+            assert GeocodingReviewItem.objects.count() == baseline["review"]
 
 
 @pytest.mark.django_db(transaction=True)
