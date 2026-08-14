@@ -240,6 +240,8 @@ def jobs_page(request: HttpRequest) -> HttpResponse:
             "scope_notice": SCOPE_NOTICE,
             "map_style_url": settings.DASHBOARD_MAP_STYLE_URL,
             "map_attribution": settings.DASHBOARD_MAP_ATTRIBUTION,
+            "map_provider": settings.DASHBOARD_MAP_PROVIDER,
+            "google_maps_api_key": settings.GOOGLE_MAPS_API_KEY,
         },
     )
 
