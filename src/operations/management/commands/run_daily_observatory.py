@@ -27,7 +27,13 @@ class Command(BaseCommand):
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument("--cycle-id")
         parser.add_argument(
-            "--trigger", choices=[item.value for item in ObservatoryCycle.Trigger], default="MANUAL"
+            "--trigger",
+            choices=[
+                ObservatoryCycle.Trigger.MANUAL.value,
+                ObservatoryCycle.Trigger.SCHEDULED.value,
+                ObservatoryCycle.Trigger.RECOVERY.value,
+            ],
+            default=ObservatoryCycle.Trigger.MANUAL.value,
         )
         parser.add_argument("--resume", action="store_true")
         parser.add_argument("--delay-seconds", type=float, default=1.0)

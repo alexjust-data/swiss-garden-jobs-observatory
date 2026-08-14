@@ -324,7 +324,9 @@ def _seal_failure(
     cycle.failure_code = code
     cycle.failure_evidence = {"stage": stage, "error": _bounded_error(exc)}
     cycle.save()
-    _event(cycle, "CYCLE_FAILED", OperationalEvent.Severity.ERROR, detail=cycle.failure_evidence)
+    _event(
+        cycle, "CYCLE_FAILED", OperationalEvent.Severity.ERROR.value, detail=cycle.failure_evidence
+    )
 
 
 def _previous_success(cycle: ObservatoryCycle) -> ObservatoryCycle | None:
@@ -345,7 +347,7 @@ def _previous_success(cycle: ObservatoryCycle) -> ObservatoryCycle | None:
 def run_cycle(
     *,
     cycle_id: uuid.UUID | None = None,
-    trigger: str = ObservatoryCycle.Trigger.MANUAL,
+    trigger: str = ObservatoryCycle.Trigger.MANUAL.value,
     resume: bool = False,
     delay_seconds: float = 1.0,
     timeout_seconds: int = DEFAULT_CYCLE_TIMEOUT_SECONDS,
@@ -393,13 +395,11 @@ def run_cycle(
             _event(
                 cycle,
                 "STALE_CYCLE_DETECTED",
-                OperationalEvent.Severity.WARNING,
+                OperationalEvent.Severity.WARNING.value,
                 detail={"heartbeat_at": heartbeat.isoformat(), "timeout_seconds": timeout_seconds},
             )
     else:
-        configuration = cycle_configuration(
-            trigger, source_ids, timeout_seconds=timeout_seconds
-        )
+        configuration = cycle_configuration(trigger, source_ids, timeout_seconds=timeout_seconds)
         fingerprint = _sha256(configuration)
         cycle = ObservatoryCycle.objects.create(
             id=cycle_id or uuid.uuid4(),
@@ -423,7 +423,7 @@ def run_cycle(
             _event(
                 cycle,
                 "CYCLE_FAILED",
-                OperationalEvent.Severity.WARNING,
+                OperationalEvent.Severity.WARNING.value,
                 detail=cycle.failure_evidence,
             )
             return CycleResult(cycle, False)
@@ -439,9 +439,7 @@ def run_cycle(
         )
         if other_running is not None:
             heartbeat = (
-                other_running.heartbeat_at
-                or other_running.started_at
-                or other_running.requested_at
+                other_running.heartbeat_at or other_running.started_at or other_running.requested_at
             )
             stale = timezone.now() - heartbeat > timedelta(seconds=timeout_seconds)
             code = "STALE_CYCLE_DETECTED" if stale else "CONCURRENT_CYCLE_RUNNING"
@@ -455,7 +453,9 @@ def run_cycle(
                 "http_requests": 0,
             }
             cycle.save()
-            _event(cycle, code, OperationalEvent.Severity.WARNING, detail=cycle.failure_evidence)
+            _event(
+                cycle, code, OperationalEvent.Severity.WARNING.value, detail=cycle.failure_evidence
+            )
             return CycleResult(cycle, False)
         invocation_started = timezone.now()
         now = invocation_started
@@ -529,7 +529,7 @@ def run_cycle(
                     _event(
                         cycle,
                         "SOURCE_INCOMPLETE",
-                        OperationalEvent.Severity.WARNING,
+                        OperationalEvent.Severity.WARNING.value,
                         source=source,
                         detail={"run": str(run.pk)},
                     )
@@ -550,7 +550,7 @@ def run_cycle(
                 _event(
                     cycle,
                     "SOURCE_DEGRADED",
-                    OperationalEvent.Severity.WARNING,
+                    OperationalEvent.Severity.WARNING.value,
                     source=source,
                     detail={"error_type": type(exc).__name__},
                 )
@@ -575,7 +575,7 @@ def run_cycle(
             _seal_failure(
                 cycle,
                 "green_continuity",
-                ObservatoryCycle.Status.FAILED_CONTINUITY,
+                ObservatoryCycle.Status.FAILED_CONTINUITY.value,
                 "GREEN_CONTINUITY_FAILED",
                 exc,
             )
@@ -601,7 +601,9 @@ def run_cycle(
             _save_stage(cycle, "dedup", "SUCCEEDED")
             _save_stage(cycle, "dedup_continuity", "SUCCEEDED")
         except Exception as exc:
-            _seal_failure(cycle, "dedup", ObservatoryCycle.Status.FAILED_DEDUP, "DEDUP_FAILED", exc)
+            _seal_failure(
+                cycle, "dedup", ObservatoryCycle.Status.FAILED_DEDUP.value, "DEDUP_FAILED", exc
+            )
             return CycleResult(cycle, False)
         dedup_created = DedupReviewDecisionApplication.objects.count() - dedup_before
         try:
@@ -616,7 +618,11 @@ def run_cycle(
             _save_stage(cycle, "premium", "SUCCEEDED")
         except Exception as exc:
             _seal_failure(
-                cycle, "premium", ObservatoryCycle.Status.FAILED_PREMIUM, "PREMIUM_FAILED", exc
+                cycle,
+                "premium",
+                ObservatoryCycle.Status.FAILED_PREMIUM.value,
+                "PREMIUM_FAILED",
+                exc,
             )
             return CycleResult(cycle, False)
         try:
@@ -635,7 +641,7 @@ def run_cycle(
             _seal_failure(
                 cycle,
                 "dashboard",
-                ObservatoryCycle.Status.FAILED_DASHBOARD,
+                ObservatoryCycle.Status.FAILED_DASHBOARD.value,
                 "DASHBOARD_BUILD_FAILED",
                 exc,
             )
@@ -659,7 +665,7 @@ def run_cycle(
             _seal_failure(
                 cycle,
                 "readiness",
-                ObservatoryCycle.Status.FAILED_READINESS,
+                ObservatoryCycle.Status.FAILED_READINESS.value,
                 "READINESS_FAILED",
                 exc,
             )
@@ -708,7 +714,7 @@ def run_cycle(
                 _event(
                     cycle,
                     "AUTHORIZATION_CHANGED",
-                    OperationalEvent.Severity.WARNING,
+                    OperationalEvent.Severity.WARNING.value,
                     detail={"from": old, "to": readiness.readiness_status},
                 )
         return CycleResult(cycle, False)

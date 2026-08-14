@@ -76,6 +76,11 @@ A PostgreSQL 16 custom backup of the post-cycle database had SHA-256
 database, passed Django and reference checks, and reproduced the accepted cycle plus its four pinned
 artifacts without altering the operational database.
 
+The first PR head revealed a Python 3.12 mypy-only `TextChoices` inference mismatch. Operational
+calls now pass explicit `.value` strings and the management command declares its three trigger values
+explicitly. This changes neither persisted values nor execution semantics; focused and full tests
+remained green.
+
 ## Preservation
 
 GATE-012 does not change frozen research, green classifier/review/material semantics,
