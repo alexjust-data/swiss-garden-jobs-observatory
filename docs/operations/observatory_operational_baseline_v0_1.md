@@ -1,6 +1,6 @@
 # Observatory Operational Baseline v0.1
 
-Status: implementation acceptance pending
+Status: live operational acceptance recorded
 
 - cycle version: `daily-observatory-cycle-v0.1`
 - governed required Sources: 29
@@ -8,10 +8,14 @@ Status: implementation acceptance pending
 - blocked Sources: nine; never requested by the daily cycle
 - minimum Day-0 coverage: 24/29
 - known persistent blocker: structural acquisition coverage below minimum
-- known critical reviews at merged GATE-011G baseline: two green, zero dedup
-- current Day-0 authorization: blocked; headline null
-- PIT_HISTORY_START: pending first accepted production-intended GATE-012 cycle
+- accepted live cycle: `72630745-5100-4f63-92b9-d8e2e35c2a0b`
+- PIT cutoff: `2026-08-14T00:07:17.897427Z`
+- source result: 19 healthy successes, one fail-closed source failure (`SRC-OFF-CANTON-TG`)
+- operational health: `AMBER`
+- current critical reviews: three green, zero dedup
+- current Day-0 authorization: `DAY_0_BLOCKED_BY_DATA_QUALITY`; headline null
+- PIT_HISTORY_START: `2026-08-14T00:12:12.576783Z`
 
-Dynamic cycle IDs, runtime counts, and artifact fingerprints belong to live acceptance evidence, not
-normative policy. This document is finalized after acceptance without changing the frozen operating
-contract.
+Dynamic artifact IDs and fingerprints are recorded in
+`docs/operations/gate_012_operational_acceptance_v0_1.md`; they are evidence, not normative policy.
+The frozen operating contract was not changed after measurement.
