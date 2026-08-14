@@ -28,4 +28,3 @@ staticfiles/
 # Environment
 .env
 node_modules/
-src/dashboard/static/dashboard/vendor/

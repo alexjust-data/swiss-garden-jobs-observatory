@@ -483,9 +483,9 @@ import * as maplibregl from "./vendor/maplibre-gl.mjs";
       updateMap();
     });
     map.on("error", function () {
-      if (!configured) return;
-      mapEmpty.hidden = false;
-      mapEmpty.textContent = "The configured basemap is unavailable. Job records remain in the table.";
+      showMapMessage(configured
+        ? "The configured basemap is unavailable. Job records remain in the table."
+        : "The swisstopo basemap is unavailable. Job records remain in the table.");
     });
   }
 

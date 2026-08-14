@@ -13,7 +13,7 @@ from urllib.parse import urlencode, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 
 from core.hashing import sha256_file, sha256_hex
 from core.models import RawArtifact
@@ -343,14 +343,20 @@ class GeospatialResolver:
         ),
     ) -> PostingLocationResolution:
         self.stats.observations_considered += 1
-        existing = PostingLocationResolution.objects.filter(
-            posting_observation=observation,
-            resolver_version=self.resolver_version,
-            privacy_context=privacy_context.value,
-        ).first()
-        if existing:
-            self.stats.already_resolved += 1
-            return existing
+        with transaction.atomic():
+            self._advisory_lock(
+                "resolution",
+                str(observation.pk),
+                self.resolver_version,
+                privacy_context.value,
+            )
+            return self._resolve_locked(observation, privacy_context)
+
+    def _resolve_locked(
+        self,
+        observation: PostingObservation,
+        privacy_context: LocationPrivacyContext,
+    ) -> PostingLocationResolution:
         protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
         municipality = observation.municipality
         municipality_bfs = municipality.pk if municipality else None
@@ -382,6 +388,18 @@ class GeospatialResolver:
                 "jobLocation": observation.structured_payload.get("jobLocation"),
             }
         input_fingerprint = fingerprint(input_value)
+        existing = PostingLocationResolution.objects.filter(
+            posting_observation=observation,
+            resolver_version=self.resolver_version,
+            privacy_context=privacy_context.value,
+        ).first()
+        if existing:
+            if existing.input_fingerprint != input_fingerprint:
+                raise GeospatialResolutionError(
+                    "existing location resolution conflicts with current governed input"
+                )
+            self.stats.already_resolved += 1
+            return existing
         evidence: dict[str, Any] = {
             "input": input_value,
             "input_fingerprint": input_fingerprint,
@@ -549,6 +567,7 @@ class GeospatialResolver:
         request_fingerprint = fingerprint(
             {"provider": PROVIDER, "version": PROVIDER_VERSION, "request": request}
         )
+        self._advisory_lock("cache", PROVIDER, PROVIDER_VERSION, request_fingerprint)
         self.stats.unique_geocoder_requests.add(request_fingerprint)
         entry = GeocoderCacheEntry.objects.filter(
             provider=PROVIDER,
@@ -596,6 +615,15 @@ class GeospatialResolver:
                 raw_artifact=artifact,
                 response_payload=payload,
             )
+
+    @staticmethod
+    def _advisory_lock(*parts: str) -> None:
+        if connection.vendor != "postgresql":
+            return
+        digest = hashlib.sha256(chr(31).join(parts).encode()).digest()
+        lock_key = int.from_bytes(digest[:8], byteorder="big", signed=True)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_xact_lock(%s)", [lock_key])
 
     def persist(
         self,

@@ -78,6 +78,9 @@ class DashboardBrowserAcceptance(StaticLiveServerTestCase):
             page.get_by_label("Search").fill("Gardener")
             page.get_by_role("button", name="Apply filters").click()
             page.wait_for_function("window.location.search === '?q=Gardener'")
+            page.wait_for_function(
+                "document.querySelector('#quality-note').getAttribute('aria-busy') === 'false'"
+            )
             row = page.locator("#results-body tr").first
             row.wait_for(state="visible")
             row.focus()
@@ -140,6 +143,29 @@ class DashboardBrowserAcceptance(StaticLiveServerTestCase):
 
         assert swisstopo_requests
         assert external_requests == []
+
+    def test_default_swisstopo_failure_is_visible_and_table_remains_available(self) -> None:
+        local_host = urlparse(self.live_server_url).netloc
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+
+            def route_request(route: Route) -> None:
+                host = urlparse(route.request.url).netloc
+                if host == "wmts.geo.admin.ch":
+                    route.fulfill(status=503, content_type="text/plain", body="unavailable")
+                elif host and host != local_host:
+                    route.abort()
+                else:
+                    route.continue_()
+
+            page.route("**/*", route_request)
+            page.goto(self.live_server_url + "/jobs/", wait_until="networkidle")
+            assert page.get_by_text(
+                "The swisstopo basemap is unavailable.", exact=False
+            ).is_visible()
+            assert page.locator("#results-body tr").first.is_visible()
+            browser.close()
 
     @override_settings(DASHBOARD_MAP_PROVIDER="google", GOOGLE_MAPS_API_KEY="")
     def test_google_provider_without_key_fails_visibly_without_external_request(self) -> None:
