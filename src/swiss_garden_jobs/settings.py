@@ -106,6 +106,13 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORE_RAW_OBJECT_STORE_PATH = _env("JOB_OBSERVATORY_RAW_STORE_PATH", str(BASE_DIR / "data" / "raw"))
+JOB_OBSERVATORY_OPERATIONAL_RAW_STORE_PATH = _env(
+    "JOB_OBSERVATORY_OPERATIONAL_RAW_STORE_PATH",
+    str(CORE_RAW_OBJECT_STORE_PATH),
+)
+JOB_OBSERVATORY_OPERATIONAL_DB_NAME = _env(
+    "JOB_OBSERVATORY_OPERATIONAL_DB_NAME", "swiss_garden_jobs"
+)
 DASHBOARD_MAP_STYLE_URL = _env("DASHBOARD_MAP_STYLE_URL")
 DASHBOARD_MAP_ATTRIBUTION = _env(
     "DASHBOARD_MAP_ATTRIBUTION",
@@ -113,7 +120,5 @@ DASHBOARD_MAP_ATTRIBUTION = _env(
 )
 DASHBOARD_MAP_PROVIDER = _env("DASHBOARD_MAP_PROVIDER", "maplibre").lower()
 if DASHBOARD_MAP_PROVIDER not in {"maplibre", "google"}:
-    raise ImproperlyConfigured(
-        "DASHBOARD_MAP_PROVIDER must be either 'maplibre' or 'google'"
-    )
+    raise ImproperlyConfigured("DASHBOARD_MAP_PROVIDER must be either 'maplibre' or 'google'")
 GOOGLE_MAPS_API_KEY = _env("GOOGLE_MAPS_API_KEY")
