@@ -112,3 +112,7 @@ rejects conflicting bytes before new publication, and rejects ambiguous/case-fol
 Reads also reconcile exact canonical and legacy representations and fail closed on conflicting
 dual-layout evidence. Historical objects are not migrated, overwritten or deleted. This changes
 no RAW logical key, database authority, scientific semantics or accepted PIT artifact.
+
+The cross-platform acceptance test models the Windows case-folded destination collision
+explicitly when it runs on a case-sensitive filesystem. This is test-environment fidelity only;
+the governed production behavior and storage decision are unchanged.

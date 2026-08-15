@@ -134,7 +134,8 @@ writes. Source collector HTTP remained zero.
 
 - pre-independent-audit full pytest: 495 passed in 268.93 seconds;
 - first corrected full pytest: 511 passed in 106.49 seconds;
-- final legacy-lockdown full pytest: 516 passed in 110.78 seconds;
+- legacy-lockdown full pytest: 516 passed in 110.78 seconds;
+- final cross-platform CI-lockdown pytest: 516 passed in 120.32 seconds;
 - focused storage/C2/C3/legacy geospatial: 47 passed;
 - browser: four passed;
 - original LU and GL collector regression module: eight passed;
@@ -217,3 +218,12 @@ and therefore fails closed, conflicting dual layouts, exact legacy reads, new-la
 24-way convergence and temporary-file cleanup. The focused storage/C2/C3 suite passes 52 tests.
 The accepted 51-row isolated corpus and four PIT artifacts remain replay-only evidence; no Source
 HTTP or real operational database write is authorized by this correction.
+
+### Cross-platform CI simulation correction
+
+The first exact-head CI run after the legacy lockdown failed one test at head
+`26925794fd0d40d3e6be0effc7d445ab5e646258`: Linux correctly allowed physical siblings named
+`Foo` and `foo`, so merely enabling the Windows mapping did not reproduce Windows rename
+collision semantics. Production code was unchanged. The test now explicitly injects the
+case-insensitive `FileExistsError` at publication and proves that exact ownership revalidation
+rejects the alias. The complete suite passes 516 tests on Windows after this correction.

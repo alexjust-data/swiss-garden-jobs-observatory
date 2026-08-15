@@ -234,6 +234,7 @@ def test_windows_conflicting_dual_layout_fails_closed(
 def test_windows_legacy_uppercase_alias_blocks_lowercase_new_identity(
     tmp_path: Path,
     windows_layout: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = RawObjectStore(tmp_path / "raw")
     upper_legacy_path = store._legacy_object_paths("legacy/Foo")[0]
@@ -241,6 +242,10 @@ def test_windows_legacy_uppercase_alias_blocks_lowercase_new_identity(
     upper_legacy_path.parent.mkdir(parents=True, exist_ok=True)
     upper_legacy_path.write_bytes(b"same")
 
+    def refuse_casefolded_alias(_source: str | Path, destination: str | Path) -> None:
+        raise FileExistsError(destination)
+
+    monkeypatch.setattr("core.storage.os.rename", refuse_casefolded_alias)
     with pytest.raises(FileNotFoundError):
         store.read_bytes("legacy/foo")
     with pytest.raises(RawObjectAlreadyExistsError, match="another logical key"):
