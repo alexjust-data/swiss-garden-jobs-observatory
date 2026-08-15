@@ -100,17 +100,71 @@ class RawObjectStore:
     def object_path(self, object_key: str) -> Path:
         parts = self._validated_parts(object_key)
         physical_parts = (
-            [self._windows_physical_part(part) for part in parts] if os.name == "nt" else parts
+            [self._windows_physical_part(part) for part in parts]
+            if self._uses_windows_layout()
+            else parts
         )
         return self._bounded_path(physical_parts)
 
+    @staticmethod
+    def _uses_windows_layout() -> bool:
+        return os.name == "nt"
+
     def _legacy_object_paths(self, object_key: str) -> tuple[Path, ...]:
         parts = self._validated_parts(object_key)
-        candidates = (
-            self._bounded_path([_legacy_windows_physical_part(part) for part in parts]),
-            self._bounded_path(parts),
-        )
+        legacy_parts = [_legacy_windows_physical_part(part) for part in parts]
+        candidates = [self._bounded_path(legacy_parts)]
+        if legacy_parts == parts:
+            candidates.append(self._bounded_path(parts))
         return tuple(dict.fromkeys(candidates))
+
+    def _exact_existing_path(self, path: Path) -> Path | None:
+        """Resolve a store path only when every component has exact spelling.
+
+        Windows path lookup is case-insensitive by default. Directory inventory
+        is therefore required to prove that a legacy physical name belongs to
+        the requested logical key rather than to a case-folded sibling.
+        """
+
+        relative_parts = path.relative_to(self.base_path).parts
+        current = self.base_path
+        for expected_name in relative_parts:
+            try:
+                exact_matches = [
+                    entry for entry in os.scandir(current) if entry.name == expected_name
+                ]
+            except FileNotFoundError:
+                return None
+            if len(exact_matches) > 1:
+                raise RawObjectAlreadyExistsError(
+                    "RAW physical ownership is ambiguous under legacy mapping"
+                )
+            if not exact_matches:
+                return None
+            current = Path(exact_matches[0].path)
+            if current.is_symlink():
+                raise ValueError("Object key traverses a symbolic link")
+        return current
+
+    def _exact_legacy_paths(self, object_key: str) -> tuple[Path, ...]:
+        exact_paths: list[Path] = []
+        for candidate in self._legacy_object_paths(object_key):
+            existing = self._exact_existing_path(candidate)
+            if existing is not None and existing not in exact_paths:
+                exact_paths.append(existing)
+        return tuple(exact_paths)
+
+    @staticmethod
+    def _require_identical_existing(
+        object_key: str,
+        paths: tuple[Path, ...],
+        content: bytes,
+    ) -> None:
+        for existing in paths:
+            if _read_concurrent_winner(existing) != content:
+                raise RawObjectAlreadyExistsError(
+                    f"RAW object already exists with conflicting bytes: {object_key}"
+                )
 
     @staticmethod
     def _validated_parts(object_key: str) -> list[str]:
@@ -145,6 +199,15 @@ class RawObjectStore:
 
     def write_bytes(self, object_key: str, content: bytes) -> Path:
         path = self.object_path(object_key)
+        if self._uses_windows_layout():
+            exact_path = self._exact_existing_path(path)
+            legacy_paths = tuple(
+                legacy for legacy in self._exact_legacy_paths(object_key) if legacy != exact_path
+            )
+            existing_paths = ((exact_path,) if exact_path is not None else ()) + legacy_paths
+            if existing_paths:
+                self._require_identical_existing(object_key, existing_paths, content)
+                return exact_path or legacy_paths[0]
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
         try:
@@ -159,11 +222,25 @@ class RawObjectStore:
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
-            if os.name == "nt":
+            if self._uses_windows_layout():
                 os.rename(temporary, path)
             else:
                 os.link(temporary, path)
         except FileExistsError as exc:
+            if self._uses_windows_layout():
+                exact_path = self._exact_existing_path(path)
+                legacy_paths = tuple(
+                    legacy
+                    for legacy in self._exact_legacy_paths(object_key)
+                    if legacy != exact_path
+                )
+                exact_existing = ((exact_path,) if exact_path is not None else ()) + legacy_paths
+                if not exact_existing:
+                    raise RawObjectAlreadyExistsError(
+                        f"RAW physical path is owned by another logical key: {object_key}"
+                    ) from exc
+                self._require_identical_existing(object_key, exact_existing, content)
+                return exact_path or legacy_paths[0]
             if _read_concurrent_winner(path) != content:
                 raise RawObjectAlreadyExistsError(
                     f"RAW object already exists with conflicting bytes: {object_key}"
@@ -175,9 +252,15 @@ class RawObjectStore:
 
     def read_bytes(self, object_key: str) -> bytes:
         path = self.object_path(object_key)
-        if os.name == "nt" and not path.exists():
-            for legacy_path in self._legacy_object_paths(object_key):
-                if legacy_path != path and legacy_path.exists():
-                    path = legacy_path
-                    break
+        if self._uses_windows_layout():
+            exact_path = self._exact_existing_path(path)
+            legacy_paths = tuple(
+                legacy for legacy in self._exact_legacy_paths(object_key) if legacy != exact_path
+            )
+            existing_paths = ((exact_path,) if exact_path is not None else ()) + legacy_paths
+            if not existing_paths:
+                raise FileNotFoundError(path)
+            content = _read_concurrent_winner(existing_paths[0])
+            self._require_identical_existing(object_key, existing_paths[1:], content)
+            return content
         return path.read_bytes()

@@ -152,8 +152,15 @@ def test_backslash_is_not_a_second_logical_separator(tmp_path: Path) -> None:
         store.object_path(r"identity\child")
 
 
-@pytest.mark.skipif(os.name != "nt", reason="legacy physical layout is Windows-specific")
-def test_windows_legacy_physical_object_remains_readable(tmp_path: Path) -> None:
+@pytest.fixture
+def windows_layout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(RawObjectStore, "_uses_windows_layout", staticmethod(lambda: True))
+
+
+def test_windows_legacy_physical_object_remains_readable(
+    tmp_path: Path,
+    windows_layout: None,
+) -> None:
     store = RawObjectStore(tmp_path / "raw")
     object_key = "legacy/detail:1.json"
     legacy_path = store._legacy_object_paths(object_key)[0]
@@ -162,3 +169,82 @@ def test_windows_legacy_physical_object_remains_readable(tmp_path: Path) -> None
 
     assert not store.object_path(object_key).exists()
     assert store.read_bytes(object_key) == b"legacy"
+
+
+@pytest.mark.parametrize("content", (b"legacy", b"different"))
+def test_windows_write_reconciles_exact_legacy_identity_before_publication(
+    tmp_path: Path,
+    windows_layout: None,
+    content: bytes,
+) -> None:
+    store = RawObjectStore(tmp_path / "raw")
+    object_key = "legacy/detail:1.json"
+    legacy_path = store._legacy_object_paths(object_key)[0]
+    new_path = store.object_path(object_key)
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_bytes(b"legacy")
+
+    if content == b"legacy":
+        assert store.write_bytes(object_key, content) == legacy_path
+    else:
+        with pytest.raises(RawObjectAlreadyExistsError, match="conflicting bytes"):
+            store.write_bytes(object_key, content)
+
+    assert legacy_path.read_bytes() == b"legacy"
+    assert not new_path.exists()
+
+
+def test_windows_legacy_case_alias_cannot_claim_another_logical_key(
+    tmp_path: Path,
+    windows_layout: None,
+) -> None:
+    store = RawObjectStore(tmp_path / "raw")
+    lower_path = store._legacy_object_paths("legacy/foo")[0]
+    upper_new_path = store.object_path("legacy/Foo")
+    lower_path.parent.mkdir(parents=True, exist_ok=True)
+    lower_path.write_bytes(b"lower")
+
+    with pytest.raises(FileNotFoundError):
+        store.read_bytes("legacy/Foo")
+
+    assert store.write_bytes("legacy/Foo", b"upper") == upper_new_path
+    assert store.read_bytes("legacy/foo") == b"lower"
+    assert store.read_bytes("legacy/Foo") == b"upper"
+
+
+def test_windows_conflicting_dual_layout_fails_closed(
+    tmp_path: Path,
+    windows_layout: None,
+) -> None:
+    store = RawObjectStore(tmp_path / "raw")
+    object_key = "legacy/detail:1.json"
+    legacy_path = store._legacy_object_paths(object_key)[0]
+    new_path = store.object_path(object_key)
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_bytes(b"legacy")
+    new_path.write_bytes(b"shadow")
+
+    with pytest.raises(RawObjectAlreadyExistsError, match="conflicting bytes"):
+        store.read_bytes(object_key)
+    with pytest.raises(RawObjectAlreadyExistsError, match="conflicting bytes"):
+        store.write_bytes(object_key, b"shadow")
+
+
+def test_windows_legacy_uppercase_alias_blocks_lowercase_new_identity(
+    tmp_path: Path,
+    windows_layout: None,
+) -> None:
+    store = RawObjectStore(tmp_path / "raw")
+    upper_legacy_path = store._legacy_object_paths("legacy/Foo")[0]
+    lower_new_path = store.object_path("legacy/foo")
+    upper_legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    upper_legacy_path.write_bytes(b"same")
+
+    with pytest.raises(FileNotFoundError):
+        store.read_bytes("legacy/foo")
+    with pytest.raises(RawObjectAlreadyExistsError, match="another logical key"):
+        store.write_bytes("legacy/foo", b"same")
+
+    assert upper_legacy_path.read_bytes() == b"same"
+    assert not store._exact_existing_path(lower_new_path)

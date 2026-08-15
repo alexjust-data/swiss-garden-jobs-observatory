@@ -98,3 +98,17 @@ incident. Cache and fetched-response acceptance now independently bind exact req
 same-origin URL, status, accepted content type, bytes, SHA, size and parsed payload. The existing
 isolated 51-resolution corpus and all four downstream PIT artifacts replay exactly with zero
 provider requests. No real operational evidence was modified.
+
+## Final legacy-identity lockdown
+
+At audited head `a6294f63533f6d04b97ffea00deb78019d380029`, independent review
+found that legacy compatibility remained physical-path based: a later write could shadow an exact
+legacy logical object under the new filename mapping, and case-insensitive lookup could confuse a
+case-folded sibling with exact ownership.
+
+Legacy compatibility now proves every component using exact directory-entry spelling. The store
+reuses identical bytes only for an exact legacy representation of the requested logical key,
+rejects conflicting bytes before new publication, and rejects ambiguous/case-folded ownership.
+Reads also reconcile exact canonical and legacy representations and fail closed on conflicting
+dual-layout evidence. Historical objects are not migrated, overwritten or deleted. This changes
+no RAW logical key, database authority, scientific semantics or accepted PIT artifact.

@@ -133,7 +133,8 @@ writes. Source collector HTTP remained zero.
 ## Final validation
 
 - pre-independent-audit full pytest: 495 passed in 268.93 seconds;
-- final corrected full pytest: 511 passed in 106.49 seconds;
+- first corrected full pytest: 511 passed in 106.49 seconds;
+- final legacy-lockdown full pytest: 516 passed in 110.78 seconds;
 - focused storage/C2/C3/legacy geospatial: 47 passed;
 - browser: four passed;
 - original LU and GL collector regression module: eight passed;
@@ -193,3 +194,26 @@ found all 51 identities, created zero resolutions/cache/RAW/review evidence and 
 requests. Dedup, Premium, Dashboard and Readiness at 2026-08-14T17:33:00Z reused the exact IDs
 and fingerprints recorded above. The real operational database and the twelve incident rows
 remain unchanged.
+
+## Final legacy-identity lockdown after a6294f6
+
+Independent audit at head `a6294f63533f6d04b97ffea00deb78019d380029` accepted the new
+Windows encoding, RAW-root lineage and cache provenance, then identified one transition defect:
+a historical exact logical key could remain at its legacy physical representation while a
+conflicting write published the same logical key under the new representation. The legacy read
+fallback also used case-insensitive path existence as if it proved exact logical ownership.
+
+The final correction inventories each physical component by exact directory-entry spelling.
+Before Windows publication it reconciles the canonical path and every physically valid legacy
+representation of the same requested logical key. Exact legacy bytes are reused without creating
+a new path; different bytes fail before publication. Reads likewise compare every exact
+representation and fail if dual-layout bytes conflict. A case-folded sibling is never accepted as
+ownership evidence. If a differently cased legacy sibling occupies a Windows-equivalent path,
+publication fails closed even when its bytes happen to match.
+
+Tests cover exact legacy reuse, conflicting legacy writes, colon-key reuse/conflict, lower-case
+legacy plus distinct upper-case canonical publication, the inverse alias that cannot be represented
+and therefore fails closed, conflicting dual layouts, exact legacy reads, new-layout injectivity,
+24-way convergence and temporary-file cleanup. The focused storage/C2/C3 suite passes 52 tests.
+The accepted 51-row isolated corpus and four PIT artifacts remain replay-only evidence; no Source
+HTTP or real operational database write is authorized by this correction.
