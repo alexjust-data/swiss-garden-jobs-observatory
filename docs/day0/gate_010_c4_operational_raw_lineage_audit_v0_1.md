@@ -204,10 +204,11 @@ mutation. Real operational root designation occurs only after independent audit 
 
 - C4 tests: 15 passed;
 - C2/C3 storage/geospatial regressions: 73 passed;
-- complete pytest suite: 531 passed in 144.77 seconds;
+- complete pytest suite: 531 passed locally in 144.77 seconds and in exact-head CI in
+  488.11 seconds;
 - Playwright browser acceptance: 4 passed in 18.06 seconds;
 - Ruff: passed;
-- mypy: passed across 166 source files;
+- mypy: passed across 166 local source files and 167 exact-head CI source files;
 - Django check: passed;
 - migration drift: none;
 - backup mirror checks: passed;
