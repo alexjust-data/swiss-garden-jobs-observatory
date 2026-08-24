@@ -1,0 +1,17 @@
+{
+  "schema_version": "gate-pre-audit-profile-v1",
+  "gate": "PRODUCTION-ACCEPTANCE-H2",
+  "pr": 32,
+  "expected_base_ref": "main",
+  "expected_base_sha": "99e39312535f33554a973110cba196c253628945",
+  "expected_head_ref": "codex/production-acceptance-harness",
+  "contract": "docs/governance/PRODUCTION_ACCEPTANCE_HARNESS_v1.md",
+  "contract_blob": "5da8fefb32a78259b461def4d32849b937211c9e",
+  "frozen_paths": [
+    "docs/research/v0_4/"
+  ],
+  "focused_tests": [
+    "src/core/tests/test_production_acceptance.py"
+  ],
+  "expected_migrations": []
+}
