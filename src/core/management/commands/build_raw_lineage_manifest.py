@@ -47,6 +47,7 @@ class Command(BaseCommand):
             "object_count": manifest["object_count"],
             "aggregate_byte_count": manifest["aggregate_byte_count"],
             "representation_counts": manifest["representation_counts"],
+            "classification_counts": manifest["classification_counts"],
         }
         if options["json"]:
             self.stdout.write(json.dumps(payload, sort_keys=True, separators=(",", ":")))

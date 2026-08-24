@@ -264,6 +264,15 @@ def _manifest_payload(manifest: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in manifest.items() if key != "manifest_sha256"}
 
 
+_CLASSIFICATIONS = (
+    "PRESENT_EXACTLY_ONCE",
+    "MISSING",
+    "AMBIGUOUS",
+    "CONFLICTING",
+    "UNSAFE",
+)
+
+
 def capture_manifest(roots: tuple[SourceRoot, ...]) -> dict[str, Any]:
     """Capture one coherent read-only database/source inventory."""
 
@@ -281,6 +290,7 @@ def capture_manifest(roots: tuple[SourceRoot, ...]) -> dict[str, Any]:
         )
         rows: list[dict[str, object]] = []
         representation_counts: dict[str, int] = {}
+        classification_counts = {classification: 0 for classification in _CLASSIFICATIONS}
         source_counts: dict[str, int] = {root.label: 0 for root in roots}
         aggregate_byte_count = 0
         for authority_row in authority_rows:
@@ -302,6 +312,7 @@ def capture_manifest(roots: tuple[SourceRoot, ...]) -> dict[str, Any]:
             }
             row["row_sha256"] = fingerprint(row)
             rows.append(row)
+            classification_counts["PRESENT_EXACTLY_ONCE"] += 1
             source_counts[label] += 1
             representation_counts[representation] = representation_counts.get(representation, 0) + 1
             aggregate_byte_count += _integer(authority["byte_size"])
@@ -325,6 +336,7 @@ def capture_manifest(roots: tuple[SourceRoot, ...]) -> dict[str, Any]:
             "aggregate_byte_count": aggregate_byte_count,
             "source_roots": source_roots,
             "representation_counts": dict(sorted(representation_counts.items())),
+            "classification_counts": classification_counts,
         }
     )
     manifest: dict[str, Any] = {
@@ -338,6 +350,7 @@ def capture_manifest(roots: tuple[SourceRoot, ...]) -> dict[str, Any]:
         "aggregate_byte_count": aggregate_byte_count,
         "source_roots": source_roots,
         "representation_counts": dict(sorted(representation_counts.items())),
+        "classification_counts": classification_counts,
         "rows": rows,
     }
     manifest["manifest_sha256"] = fingerprint(manifest)
@@ -357,6 +370,7 @@ def verify_manifest(manifest: Mapping[str, Any]) -> None:
         "aggregate_byte_count",
         "source_roots",
         "representation_counts",
+        "classification_counts",
         "rows",
         "manifest_sha256",
     }
@@ -408,6 +422,12 @@ def verify_manifest(manifest: Mapping[str, Any]) -> None:
         raise RawLineageError("manifest source inventory mismatch")
     if manifest["representation_counts"] != dict(sorted(representation_counts.items())):
         raise RawLineageError("manifest representation counts mismatch")
+    expected_classification_counts = {
+        classification: (len(rows) if classification == "PRESENT_EXACTLY_ONCE" else 0)
+        for classification in _CLASSIFICATIONS
+    }
+    if manifest["classification_counts"] != expected_classification_counts:
+        raise RawLineageError("manifest classification counts mismatch")
     roots = manifest["source_roots"]
     if not isinstance(roots, list):
         raise RawLineageError("manifest source roots must be an array")
@@ -427,6 +447,7 @@ def verify_manifest(manifest: Mapping[str, Any]) -> None:
             "aggregate_byte_count": manifest["aggregate_byte_count"],
             "source_roots": roots,
             "representation_counts": manifest["representation_counts"],
+            "classification_counts": manifest["classification_counts"],
         }
     )
     if manifest["database_snapshot_fingerprint"] != expected_snapshot:
@@ -481,14 +502,26 @@ def _root_is_inside_git_worktree(path: Path) -> bool:
     return False
 
 
+def _path_is_same_or_descendant(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
+
+
 def _verify_runtime_roots(
     manifest: Mapping[str, Any], roots: tuple[SourceRoot, ...], destination: Path
 ) -> None:
     if not destination.is_absolute():
         raise RawLineageError("destination RAW root must be absolute")
-    destination_identity = _path_identity(destination)
-    if destination_identity in {_path_identity(root.path) for root in roots}:
-        raise RawLineageError("destination RAW root must differ from every source root")
+    for root in roots:
+        if _path_is_same_or_descendant(destination, root.path):
+            raise RawLineageError(
+                "destination RAW root must not equal or be inside a source root"
+            )
+        if _path_is_same_or_descendant(root.path, destination):
+            raise RawLineageError("source RAW root must not be inside destination RAW root")
     if _root_is_inside_git_worktree(destination):
         raise RawLineageError("destination RAW root must be outside every Git worktree")
     declared = {
@@ -653,6 +686,8 @@ def validate_designated_operational_root(
         raise RawLineageError("operational RAW root must be an absolute path")
     if not root_path.is_dir():
         raise RawLineageError("operational RAW root does not exist")
+    if _root_is_inside_git_worktree(root_path):
+        raise RawLineageError("operational RAW root must be outside every Git worktree")
     if not expected_manifest_sha256 or not _SHA256_RE.fullmatch(expected_manifest_sha256):
         raise RawLineageError("operational RAW manifest SHA-256 is not configured")
     designation = load_json(DESIGNATION_PATH)

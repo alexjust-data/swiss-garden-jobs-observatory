@@ -75,6 +75,13 @@ def test_manifest_reconciles_exact_u_f022_and_recomputes_every_hash() -> None:
         "CURRENT_C3": 1,
         "LEGACY_U_F022_COLON": 1,
     }
+    assert manifest["classification_counts"] == {
+        "PRESENT_EXACTLY_ONCE": 2,
+        "MISSING": 0,
+        "AMBIGUOUS": 0,
+        "CONFLICTING": 0,
+        "UNSAFE": 0,
+    }
     verify_manifest(manifest)
     tampered = json.loads(json.dumps(manifest))
     tampered["rows"][1]["byte_size"] += 1
@@ -83,6 +90,17 @@ def test_manifest_reconciles_exact_u_f022_and_recomputes_every_hash() -> None:
     )
     with pytest.raises(RawLineageError, match="row fingerprint"):
         verify_manifest(tampered)
+    tampered_counts = json.loads(json.dumps(manifest))
+    tampered_counts["classification_counts"]["MISSING"] = 1
+    tampered_counts["manifest_sha256"] = fingerprint(
+        {
+            key: value
+            for key, value in tampered_counts.items()
+            if key != "manifest_sha256"
+        }
+    )
+    with pytest.raises(RawLineageError, match="classification counts"):
+        verify_manifest(tampered_counts)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -241,6 +259,44 @@ def test_runtime_source_root_must_match_audited_identity() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("topology", "message"),
+    (
+        ("equal", "equal or be inside"),
+        ("destination_inside_source", "equal or be inside"),
+        ("source_inside_destination", "source RAW root must not be inside"),
+    ),
+)
+def test_source_and_destination_roots_must_not_overlap(
+    topology: str, message: str
+) -> None:
+    content = b"bounded"
+    key = "source/bounded.json"
+    _artifact(key, content)
+    with TemporaryDirectory() as parent_path, TemporaryDirectory() as evidence_path:
+        parent = Path(parent_path)
+        if topology == "source_inside_destination":
+            destination = parent / "destination"
+            source = destination / "source"
+        else:
+            source = parent / "source"
+            destination = source if topology == "equal" else source / "destination"
+        source.mkdir(parents=True)
+        RawObjectStore(source).write_bytes(key, content)
+        roots = (SourceRoot.create("source", source),)
+        manifest = capture_manifest(roots)
+        designation_path = Path(evidence_path) / "designation.json"
+        write_json(designation_path, build_designation(manifest))
+        with (
+            patch("core.raw_lineage.DESIGNATION_PATH", designation_path),
+            pytest.raises(RawLineageError, match=message),
+        ):
+            consolidate_manifest(manifest, roots, destination, dry_run=True)
+        with pytest.raises(FileNotFoundError):
+            RawObjectStore(destination).read_bytes(SENTINEL_NAME)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_designated_root_validation_rejects_missing_or_wrong_manifest() -> None:
     with TemporaryDirectory() as root_path, TemporaryDirectory() as evidence_path:
         root = Path(root_path)
@@ -266,6 +322,16 @@ def test_designated_root_validation_rejects_missing_or_wrong_manifest() -> None:
             )
             with pytest.raises(RawLineageError, match="configured RAW manifest"):
                 validate_designated_operational_root(root, "b" * 64)
+
+
+def test_designated_operational_root_rejects_git_worktree_location() -> None:
+    with TemporaryDirectory() as parent_path:
+        worktree = Path(parent_path) / "worktree"
+        root = worktree / "data" / "raw"
+        root.mkdir(parents=True)
+        (worktree / ".git").mkdir()
+        with pytest.raises(RawLineageError, match="outside every Git worktree"):
+            validate_designated_operational_root(root, "a" * 64)
 
 
 def test_production_command_has_no_designation_override() -> None:

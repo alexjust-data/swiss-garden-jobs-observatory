@@ -29,6 +29,10 @@ legacy mapping, exact direct names and the observed colon-to-U+F022 compatibilit
 component spelling is mandatory. Missing, ambiguous, conflicting, unsafe or digest-mismatched
 evidence fails before destination mutation.
 
+The accepted manifest binds explicit counts for all five classifications:
+`PRESENT_EXACTLY_ONCE`, `MISSING`, `AMBIGUOUS`, `CONFLICTING` and `UNSAFE`. Accepted
+production evidence requires 10,917 / 0 / 0 / 0 / 0 respectively.
+
 Consolidation publishes the unchanged logical object key through the current C3 injective writer
 into a new absolute root outside Git worktrees. Each object uses atomic no-overwrite publication
 and immediate byte/size/SHA verification. PostgreSQL RawArtifact rows are not copied, updated or
@@ -40,13 +44,19 @@ sealed by a sentinel must be complete and cannot be repaired silently.
 
 Operational geospatial execution now requires an absolute execution root, an identical absolute
 operational root, the committed manifest SHA configuration and a matching sentinel. A relative
-worktree root cannot become production authority.
+worktree root cannot become production authority. Consolidation rejects equality and either
+direction of nesting between every source root and the destination. Runtime operational-root
+validation independently rejects any root beneath a Git worktree.
 
 ## Acceptance
 
 The audited manifest contains 10,917 objects / 548,577,481 bytes, with 10,737 current C3 and 180
 U+F022 representations. Its SHA-256 is
-`92e1e888277db9e25e4a91929c34917fb972f9d86b07ce97412212f6c504c900`.
+`4ae6d26bba0564a1222261e4b29cde8129c740de115267a5a34e5c9c1c7ed0b1`.
+
+The earlier under-bound manifest remains immutable historical audit evidence. The corrected
+manifest changes only classification/snapshot binding: RawArtifact and source inventory
+fingerprints remain exact.
 
 PostgreSQL and both historical roots were backed up. The dump SHA-256 is
 `953b6da8481ab04ff9e894562ab5d4e208bba28936f5a8970c4acfcbc2f3c27d`. An isolated database restore

@@ -12,6 +12,26 @@ Status: IMPLEMENTATION READY FOR INDEPENDENT AUDIT
 
 The frozen contract remains absent from every implementation diff after its isolated commit.
 
+## Independent-audit correction
+
+Prior audited head: `994c4734c6809bd0a785daf990c3af604fb7dda4`.
+
+The independent audit found three enforcement gaps:
+
+1. the accepted manifest described successful representations but did not explicitly bind all
+   five frozen identity-classification counts;
+2. runtime consolidation rejected an equal source/destination and a destination in a Git
+   worktree, but did not reject both directions of source/destination nesting;
+3. the operational runtime sentinel validator did not independently reject a designated root
+   inside a Git worktree.
+
+The correction adds the complete classification vector to the manifest, snapshot fingerprint,
+verification and command output; rejects equal and bidirectionally nested roots before provider
+or destination mutation; and rejects worktree-local operational roots in the runtime authority
+validator itself. The original manifest remains immutable external historical evidence. The
+governed manifest command recaptured a new corrected manifest and designation without changing
+any RawArtifact row, source bytes, inventory fingerprint or scientific contract.
+
 ## Post-merge incident reconstruction
 
 The operational database `swiss_garden_jobs` contains 10,917 unique RawArtifact rows. The
@@ -42,9 +62,9 @@ operational lineage.
 One PostgreSQL `REPEATABLE READ / READ ONLY` snapshot produced:
 
 - manifest SHA-256:
-  `92e1e888277db9e25e4a91929c34917fb972f9d86b07ce97412212f6c504c900`;
+  `4ae6d26bba0564a1222261e4b29cde8129c740de115267a5a34e5c9c1c7ed0b1`;
 - database snapshot fingerprint:
-  `5f26ab13a39956bbcab386f9c211d54607a4899c316c6dd02a63c61ab8d667e6`;
+  `36f50c1d578df2a2c5c9a7920e215b56149614e26424765b75401d6c218da402`;
 - RawArtifact inventory fingerprint:
   `4e06ee520ef5810e5e3427efd3f18795430a2d264d74f8481034a168800e4c4a`;
 - source inventory fingerprint:
@@ -53,10 +73,19 @@ One PostgreSQL `REPEATABLE READ / READ ONLY` snapshot produced:
 - aggregate governed bytes: 548,577,481;
 - `CURRENT_C3`: 10,737;
 - `LEGACY_U_F022_COLON`: 180;
-- missing/ambiguous/conflicting/unsafe: 0.
+- `PRESENT_EXACTLY_ONCE`: 10,917;
+- `MISSING`: 0;
+- `AMBIGUOUS`: 0;
+- `CONFLICTING`: 0;
+- `UNSAFE`: 0.
 
 The committed sanitized designation pins these values and the isolated contract commit. The
 authoritative consolidation command has no runtime designation override.
+
+The pre-correction manifest SHA
+`92e1e888277db9e25e4a91929c34917fb972f9d86b07ce97412212f6c504c900` and snapshot fingerprint
+`5f26ab13a39956bbcab386f9c211d54607a4899c316c6dd02a63c61ab8d667e6` remain preserved as
+under-bound historical audit evidence and are not accepted by the corrected verifier.
 
 ## Backup and restore
 
@@ -88,13 +117,15 @@ snapshots reproduced exactly:
 The restored snapshot/manifest SHA differs, as required, because PostgreSQL snapshot identity and
 physical root identities are new.
 
-Both complete manifests are retained with the external C4 backup. Their physical file SHA-256
-values are:
+The original operational, restored and corrected manifests are retained with the external C4
+backup. Their physical file SHA-256 values are:
 
 - operational manifest file:
   `e779fd07542a69476fce04fed220c195bd6fc2afdcaaf9861d435ebd28fcf888`;
 - restored manifest file:
-  `47d62d0d3c94618316caf0b8b2a57b22675f4f96c91ef79f1da7960faf01920f`.
+  `47d62d0d3c94618316caf0b8b2a57b22675f4f96c91ef79f1da7960faf01920f`;
+- corrected operational manifest file:
+  `9a7432e043f5d9b7b90d507ebad29be44cda40d1fe1239613df5b18ad783586a`.
 
 ## Isolated consolidation
 
@@ -132,6 +163,11 @@ sentinel reused    true
 The sentinel replication time is `2026-08-15T10:11:57.243579Z` and pins the exact audited
 designation.
 
+After the audit correction, the complete read-only production preflight revalidated the same
+10,917 identities / 548,577,481 bytes against both historical roots and the corrected
+designation. It returned `created=0`, `dry_run=true`, published no sentinel and did not create
+the external destination. No Source or geocoder HTTP was performed.
+
 ## Operational guard
 
 Using the restored database as the designated operational database and the isolated canonical RAW
@@ -166,10 +202,10 @@ mutation. Real operational root designation occurs only after independent audit 
 
 ## Focused validation
 
-- C4 tests: 11 passed;
-- C2/C3 storage/geospatial regressions: 63 passed;
-- complete pytest suite: 527 passed in 181.42 seconds;
-- Playwright browser acceptance: 4 passed in 16.71 seconds;
+- C4 tests: 15 passed;
+- C2/C3 storage/geospatial regressions: 73 passed;
+- complete pytest suite: 531 passed in 144.77 seconds;
+- Playwright browser acceptance: 4 passed in 18.06 seconds;
 - Ruff: passed;
 - mypy: passed across 166 source files;
 - Django check: passed;
