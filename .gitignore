@@ -28,3 +28,4 @@ staticfiles/
 # Environment
 .env
 node_modules/
+.production-acceptance/
