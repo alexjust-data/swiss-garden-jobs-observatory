@@ -9,11 +9,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.error import URLError
 
+from django.conf import settings
 from django.db import connection
 from django.utils import timezone
 
 from collectors.pipeline import SharedCollectionPipeline
+from core.raw_lineage import LINEAGE_VERSION as RAW_LINEAGE_VERSION
 from dashboard.services import build_dashboard_snapshot
 from day0.models import Day0ReadinessAssessment, Day0SourceUniverse, Day0SourceUniverseEntry
 from day0.policy import (
@@ -25,12 +28,25 @@ from day0.policy import (
     SOURCE_UNIVERSE_VERSION,
 )
 from day0.services import assess_day0_readiness, ensure_source_universe, readiness_summary
+from observations.geospatial import (
+    PRIVACY_POLICY_VERSION,
+    PROVIDER_VERSION,
+    RESOLVER_VERSION,
+)
+from observations.geospatial_batch import (
+    BATCH_VERSION as GEOSPATIAL_BATCH_VERSION,
+)
+from observations.geospatial_batch import (
+    GeospatialBatchResult,
+    resolve_premium_run_locations,
+)
 from observations.green_relevance import CLASSIFIER_VERSION as GREEN_CLASSIFIER_VERSION
 from observations.models import (
     CollectionRun,
     GreenRelevanceAssessment,
     GreenRelevanceReviewDecision,
     GreenRelevanceReviewDecisionApplication,
+    PostingLocationResolution,
 )
 from observations.review import (
     GREEN_REVIEW_GOVERNANCE_VERSION,
@@ -51,7 +67,7 @@ from vacancies.review_continuity import DedupContinuityValidationError
 
 from .models import ObservatoryCycle, ObservatorySourceAttempt, OperationalEvent
 
-CYCLE_VERSION = "daily-observatory-cycle-v0.1"
+CYCLE_VERSION = "daily-observatory-cycle-v0.2"
 STAGE_ORDER = (
     "cohort",
     "collection",
@@ -59,6 +75,7 @@ STAGE_ORDER = (
     "dedup",
     "dedup_continuity",
     "premium",
+    "geospatial",
     "dashboard",
     "readiness",
 )
@@ -199,7 +216,7 @@ def cycle_configuration(
         "target_cohort_version": SOURCE_UNIVERSE_VERSION,
         "source_ids": sorted(source_ids),
         "stage_order": list(STAGE_ORDER),
-        "cutoff_policy": "continuity-available-aligned-pit-v0.1",
+        "cutoff_policy": "continuity-and-geospatial-available-aligned-pit-v0.2",
         "whole_cycle_timeout_seconds": timeout_seconds,
         "versions": {
             "coverage": COVERAGE_POLICY_VERSION,
@@ -212,6 +229,14 @@ def cycle_configuration(
             "normalizer": NORMALIZER_VERSION,
             "dedup_material": "dedup-review-material-v0.1",
             "premium": PREMIUM_VERSION,
+            "geospatial_batch": GEOSPATIAL_BATCH_VERSION,
+            "geospatial_resolver": RESOLVER_VERSION,
+            "location_privacy": PRIVACY_POLICY_VERSION,
+            "geospatial_provider": PROVIDER_VERSION,
+            "raw_lineage": RAW_LINEAGE_VERSION,
+            "raw_lineage_manifest": str(
+                settings.JOB_OBSERVATORY_RAW_LINEAGE_MANIFEST_SHA256 or "UNCONFIGURED"
+            ).lower(),
         },
         "code_git_sha": _git_sha(),
     }
@@ -316,6 +341,20 @@ def apply_green_continuity(as_of: datetime) -> dict[str, int]:
     return counts
 
 
+def _is_geospatial_provider_failure(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, URLError | TimeoutError | ConnectionError):
+            return True
+        message = str(current).lower()
+        if "searchserver" in message or "provider request" in message:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def _seal_failure(
     cycle: ObservatoryCycle, stage: str, status: str, code: str, exc: BaseException
 ) -> None:
@@ -346,6 +385,20 @@ def _seal_failure(
             str(OperationalEvent.Severity.ERROR),
             detail=cycle.failure_evidence,
         )
+    if status == ObservatoryCycle.Status.FAILED_GEOSPATIAL:
+        _event(
+            cycle,
+            "GEOSPATIAL_STAGE_FAILED",
+            str(OperationalEvent.Severity.ERROR),
+            detail=cycle.failure_evidence,
+        )
+        if _is_geospatial_provider_failure(exc):
+            _event(
+                cycle,
+                "GEOSPATIAL_PROVIDER_DEGRADED",
+                str(OperationalEvent.Severity.WARNING),
+                detail={"stage": stage, "failure_code": code},
+            )
 
 
 def _is_dedup_continuity_failure(exc: BaseException) -> bool:
@@ -361,6 +414,7 @@ def _seal_timeout(cycle: ObservatoryCycle, exc: CycleTimeoutError) -> None:
         "dedup_continuity": ObservatoryCycle.Status.FAILED_CONTINUITY,
         "dedup": ObservatoryCycle.Status.FAILED_DEDUP,
         "premium": ObservatoryCycle.Status.FAILED_PREMIUM,
+        "geospatial": ObservatoryCycle.Status.FAILED_GEOSPATIAL,
         "dashboard": ObservatoryCycle.Status.FAILED_DASHBOARD,
         "readiness": ObservatoryCycle.Status.FAILED_READINESS,
     }
@@ -381,7 +435,6 @@ def _eligible_source_ids(readiness: Day0ReadinessAssessment) -> list[str] | None
 def _previous_success(cycle: ObservatoryCycle) -> ObservatoryCycle | None:
     return (
         ObservatoryCycle.objects.filter(
-            cycle_version=CYCLE_VERSION,
             status__in=[
                 ObservatoryCycle.Status.SUCCEEDED,
                 ObservatoryCycle.Status.SUCCEEDED_NOT_AUTHORIZED,
@@ -393,6 +446,45 @@ def _previous_success(cycle: ObservatoryCycle) -> ObservatoryCycle | None:
     )
 
 
+def _geospatial_requires_cutoff_advance(result: GeospatialBatchResult, cutoff: datetime) -> bool:
+    if result.created:
+        return True
+    if not result.resolution_ids:
+        return False
+    return PostingLocationResolution.objects.filter(
+        pk__in=result.resolution_ids, created_at__gt=cutoff
+    ).exists()
+
+
+def _geospatial_state(
+    first: GeospatialBatchResult,
+    final: GeospatialBatchResult,
+    *,
+    cutoff_advanced: bool,
+) -> dict[str, Any]:
+    repeated = final is not first
+    return {
+        "batch_version": final.batch_version,
+        "premium_run_id": final.premium_run_id,
+        "premium_run_fingerprint": final.premium_run_fingerprint,
+        "selected": final.selected,
+        "existing": first.already_present,
+        "created": first.created + (final.created if repeated else 0),
+        "resolved": final.resolved,
+        "review": final.review,
+        "unresolved": final.unresolved,
+        "mappable": final.mappable,
+        "public_but_unmapped": max(0, final.selected - final.mappable),
+        "hidden": final.hidden,
+        "cache_hits": first.cache_hits + (final.cache_hits if repeated else 0),
+        "provider_requests": first.network_requests + (final.network_requests if repeated else 0),
+        "unique_geocoder_requests": first.unique_geocoder_requests
+        + (final.unique_geocoder_requests if repeated else 0),
+        "cutoff_advanced": cutoff_advanced,
+        "resolution_ids": list(final.resolution_ids),
+    }
+
+
 def run_cycle(
     *,
     cycle_id: uuid.UUID | None = None,
@@ -401,6 +493,7 @@ def run_cycle(
     delay_seconds: float = 1.0,
     timeout_seconds: int = DEFAULT_CYCLE_TIMEOUT_SECONDS,
     collector: Callable[..., CollectionRun] = _default_collector,
+    geospatial_runner: Callable[..., GeospatialBatchResult] = (resolve_premium_run_locations),
 ) -> CycleResult:
     if timeout_seconds < 60:
         raise ObservatoryOperationError(
@@ -467,7 +560,7 @@ def run_cycle(
             cycle.finished_at = timezone.now()
             cycle.operational_health = ObservatoryCycle.Health.RED
             cycle.failure_code = "CONCURRENT_CYCLE_RUNNING"
-            cycle.failure_evidence = {"http_requests": 0}
+            cycle.failure_evidence = {"http_requests": 0, "provider_requests": 0}
             cycle.save()
             _event(
                 cycle,
@@ -478,7 +571,6 @@ def run_cycle(
             return CycleResult(cycle, False)
         other_running = (
             ObservatoryCycle.objects.filter(
-                cycle_version=CYCLE_VERSION,
                 target_cohort_version=cycle.target_cohort_version,
                 status=ObservatoryCycle.Status.RUNNING,
             )
@@ -500,6 +592,7 @@ def run_cycle(
                 "conflicting_cycle_id": str(other_running.pk),
                 "heartbeat_at": heartbeat.isoformat(),
                 "http_requests": 0,
+                "provider_requests": 0,
             }
             cycle.save()
             _event(
@@ -709,6 +802,58 @@ def run_cycle(
                 exc,
             )
             return CycleResult(cycle, False)
+        geospatial_cutoff_advanced = False
+        try:
+            _save_stage(cycle, "geospatial", "RUNNING")
+            _ensure_within_timeout(
+                cycle,
+                timeout_seconds=timeout_seconds,
+                stage="geospatial",
+                invocation_started=invocation_started,
+            )
+            geospatial_first = geospatial_runner(premium_run.pk)
+            geospatial_final = geospatial_first
+            _ensure_within_timeout(
+                cycle,
+                timeout_seconds=timeout_seconds,
+                stage="geospatial",
+                invocation_started=invocation_started,
+            )
+            if _geospatial_requires_cutoff_advance(geospatial_first, cutoff):
+                geospatial_cutoff_advanced = True
+                cutoff = timezone.now()
+                continuity_before_rebuild = DedupReviewDecisionApplication.objects.count()
+                dedup_run, dedup_reused = run_deduplication(cutoff)
+                if DedupReviewDecisionApplication.objects.count() != continuity_before_rebuild:
+                    raise ObservatoryOperationError(
+                        "geospatial",
+                        "GEOSPATIAL_REALIGNMENT_REQUIRES_SECOND_CUTOFF",
+                        "aligned Dedup created later continuity evidence",
+                    )
+                premium_run, premium_reused = run_classification(cutoff)
+                geospatial_final = geospatial_runner(premium_run.pk)
+                if _geospatial_requires_cutoff_advance(geospatial_final, cutoff):
+                    raise ObservatoryOperationError(
+                        "geospatial",
+                        "GEOSPATIAL_REALIGNMENT_REQUIRES_SECOND_CUTOFF",
+                        "aligned Premium created later geospatial evidence",
+                    )
+            _save_stage(cycle, "geospatial", "SUCCEEDED")
+        except CycleTimeoutError as exc:
+            _seal_timeout(cycle, exc)
+            return CycleResult(cycle, False)
+        except Exception as exc:
+            failure_code = (
+                exc.code if isinstance(exc, ObservatoryOperationError) else "GEOSPATIAL_FAILED"
+            )
+            _seal_failure(
+                cycle,
+                "geospatial",
+                str(ObservatoryCycle.Status.FAILED_GEOSPATIAL),
+                failure_code,
+                exc,
+            )
+            return CycleResult(cycle, False)
         try:
             _save_stage(cycle, "dashboard", "RUNNING")
             _ensure_within_timeout(
@@ -789,9 +934,18 @@ def run_cycle(
             "authorization_status": readiness.readiness_status,
             "authorization_blockers": readiness.blockers,
             "critical_reviews": readiness.critical_review_count,
+            "geospatial": _geospatial_state(
+                geospatial_first,
+                geospatial_final,
+                cutoff_advanced=geospatial_cutoff_advanced,
+            ),
             "replay": {
                 "dedup": dedup_reused,
                 "premium": premium_reused,
+                "geospatial": (
+                    geospatial_first.created == 0
+                    and geospatial_first.already_present == geospatial_first.selected
+                ),
                 "dashboard": dashboard_reused,
                 "readiness": readiness_reused,
             },
@@ -902,6 +1056,7 @@ def _persisted_status_surface(
             "dedup": readiness.critical_dedup_review_count if readiness else None,
             "other": readiness.other_critical_review_count if readiness else None,
         },
+        "geospatial": cycle.quality_state.get("geospatial"),
         "authorization": readiness.readiness_status if readiness else None,
         "authorization_blockers": readiness.blockers if readiness else None,
         "headline_available": bool(
@@ -957,6 +1112,7 @@ def cycle_summary(cycle: ObservatoryCycle, *, reused: bool = False) -> dict[str,
         },
         "day0": readiness_summary(readiness, False) if readiness else None,
         "quality_state": cycle.quality_state,
+        "geospatial": cycle.quality_state.get("geospatial"),
         "status_surface": _persisted_status_surface(cycle, attempts),
         "failure": {"code": cycle.failure_code, "evidence": cycle.failure_evidence},
         "exact_cycle_retry_reused": reused,

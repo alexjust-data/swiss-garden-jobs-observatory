@@ -16,6 +16,7 @@ EXIT_BY_STATUS = {
     ObservatoryCycle.Status.FAILED_CONTINUITY: 4,
     ObservatoryCycle.Status.FAILED_DEDUP: 5,
     ObservatoryCycle.Status.FAILED_PREMIUM: 6,
+    ObservatoryCycle.Status.FAILED_GEOSPATIAL: 10,
     ObservatoryCycle.Status.FAILED_DASHBOARD: 7,
     ObservatoryCycle.Status.FAILED_READINESS: 8,
 }
