@@ -1,0 +1,14 @@
+{
+  "schema_version": "gate-pre-audit-profile-v1",
+  "gate": "GATE-PRE-AUDIT-H1",
+  "pr": null,
+  "contract": "docs/governance/GATE_PRE_AUDIT_CHECKLIST_v1.md",
+  "contract_blob": "b8ef4082dd1ba12692371db0bf372bc7453616ec",
+  "frozen_paths": [
+    "docs/research/v0_4/"
+  ],
+  "focused_tests": [
+    "src/core/tests/test_gate_pre_audit.py"
+  ],
+  "expected_migrations": []
+}
