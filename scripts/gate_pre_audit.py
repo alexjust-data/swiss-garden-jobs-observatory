@@ -25,6 +25,9 @@ PROFILE_KEYS = {
     "schema_version",
     "gate",
     "pr",
+    "expected_base_ref",
+    "expected_base_sha",
+    "expected_head_ref",
     "contract",
     "contract_blob",
     "frozen_paths",
@@ -53,6 +56,9 @@ class AuditStatus(StrEnum):
 class GateProfile:
     gate: str
     pr: int | None
+    expected_base_ref: str
+    expected_base_sha: str
+    expected_head_ref: str
     contract: str
     contract_blob: str
     frozen_paths: tuple[str, ...]
@@ -166,7 +172,14 @@ def _safe_relative_path(value: Any, *, field_name: str) -> str:
         raise ValueError(f"{field_name} must be a non-empty relative path")
     normalized = value.replace("\\", "/")
     path = PurePosixPath(normalized)
-    if path.is_absolute() or ".." in path.parts:
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or "." in path.parts
+        or ":" in normalized
+        or "\x00" in normalized
+        or normalized.startswith("-")
+    ):
         raise ValueError(f"{field_name} must stay within the repository")
     return path.as_posix()
 
@@ -175,6 +188,35 @@ def _string_list(value: Any, *, field_name: str) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise ValueError(f"{field_name} must be a list")
     return tuple(_safe_relative_path(item, field_name=field_name) for item in value)
+
+
+def _focused_test_list(value: Any) -> tuple[str, ...]:
+    tests = _string_list(value, field_name="focused_tests")
+    for selector in tests:
+        if not selector.endswith(".py"):
+            raise ValueError("focused_tests entries must be Python test file paths")
+    return tests
+
+
+def _git_ref(value: Any, *, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty Git ref name")
+    ref = value.strip()
+    if (
+        ref.startswith(("-", "/"))
+        or ref.endswith(("/", "."))
+        or ".." in ref
+        or "//" in ref
+        or re.fullmatch(r"[A-Za-z0-9._/-]+", ref) is None
+    ):
+        raise ValueError(f"{field_name} must be a safe Git ref name")
+    return ref
+
+
+def _git_object_id(value: Any, *, field_name: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40,64}", value) is None:
+        raise ValueError(f"{field_name} must be a lowercase Git object id")
+    return value
 
 
 def load_profile(path: Path) -> GateProfile:
@@ -197,16 +239,19 @@ def load_profile(path: Path) -> GateProfile:
     pr = payload["pr"]
     if pr is not None and (not isinstance(pr, int) or isinstance(pr, bool) or pr < 1):
         raise ValueError("pr must be null or a positive integer")
-    blob = payload["contract_blob"]
-    if not isinstance(blob, str) or re.fullmatch(r"[0-9a-f]{40,64}", blob) is None:
-        raise ValueError("contract_blob must be a lowercase Git object id")
+    blob = _git_object_id(payload["contract_blob"], field_name="contract_blob")
     return GateProfile(
         gate=gate.strip(),
         pr=pr,
+        expected_base_ref=_git_ref(payload["expected_base_ref"], field_name="expected_base_ref"),
+        expected_base_sha=_git_object_id(
+            payload["expected_base_sha"], field_name="expected_base_sha"
+        ),
+        expected_head_ref=_git_ref(payload["expected_head_ref"], field_name="expected_head_ref"),
         contract=_safe_relative_path(payload["contract"], field_name="contract"),
         contract_blob=blob,
         frozen_paths=_string_list(payload["frozen_paths"], field_name="frozen_paths"),
-        focused_tests=_string_list(payload["focused_tests"], field_name="focused_tests"),
+        focused_tests=_focused_test_list(payload["focused_tests"]),
         expected_migrations=tuple(
             sorted(_string_list(payload["expected_migrations"], field_name="expected_migrations"))
         ),
@@ -277,11 +322,19 @@ def discover_profile(
     explicit_path: Path | None,
     changed_files: Sequence[str] | None,
 ) -> tuple[Path, GateProfile]:
+    directory = (repo / PROFILE_DIRECTORY).resolve()
     if explicit_path is not None:
-        path = explicit_path if explicit_path.is_absolute() else repo / explicit_path
+        path = (explicit_path if explicit_path.is_absolute() else repo / explicit_path).resolve()
+        try:
+            path.relative_to(directory)
+        except ValueError as exc:
+            raise ValueError(
+                "explicit profile must stay in the governed profile directory"
+            ) from exc
+        if path.suffix.casefold() != ".json":
+            raise ValueError("explicit profile must be a JSON file")
         return path, load_profile(path)
 
-    directory = repo / PROFILE_DIRECTORY
     candidates: list[tuple[Path, GateProfile]] = []
     for path in sorted(directory.glob("*.json")):
         profile = load_profile(path)
@@ -458,33 +511,52 @@ def _github_checks(
         return result
     owner, name = path_parts[0], path_parts[1]
     query = """
-query($owner:String!,$name:String!,$number:Int!){
+query($owner:String!,$name:String!,$number:Int!,$cursor:String){
   repository(owner:$owner,name:$name){
-    pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}
+    pullRequest(number:$number){
+      reviewThreads(first:100,after:$cursor){
+        nodes{isResolved}
+        pageInfo{hasNextPage endCursor}
+      }
+    }
   }
 }
 """.strip()
-    record = runner.run(
-        [
-            "gh",
-            "api",
-            "graphql",
-            "-f",
-            f"query={query}",
-            "-f",
-            f"owner={owner}",
-            "-f",
-            f"name={name}",
-            "-F",
-            f"number={pr_number}",
-        ],
-        cwd=repo,
-    )
+    nodes: list[Mapping[str, Any]] = []
+    cursor: str | None = None
     try:
-        payload = json.loads(record.stdout) if record.returncode == 0 else None
-        if not isinstance(payload, dict):
-            raise TypeError("GraphQL payload must be an object")
-        nodes = payload["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+        while True:
+            argv = [
+                "gh",
+                "api",
+                "graphql",
+                "-f",
+                f"query={query}",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"name={name}",
+                "-F",
+                f"number={pr_number}",
+            ]
+            if cursor is not None:
+                argv.extend(["-f", f"cursor={cursor}"])
+            record = runner.run(argv, cwd=repo)
+            payload = json.loads(record.stdout) if record.returncode == 0 else None
+            if not isinstance(payload, dict):
+                raise TypeError("GraphQL payload must be an object")
+            connection = payload["data"]["repository"]["pullRequest"]["reviewThreads"]
+            page_nodes = connection["nodes"]
+            page_info = connection["pageInfo"]
+            if not isinstance(page_nodes, list) or not isinstance(page_info, dict):
+                raise TypeError("review thread connection must be complete")
+            nodes.extend(page_nodes)
+            if not page_info.get("hasNextPage"):
+                break
+            next_cursor = page_info.get("endCursor")
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
+                raise TypeError("review thread pagination cursor unavailable")
+            cursor = next_cursor
         unresolved = sum(1 for node in nodes if not node.get("isResolved"))
     except (KeyError, TypeError, json.JSONDecodeError):
         result.append(
@@ -638,6 +710,8 @@ def run_audit(
         explicit_path=explicit_profile,
         changed_files=changed_files,
     )
+    if profile.pr is not None and profile.pr != pr_number:
+        raise ValueError(f"profile declares PR #{profile.pr}, but audit requested PR #{pr_number}")
 
     checks: list[CheckResult] = []
     repo_check = _git(runner, repo, "rev-parse", "--show-toplevel")
@@ -678,6 +752,8 @@ def run_audit(
 
     if pull_request is None:
         checks.append(_unavailable("head_exact", "Exact PR head", "GitHub PR head unavailable"))
+        checks.append(_unavailable("base_exact", "Exact PR base", "GitHub PR base unavailable"))
+        checks.append(_unavailable("head_ref", "PR head branch", "GitHub PR branch unavailable"))
     else:
         exact = bool(local_head and local_head == head_sha)
         checks.append(
@@ -690,6 +766,41 @@ def run_audit(
                 if exact
                 else "local HEAD does not match PR head",
                 details={"local": local_head, "pr": head_sha},
+            )
+        )
+        actual_base_ref = str(pull_request.get("baseRefName") or "")
+        actual_head_ref = str(pull_request.get("headRefName") or "")
+        base_exact = (
+            actual_base_ref == profile.expected_base_ref and base_sha == profile.expected_base_sha
+        )
+        checks.append(
+            _check(
+                "base_exact",
+                "Exact PR base",
+                AuditStatus.PASS if base_exact else AuditStatus.FAIL,
+                source="github+profile",
+                summary="PR base matches profile" if base_exact else "PR base differs from profile",
+                details={
+                    "expected_ref": profile.expected_base_ref,
+                    "actual_ref": actual_base_ref,
+                    "expected_sha": profile.expected_base_sha,
+                    "actual_sha": base_sha,
+                },
+            )
+        )
+        head_ref_exact = actual_head_ref == profile.expected_head_ref
+        checks.append(
+            _check(
+                "head_ref",
+                "PR head branch",
+                AuditStatus.PASS if head_ref_exact else AuditStatus.FAIL,
+                source="github+profile",
+                summary=(
+                    "PR head branch matches profile"
+                    if head_ref_exact
+                    else "PR head branch differs from profile"
+                ),
+                details={"expected": profile.expected_head_ref, "actual": actual_head_ref},
             )
         )
 

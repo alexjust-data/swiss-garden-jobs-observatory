@@ -68,6 +68,9 @@ A profile is intentionally small. Version 1 accepts only:
   "schema_version": "gate-pre-audit-profile-v1",
   "gate": "GATE-010-C4",
   "pr": 30,
+  "expected_base_ref": "main",
+  "expected_base_sha": "0123456789abcdef...",
+  "expected_head_ref": "gate-010-c4-operational-raw-lineage",
   "contract": "docs/day0/example_contract_v0_1.md",
   "contract_blob": "0123456789abcdef...",
   "frozen_paths": ["docs/research/v0_4/"],
@@ -77,7 +80,11 @@ A profile is intentionally small. Version 1 accepts only:
 ```
 
 Global defaults remain in the harness. A profile cannot add arbitrary shell
-commands, network actions or mutation hooks.
+commands, network actions or mutation hooks. Explicit profiles must live below
+the committed `docs/governance/gate_profiles/` trust root. Profile paths reject
+absolute paths, traversal, Git pathspec magic and option-like test selectors.
+Focused validation entries are repository-relative Python test files, not
+arbitrary pytest arguments.
 
 ## Mandatory mechanical checks
 
@@ -85,6 +92,7 @@ Version 1 verifies:
 
 - local repository and clean tracked/untracked state;
 - local `HEAD` equals the exact PR head;
+- PR base ref/SHA and head ref equal the profile's pinned identities;
 - PR base and head Git objects are available;
 - contract blob equals the profile's frozen blob;
 - frozen paths have no base-to-head changes;
@@ -92,7 +100,7 @@ Version 1 verifies:
 - focused tests and standard local validation when local validation is enabled;
 - exact-head GitHub checks;
 - exact-head GitGuardian result;
-- unresolved review-thread count.
+- unresolved review-thread count across every GraphQL page.
 
 Standard local validation is:
 

@@ -1,9 +1,12 @@
 {
   "schema_version": "gate-pre-audit-profile-v1",
   "gate": "GATE-PRE-AUDIT-H1",
-  "pr": null,
+  "pr": 31,
+  "expected_base_ref": "main",
+  "expected_base_sha": "99e39312535f33554a973110cba196c253628945",
+  "expected_head_ref": "codex/gate-pre-audit-harness",
   "contract": "docs/governance/GATE_PRE_AUDIT_CHECKLIST_v1.md",
-  "contract_blob": "b8ef4082dd1ba12692371db0bf372bc7453616ec",
+  "contract_blob": "fba22589f0ed68e141b96aa4abd63dfe3ab75e9b",
   "frozen_paths": [
     "docs/research/v0_4/"
   ],
