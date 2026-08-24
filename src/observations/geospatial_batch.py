@@ -10,6 +10,7 @@ from uuid import UUID
 from django.conf import settings
 from django.db import connection, transaction
 
+from core.raw_lineage import RawLineageError, validate_designated_operational_root
 from core.storage import RawObjectStore
 from observations.geospatial import (
     RESOLVER_VERSION,
@@ -121,10 +122,23 @@ def _validate_raw_store_scope(
         execution_root = _root_identity(base_path)
 
     if database_name == operational_database:
+        configured_execution = Path(settings.CORE_RAW_OBJECT_STORE_PATH)
+        configured_operational = Path(settings.JOB_OBSERVATORY_OPERATIONAL_RAW_STORE_PATH)
+        if not configured_execution.is_absolute() or not configured_operational.is_absolute():
+            raise GeospatialBatchError(
+                "operational RAW execution and designation paths must be absolute"
+            )
         if execution_root != operational_root:
             raise GeospatialBatchError(
                 "operational database must use its designated operational RAW store"
             )
+        try:
+            validate_designated_operational_root(
+                execution_root,
+                str(settings.JOB_OBSERVATORY_RAW_LINEAGE_MANIFEST_SHA256),
+            )
+        except RawLineageError as exc:
+            raise GeospatialBatchError(str(exc)) from exc
         return
     if execution_root == operational_root:
         raise GeospatialBatchError(
