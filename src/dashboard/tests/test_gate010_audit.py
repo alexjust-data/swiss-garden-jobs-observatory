@@ -15,6 +15,7 @@ from dashboard.services import (
     source_link,
     visible_text,
 )
+from observations.geospatial import RESOLVER_VERSION
 from observations.models import PostingLocationResolution
 
 from .factories import create_dashboard_upstream, digest
@@ -25,7 +26,7 @@ def test_future_geospatial_derivation_cannot_leak_into_historical_snapshot() -> 
     data = create_dashboard_upstream(suffix="future-location")
     PostingLocationResolution.objects.create(
         posting_observation=data["observation"],
-        resolver_version="geospatial-v0.1",
+        resolver_version=RESOLVER_VERSION,
         privacy_context="PUBLIC_OR_NON_RESIDENTIAL",
         resolution_status="RESOLVED",
         latitude=47.5,

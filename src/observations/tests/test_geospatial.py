@@ -13,6 +13,8 @@ from core.hashing import sha256_hex
 from core.models import RawArtifact
 from core.storage import RawObjectStore
 from observations.geospatial import (
+    LEGACY_RESOLVER_VERSION,
+    RESOLVER_VERSION,
     GeocoderFetchedResponse,
     GeospatialResolutionError,
     GeospatialResolver,
@@ -254,16 +256,18 @@ class Gate006Tests(TestCase):
     def test_cache_idempotency_and_versioning(self) -> None:
         first, second = self.observation("8280"), self.observation("8281")
         client = FakeClient()
-        resolver = self.resolver(client)
-        resolution = resolver.resolve(first)
-        assert resolver.resolve(first).pk == resolution.pk
-        resolver.resolve(second)
-        assert client.calls == 1 and resolver.stats.cache_hits == 1
-        assert GeocoderCacheEntry.objects.count() == 1
-        future = GeospatialResolver(
-            client=client, raw_store=self.store, resolver_version="geospatial-v0.2"
+        legacy = GeospatialResolver(
+            client=client,
+            raw_store=self.store,
+            resolver_version=LEGACY_RESOLVER_VERSION,
         )
-        assert future.resolve(first).pk != resolution.pk
+        resolution = legacy.resolve(first)
+        assert legacy.resolve(first).pk == resolution.pk
+        legacy.resolve(second)
+        assert client.calls == 1 and legacy.stats.cache_hits == 1
+        assert GeocoderCacheEntry.objects.count() == 1
+        current = self.resolver(client)
+        assert current.resolve(first).pk != resolution.pk
         assert PostingLocationResolution.objects.count() == 3
 
     def test_privacy_context_not_source_type_controls_public_coordinates(self) -> None:
@@ -340,7 +344,7 @@ class Gate006Tests(TestCase):
         assert (
             PostingLocationResolution.objects.filter(
                 posting_observation=observation,
-                resolver_version="geospatial-v0.1",
+                resolver_version=RESOLVER_VERSION,
             ).count()
             == 2
         )

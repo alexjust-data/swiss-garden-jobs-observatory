@@ -22,7 +22,7 @@ from observations.geospatial import (
 from observations.models import PostingLocationResolution, PostingObservation
 from premium_segments.models import PremiumSegmentAssessment, PremiumSegmentRun
 
-BATCH_VERSION = "geospatial-resolution-batch-v0.1"
+BATCH_VERSION = "geospatial-resolution-batch-v0.2"
 
 
 class GeospatialBatchError(RuntimeError):
@@ -167,7 +167,7 @@ def resolve_premium_run_locations(
     _validate_raw_store_scope(active_resolver, dry_run=dry_run)
     resolver_version = active_resolver.resolver_version if active_resolver else RESOLVER_VERSION
     if resolver_version != RESOLVER_VERSION:
-        raise GeospatialBatchError("resolver version does not match the frozen C2 contract")
+        raise GeospatialBatchError("resolver version does not match the current C5 contract")
     target_fingerprints = {
         (item.posting_observation.pk, item.privacy_context): resolution_input_fingerprint(
             item.posting_observation,

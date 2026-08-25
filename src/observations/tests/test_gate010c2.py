@@ -21,6 +21,7 @@ from dashboard.tests.factories import create_dashboard_upstream
 from observations.geospatial import (
     PROVIDER,
     PROVIDER_VERSION,
+    RESOLVER_VERSION,
     GeocoderFetchedResponse,
     GeospatialResolutionError,
     GeospatialResolver,
@@ -235,7 +236,7 @@ class Gate010C2BatchTests(TestCase):
         )
         conflict = PostingLocationResolution.objects.create(
             posting_observation=second["observation"],
-            resolver_version="geospatial-v0.1",
+            resolver_version=RESOLVER_VERSION,
             privacy_context="PUBLIC_OR_NON_RESIDENTIAL",
             resolution_status="UNRESOLVED",
             location_precision="UNKNOWN",
@@ -288,7 +289,7 @@ class Gate010C2BatchTests(TestCase):
                 stdout=output,
             )
         payload = json.loads(output.getvalue())
-        assert payload["batch_version"] == "geospatial-resolution-batch-v0.1"
+        assert payload["batch_version"] == "geospatial-resolution-batch-v0.2"
         assert payload["selected"] == 1
         assert payload["created"] == 0
 

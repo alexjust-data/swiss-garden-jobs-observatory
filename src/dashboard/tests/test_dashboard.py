@@ -29,6 +29,7 @@ from dashboard.services import (
     source_link,
     visible_text,
 )
+from observations.geospatial import RESOLVER_VERSION
 from observations.models import PostingLocationResolution
 from vacancies.models import DedupRun
 
@@ -173,7 +174,7 @@ def test_private_segment_requires_protected_resolution_and_redacts_address(clien
     )
     PostingLocationResolution.objects.create(
         posting_observation=data["observation"],
-        resolver_version="geospatial-v0.1",
+        resolver_version=RESOLVER_VERSION,
         privacy_context="PUBLIC_OR_NON_RESIDENTIAL",
         resolution_status="RESOLVED",
         latitude=47.9,
