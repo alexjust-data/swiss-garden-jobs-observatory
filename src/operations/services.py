@@ -31,9 +31,11 @@ from day0.services import assess_day0_readiness, ensure_source_universe, readine
 from observations.geospatial import (
     PRIVACY_POLICY_VERSION,
     PROVIDER_VERSION,
+    RESOLVER_VERSION,
     GeospatialResolver,
 )
 from observations.geospatial_batch import (
+    BATCH_VERSION,
     GeospatialBatchResult,
     resolve_premium_run_locations,
 )
@@ -64,7 +66,14 @@ from vacancies.review_continuity import DedupContinuityValidationError
 
 from .models import ObservatoryCycle, ObservatorySourceAttempt, OperationalEvent
 
-CYCLE_VERSION = "daily-observatory-cycle-v0.2"
+CYCLE_VERSION = "daily-observatory-cycle-v0.3"
+COMPLETED_REPLAY_CYCLE_VERSIONS = frozenset(
+    {
+        "daily-observatory-cycle-v0.1",
+        "daily-observatory-cycle-v0.2",
+        CYCLE_VERSION,
+    }
+)
 STAGE_ORDER = (
     "cohort",
     "collection",
@@ -201,8 +210,8 @@ def _default_collector(source_id: str, **kwargs: Any) -> CollectionRun:
     )
 
 
-DAILY_GEOSPATIAL_BATCH_VERSION = "geospatial-resolution-batch-v0.1"
-DAILY_GEOSPATIAL_RESOLVER_VERSION = "geospatial-v0.1"
+DAILY_GEOSPATIAL_BATCH_VERSION = BATCH_VERSION
+DAILY_GEOSPATIAL_RESOLVER_VERSION = RESOLVER_VERSION
 
 
 def _default_geospatial_runner(premium_run_id: uuid.UUID | str) -> GeospatialBatchResult:
@@ -248,6 +257,57 @@ def cycle_configuration(
         },
         "code_git_sha": _git_sha(),
     }
+
+
+def _completed_cycle_semantics_match(
+    cycle_version: str,
+    configuration: dict[str, Any],
+) -> bool:
+    versions = configuration.get("versions")
+    stage_order = configuration.get("stage_order")
+    if not isinstance(versions, dict) or not isinstance(stage_order, list):
+        return False
+    if cycle_version == "daily-observatory-cycle-v0.1":
+        return (
+            "geospatial" not in stage_order
+            and "geospatial_batch" not in versions
+            and "geospatial_resolver" not in versions
+        )
+    if cycle_version == "daily-observatory-cycle-v0.2":
+        return (
+            "geospatial" in stage_order
+            and versions.get("geospatial_batch") == "geospatial-resolution-batch-v0.1"
+            and versions.get("geospatial_resolver") == "geospatial-v0.1"
+        )
+    return (
+        cycle_version == CYCLE_VERSION
+        and "geospatial" in stage_order
+        and versions.get("geospatial_batch") == DAILY_GEOSPATIAL_BATCH_VERSION
+        and versions.get("geospatial_resolver") == DAILY_GEOSPATIAL_RESOLVER_VERSION
+    )
+
+
+def _validate_completed_cycle_replay(cycle: ObservatoryCycle) -> None:
+    """Validate immutable stored identity without applying current-cycle semantics."""
+
+    configuration = cycle.configuration
+    selected_source_ids = sorted(str(source_id) for source_id in cycle.selected_source_ids)
+    valid = (
+        cycle.cycle_version in COMPLETED_REPLAY_CYCLE_VERSIONS
+        and isinstance(configuration, dict)
+        and configuration.get("cycle_version") == cycle.cycle_version
+        and configuration.get("trigger") == cycle.trigger
+        and configuration.get("target_cohort_version") == cycle.target_cohort_version
+        and configuration.get("source_ids") == selected_source_ids
+        and _sha256(configuration) == cycle.configuration_fingerprint
+        and _completed_cycle_semantics_match(cycle.cycle_version, configuration)
+    )
+    if not valid:
+        raise ObservatoryOperationError(
+            "cohort",
+            "HISTORICAL_REPLAY_IDENTITY_INVALID",
+            "completed cycle stored identity is inconsistent",
+        )
 
 
 def _lock_key() -> int:
@@ -511,9 +571,15 @@ def run_cycle(
         raise ObservatoryOperationError(
             "cohort", "RECOVERY_REQUIRES_CYCLE_ID", "RECOVERY requires --cycle-id"
         )
+    cycle = ObservatoryCycle.objects.filter(pk=cycle_id).first() if cycle_id else None
+    if cycle and cycle.status in {
+        ObservatoryCycle.Status.SUCCEEDED,
+        ObservatoryCycle.Status.SUCCEEDED_NOT_AUTHORIZED,
+    }:
+        _validate_completed_cycle_replay(cycle)
+        return CycleResult(cycle, True)
     universe, sources = governed_source_cohort()
     source_ids = [str(source.pk) for source in sources]
-    cycle = ObservatoryCycle.objects.filter(pk=cycle_id).first() if cycle_id else None
     if cycle:
         configuration = cycle_configuration(
             cycle.trigger, source_ids, timeout_seconds=timeout_seconds
@@ -523,11 +589,6 @@ def run_cycle(
             raise ObservatoryOperationError(
                 "cohort", "RETRY_CONFIGURATION_MISMATCH", "cycle configuration differs"
             )
-        if cycle.status in {
-            ObservatoryCycle.Status.SUCCEEDED,
-            ObservatoryCycle.Status.SUCCEEDED_NOT_AUTHORIZED,
-        }:
-            return CycleResult(cycle, True)
         if not resume:
             raise ObservatoryOperationError(
                 "cohort", "RESUME_REQUIRED", "non-success cycle requires --resume"
