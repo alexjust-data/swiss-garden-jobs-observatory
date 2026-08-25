@@ -1,0 +1,17 @@
+{
+  "schema_version": "gate-pre-audit-profile-v1",
+  "gate": "GATE-014",
+  "pr": 35,
+  "expected_base_ref": "codex/gate-013-daily-geospatial-integration",
+  "expected_base_sha": "30aed57e9e547b2cc18c65c24d01b624ccd1ea5b",
+  "expected_head_ref": "codex/gate-014-production-scheduling",
+  "contract": "docs/operations/gate_014_production_scheduling_contract_v0_1.md",
+  "contract_blob": "6619ac84e4776d7de6056dacef0b8986d5142014",
+  "frozen_paths": [
+    "docs/research/v0_4/"
+  ],
+  "focused_tests": [
+    "src/operations/tests/test_gate014_scheduling.py"
+  ],
+  "expected_migrations": []
+}
