@@ -85,6 +85,23 @@ The repository-wide Ruff formatter reports pre-existing format drift in 36 unrel
 files. They were not rewritten in this scoped PR. Repository-wide Ruff lint passes and every
 changed GATE-013 code file passes the formatter.
 
+## Stacked integration reconciliation
+
+A clean rehearsal stacked GATE-013 with the later governed `geospatial-v0.2` implementation and
+proved that importing the module-level current resolver/batch constants would silently change this
+cycle's frozen configuration from v0.1 to v0.2. The combined suite failed exactly at that identity
+boundary.
+
+The correction does not change the frozen GATE-013 contract. Daily orchestration now pins
+`geospatial-resolution-batch-v0.1` and `geospatial-v0.1` explicitly and constructs its default
+resolver with that version. The later C5 batch exposes v0.1 and v0.2 as distinct supported
+identities while retaining v0.2 as its explicit current default. A regression test proves the daily
+runner passes a v0.1 resolver instead of inheriting future module-level drift.
+
+The corrected clean integration rehearsal passed 77 focused tests, 641 full tests, four browser
+tests, Ruff, mypy over 177 source files, Django check, migration drift, clean PostgreSQL migration,
+and reference import twice. The rehearsal used only an isolated PostgreSQL container; production
+and the frozen contract remained unchanged.
 ## Integrity and remaining boundary
 
 ```text
