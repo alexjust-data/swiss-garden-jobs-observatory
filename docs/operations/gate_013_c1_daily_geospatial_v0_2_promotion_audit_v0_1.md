@@ -56,6 +56,26 @@ result tied to another PremiumRun identity/fingerprint before Dashboard
 construction. Dependency injection cannot make a v0.3 cycle persist a v0.1
 batch while claiming v0.2 authority.
 
+## Independent semantic-audit correction
+
+Prior audited head:
+`d119c4134d8691491a913b1c3052e449ba6a7027`.
+
+The independent audit found that aliases to the current resolver/batch module
+versions would allow a future current version to silently change v0.3 meaning
+and invalidate historical v0.3 replay. The correction removes those aliases
+from daily authority and introduces the closed literal mapping:
+
+```text
+daily-observatory-cycle-v0.1 → no geospatial authority
+daily-observatory-cycle-v0.2 → batch v0.1 / resolver v0.1
+daily-observatory-cycle-v0.3 → batch v0.2 / resolver v0.2
+```
+
+Regression tests prove that patching future module-current versions cannot
+change v0.3 configuration/replay, and that a re-hashed v0.3 record carrying a
+future authority pair fails closed.
+
 ## Day-0 and production boundary
 
 ```text
@@ -76,9 +96,9 @@ only prevents future daily map snapshots from reverting to geospatial v0.1.
 ## Validation evidence
 
 ```text
-Focused GATE-012/GATE-013:            33 passed
-Expanded operations/C5/Dashboard:   123 passed
-Full pytest:                         661 passed, 2 skipped
+Focused GATE-012/GATE-013:            35 passed
+Expanded operations/C5/Dashboard:   125 passed
+Full pytest:                         663 passed, 2 skipped
 Browser / Playwright:                  4 passed
 Ruff:                               PASS
 mypy:                               PASS — 178 H1 targets including manage.py

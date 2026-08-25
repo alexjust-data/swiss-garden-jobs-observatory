@@ -31,11 +31,9 @@ from day0.services import assess_day0_readiness, ensure_source_universe, readine
 from observations.geospatial import (
     PRIVACY_POLICY_VERSION,
     PROVIDER_VERSION,
-    RESOLVER_VERSION,
     GeospatialResolver,
 )
 from observations.geospatial_batch import (
-    BATCH_VERSION,
     GeospatialBatchResult,
     resolve_premium_run_locations,
 )
@@ -67,13 +65,20 @@ from vacancies.review_continuity import DedupContinuityValidationError
 from .models import ObservatoryCycle, ObservatorySourceAttempt, OperationalEvent
 
 CYCLE_VERSION = "daily-observatory-cycle-v0.3"
-COMPLETED_REPLAY_CYCLE_VERSIONS = frozenset(
-    {
-        "daily-observatory-cycle-v0.1",
-        "daily-observatory-cycle-v0.2",
-        CYCLE_VERSION,
-    }
-)
+DAILY_GEOSPATIAL_BATCH_VERSION = "geospatial-resolution-batch-v0.2"
+DAILY_GEOSPATIAL_RESOLVER_VERSION = "geospatial-v0.2"
+CYCLE_GEOSPATIAL_AUTHORITY: dict[str, tuple[str, str] | None] = {
+    "daily-observatory-cycle-v0.1": None,
+    "daily-observatory-cycle-v0.2": (
+        "geospatial-resolution-batch-v0.1",
+        "geospatial-v0.1",
+    ),
+    CYCLE_VERSION: (
+        DAILY_GEOSPATIAL_BATCH_VERSION,
+        DAILY_GEOSPATIAL_RESOLVER_VERSION,
+    ),
+}
+COMPLETED_REPLAY_CYCLE_VERSIONS = frozenset(CYCLE_GEOSPATIAL_AUTHORITY)
 STAGE_ORDER = (
     "cohort",
     "collection",
@@ -210,10 +215,6 @@ def _default_collector(source_id: str, **kwargs: Any) -> CollectionRun:
     )
 
 
-DAILY_GEOSPATIAL_BATCH_VERSION = BATCH_VERSION
-DAILY_GEOSPATIAL_RESOLVER_VERSION = RESOLVER_VERSION
-
-
 def _default_geospatial_runner(premium_run_id: uuid.UUID | str) -> GeospatialBatchResult:
     return resolve_premium_run_locations(
         premium_run_id,
@@ -267,23 +268,20 @@ def _completed_cycle_semantics_match(
     stage_order = configuration.get("stage_order")
     if not isinstance(versions, dict) or not isinstance(stage_order, list):
         return False
-    if cycle_version == "daily-observatory-cycle-v0.1":
+    if cycle_version not in CYCLE_GEOSPATIAL_AUTHORITY:
+        return False
+    authority = CYCLE_GEOSPATIAL_AUTHORITY[cycle_version]
+    if authority is None:
         return (
             "geospatial" not in stage_order
             and "geospatial_batch" not in versions
             and "geospatial_resolver" not in versions
         )
-    if cycle_version == "daily-observatory-cycle-v0.2":
-        return (
-            "geospatial" in stage_order
-            and versions.get("geospatial_batch") == "geospatial-resolution-batch-v0.1"
-            and versions.get("geospatial_resolver") == "geospatial-v0.1"
-        )
+    batch_version, resolver_version = authority
     return (
-        cycle_version == CYCLE_VERSION
-        and "geospatial" in stage_order
-        and versions.get("geospatial_batch") == DAILY_GEOSPATIAL_BATCH_VERSION
-        and versions.get("geospatial_resolver") == DAILY_GEOSPATIAL_RESOLVER_VERSION
+        "geospatial" in stage_order
+        and versions.get("geospatial_batch") == batch_version
+        and versions.get("geospatial_resolver") == resolver_version
     )
 
 

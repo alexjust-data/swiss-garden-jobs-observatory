@@ -19,6 +19,7 @@ from day0.tests.test_day0 import add_entry, assess, complete_collection, univers
 from operations.management.commands.run_daily_observatory import EXIT_BY_STATUS
 from operations.models import ObservatoryCycle
 from operations.services import (
+    CYCLE_GEOSPATIAL_AUTHORITY,
     CYCLE_VERSION,
     DAILY_GEOSPATIAL_BATCH_VERSION,
     DAILY_GEOSPATIAL_RESOLVER_VERSION,
@@ -78,6 +79,69 @@ def test_default_geospatial_runner_pins_promoted_v02_authority() -> None:
     assert DAILY_GEOSPATIAL_BATCH_VERSION == "geospatial-resolution-batch-v0.2"
     assert DAILY_GEOSPATIAL_RESOLVER_VERSION == "geospatial-v0.2"
     assert batch.call_args.kwargs["resolver"].resolver_version == "geospatial-v0.2"
+
+
+def test_v03_authority_and_replay_ignore_future_current_module_versions() -> None:
+    src = source("gate013-v03-future-current")
+    with (
+        patch("observations.geospatial.RESOLVER_VERSION", "geospatial-v9.9"),
+        patch(
+            "observations.geospatial_batch.BATCH_VERSION",
+            "geospatial-resolution-batch-v9.9",
+        ),
+    ):
+        configuration = cycle_configuration("MANUAL", [str(src.pk)])
+        assert configuration["versions"]["geospatial_batch"] == (
+            "geospatial-resolution-batch-v0.2"
+        )
+        assert configuration["versions"]["geospatial_resolver"] == "geospatial-v0.2"
+        item = ObservatoryCycle.objects.create(
+            cycle_version=CYCLE_VERSION,
+            trigger="MANUAL",
+            status=ObservatoryCycle.Status.SUCCEEDED_NOT_AUTHORIZED,
+            finished_at=timezone.now(),
+            target_cohort_version=configuration["target_cohort_version"],
+            selected_source_ids=[str(src.pk)],
+            configuration=configuration,
+            configuration_fingerprint=_sha256(configuration),
+            stage_statuses={},
+        )
+        with patch(
+            "operations.services.governed_source_cohort",
+            side_effect=AssertionError("historical replay consulted current cohort"),
+        ):
+            result = run_cycle(cycle_id=item.pk, collector=Mock(), geospatial_runner=Mock())
+    assert result.reused is True
+    assert result.cycle.pk == item.pk
+    assert CYCLE_GEOSPATIAL_AUTHORITY[CYCLE_VERSION] == (
+        "geospatial-resolution-batch-v0.2",
+        "geospatial-v0.2",
+    )
+
+
+def test_completed_v03_rejects_future_geospatial_authority_pair() -> None:
+    src = source("gate013-v03-future-pair")
+    configuration = cycle_configuration("MANUAL", [str(src.pk)])
+    configuration["versions"]["geospatial_batch"] = (
+        "geospatial-resolution-batch-v9.9"
+    )
+    configuration["versions"]["geospatial_resolver"] = "geospatial-v9.9"
+    item = ObservatoryCycle.objects.create(
+        cycle_version=CYCLE_VERSION,
+        trigger="MANUAL",
+        status=ObservatoryCycle.Status.SUCCEEDED_NOT_AUTHORIZED,
+        finished_at=timezone.now(),
+        target_cohort_version=configuration["target_cohort_version"],
+        selected_source_ids=[str(src.pk)],
+        configuration=configuration,
+        configuration_fingerprint=_sha256(configuration),
+        stage_statuses={},
+    )
+    with pytest.raises(
+        ObservatoryOperationError,
+        match="stored identity is inconsistent",
+    ):
+        run_cycle(cycle_id=item.pk, collector=Mock(), geospatial_runner=Mock())
 
 
 def test_v03_rejects_injected_legacy_geospatial_batch_before_dashboard() -> None:

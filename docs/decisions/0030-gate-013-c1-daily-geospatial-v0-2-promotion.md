@@ -24,9 +24,11 @@ New cycles use `daily-observatory-cycle-v0.3`. Its immutable configuration pins:
 - `geospatial-v0.2`;
 - Dashboard construction under the same `geospatial-v0.2` authority.
 
-The constants are imported from the merged C5 implementation and are still
-written explicitly into the cycle configuration fingerprint. The stage order,
-causal cutoff realignment, Source cohort, privacy, provider, RAW lineage,
+The exact strings are literal frozen authority rather than aliases to the
+current C5 module versions. A closed cycle-version authority table permanently
+maps v0.1 to no geospatial stage, v0.2 to geospatial v0.1 and v0.3 to geospatial
+v0.2. A future resolver therefore requires a deliberate new daily cycle
+version. The stage order, causal cutoff realignment, Source cohort, privacy, provider, RAW lineage,
 Premium, Dashboard and Day-0 rules are unchanged.
 
 Completed v0.1, v0.2 and v0.3 cycles may be returned by exact cycle-ID retry
@@ -54,9 +56,9 @@ realignment or Dashboard construction.
 
 ## Validation
 
-- focused GATE-012/GATE-013: 33 passed;
-- expanded operations/C5/Dashboard regression: 123 passed;
-- full pytest: 661 passed, 2 skipped;
+- focused GATE-012/GATE-013: 35 passed;
+- expanded operations/C5/Dashboard regression: 125 passed;
+- full pytest: 663 passed, 2 skipped;
 - Dashboard browser acceptance: 4 passed;
 - Ruff: passed;
 - mypy: passed for 178 checked source targets including `manage.py` under H1;
