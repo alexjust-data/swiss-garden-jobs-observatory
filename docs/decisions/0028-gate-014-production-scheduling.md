@@ -53,6 +53,9 @@ no-overwrite behavior.
 
 ## Boundaries
 
+The branch later incorporated GATE-013 exact head `91adab1839ba361de53608ee897b3bfa9df7be9a`
+to preserve that cycle's explicit v0.1 geospatial identity. This changes no scheduling semantics.
+
 GATE-014 changes no Source, lifecycle, review, Dedup, Premium, geography, Dashboard, freshness or
 Day-0 semantics. It creates no migrations. The first real task registration, operational backup and
 scheduler-triggered production cycle remain post-merge STOP boundaries requiring explicit

@@ -3,7 +3,8 @@
 ## Authority and scope
 
 - Upstream merged main: `99e39312535f33554a973110cba196c253628945`.
-- Stacked GATE-013 head: `30aed57e9e547b2cc18c65c24d01b624ccd1ea5b`.
+- Frozen stacked GATE-013 baseline: `30aed57e9e547b2cc18c65c24d01b624ccd1ea5b`.
+- Reconciled GATE-013 exact head: `91adab1839ba361de53608ee897b3bfa9df7be9a`.
 - Branch: `codex/gate-014-production-scheduling`.
 - Contract-only commit: `7be211a50efbbd835bcc1818c01f07b7d65dd7ca`.
 - Contract blob: `6619ac84e4776d7de6056dacef0b8986d5142014`.
@@ -109,6 +110,16 @@ log directory and registered no task.
 
 H1 evidence is added only after a draft PR has an exact GitHub head; it is not inferred here.
 
+## Stacked-base reconciliation
+
+After GATE-013 advanced to pin its frozen batch/resolver v0.1 identities explicitly, this branch
+merged exact head `91adab1839ba361de53608ee897b3bfa9df7be9a`. The scheduling contract, task behavior, backup
+behavior, cycle identity and production boundaries did not change. The merge prevents the scheduler
+branch from retaining the superseded dynamic-version implementation of its governed cycle.
+
+The original GATE-014 contract remains byte-identical and continues to record the exact GATE-013
+head on which it was predeclared. The later merge is append-only integration evidence, not a rewrite
+of that historical predeclaration.
 ## Production boundary
 
 The following remain forbidden before independent audit and merge:
