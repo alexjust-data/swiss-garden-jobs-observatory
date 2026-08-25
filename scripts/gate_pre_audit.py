@@ -260,6 +260,55 @@ def load_profile(path: Path) -> GateProfile:
     )
 
 
+def _governed_profile_path(*, repo: Path, path: Path) -> Path:
+    repo_root = repo.resolve(strict=True)
+    directory = (repo_root / PROFILE_DIRECTORY).resolve(strict=True)
+    try:
+        directory.relative_to(repo_root)
+    except ValueError as exc:
+        raise ValueError("governed profile directory must stay inside the repository") from exc
+
+    candidate = path if path.is_absolute() else repo_root / path
+    if candidate.suffix.casefold() != ".json":
+        raise ValueError("profile must be a JSON file")
+    if candidate.is_symlink():
+        raise ValueError("profile must be a physical repository file, not a symlink")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"cannot resolve profile {candidate}: {exc}") from exc
+    try:
+        resolved.relative_to(directory)
+    except ValueError as exc:
+        raise ValueError("profile must stay in the governed profile directory") from exc
+    if not resolved.is_file():
+        raise ValueError("profile must be a regular file")
+    return resolved
+
+
+def validate_focused_test_files(
+    *, repo: Path, profile: GateProfile, runner: CommandRunner
+) -> None:
+    repo_root = repo.resolve(strict=True)
+    for relative in profile.focused_tests:
+        candidate = repo_root / relative
+        if candidate.is_symlink():
+            raise ValueError(f"focused test must not be a symlink: {relative}")
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"cannot resolve focused test {relative}: {exc}") from exc
+        try:
+            resolved.relative_to(repo_root)
+        except ValueError as exc:
+            raise ValueError(f"focused test escapes the repository: {relative}") from exc
+        if not resolved.is_file() or resolved.suffix.casefold() != ".py":
+            raise ValueError(f"focused test must be a regular Python file: {relative}")
+        tracked = _git(runner, repo_root, "ls-files", "--error-unmatch", "--", relative)
+        if tracked.returncode != 0:
+            raise ValueError(f"focused test must be tracked by Git: {relative}")
+
+
 def aggregate_status(checks: Iterable[CheckResult]) -> AuditStatus:
     mandatory = [check for check in checks if check.mandatory]
     if any(check.status == AuditStatus.FAIL for check in mandatory):
@@ -322,21 +371,17 @@ def discover_profile(
     explicit_path: Path | None,
     changed_files: Sequence[str] | None,
 ) -> tuple[Path, GateProfile]:
-    directory = (repo / PROFILE_DIRECTORY).resolve()
+    directory = (repo.resolve(strict=True) / PROFILE_DIRECTORY).resolve(strict=True)
     if explicit_path is not None:
-        path = (explicit_path if explicit_path.is_absolute() else repo / explicit_path).resolve()
-        try:
-            path.relative_to(directory)
-        except ValueError as exc:
-            raise ValueError(
-                "explicit profile must stay in the governed profile directory"
-            ) from exc
-        if path.suffix.casefold() != ".json":
-            raise ValueError("explicit profile must be a JSON file")
+        path = _governed_profile_path(repo=repo, path=explicit_path)
         return path, load_profile(path)
 
     candidates: list[tuple[Path, GateProfile]] = []
-    for path in sorted(directory.glob("*.json")):
+    governed_paths = [
+        _governed_profile_path(repo=repo, path=path)
+        for path in sorted(directory.glob("*.json"))
+    ]
+    for path in governed_paths:
         profile = load_profile(path)
         if profile.pr == pr_number:
             candidates.append((path, profile))
@@ -347,7 +392,7 @@ def discover_profile(
 
     if changed_files is not None:
         changed = set(changed_files)
-        for path in sorted(directory.glob("*.json")):
+        for path in governed_paths:
             relative = path.relative_to(repo).as_posix()
             profile = load_profile(path)
             if relative in changed and profile.pr is None:
@@ -712,6 +757,7 @@ def run_audit(
     )
     if profile.pr is not None and profile.pr != pr_number:
         raise ValueError(f"profile declares PR #{profile.pr}, but audit requested PR #{pr_number}")
+    validate_focused_test_files(repo=repo, profile=profile, runner=runner)
 
     checks: list[CheckResult] = []
     repo_check = _git(runner, repo, "rev-parse", "--show-toplevel")

@@ -23,6 +23,7 @@ from scripts.gate_pre_audit import (
     load_profile,
     query_pull_request,
     run_audit,
+    validate_focused_test_files,
     write_report,
 )
 
@@ -308,6 +309,60 @@ def test_explicit_profile_must_use_governed_repository_directory(tmp_path: Path)
             explicit_path=external,
             changed_files=[],
         )
+
+
+def test_automatic_profile_symlink_escape_fails_closed(tmp_path: Path) -> None:
+    repo, _, _, profile_path = make_repository(tmp_path)
+    payload = profile_path.read_bytes()
+    external = tmp_path / "external-profile.json"
+    external.write_bytes(payload)
+    profile_path.unlink()
+    try:
+        profile_path.symlink_to(external)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="symlink"):
+        discover_profile(
+            repo=repo,
+            pr_number=30,
+            explicit_path=None,
+            changed_files=[],
+        )
+
+
+def test_focused_test_symlink_escape_fails_before_pytest(tmp_path: Path) -> None:
+    repo, _, _, profile_path = make_repository(tmp_path)
+    external = tmp_path / "external_test.py"
+    external.write_text("raise RuntimeError('must not execute')\n", encoding="utf-8")
+    focused = repo / "src/core/tests/escape_test.py"
+    focused.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        focused.symlink_to(external)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    payload["focused_tests"] = ["src/core/tests/escape_test.py"]
+    profile_path.write_text(json.dumps(payload), encoding="utf-8")
+    git(repo, "add", "--", str(profile_path), str(focused))
+    profile = load_profile(profile_path)
+
+    with pytest.raises(ValueError, match="symlink"):
+        validate_focused_test_files(repo=repo, profile=profile, runner=CommandRunner())
+
+
+def test_untracked_focused_test_fails_before_pytest(tmp_path: Path) -> None:
+    repo, _, _, profile_path = make_repository(tmp_path)
+    focused = repo / "src/core/tests/untracked_test.py"
+    focused.parent.mkdir(parents=True, exist_ok=True)
+    focused.write_text("def test_never_executed(): pass\n", encoding="utf-8")
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    payload["focused_tests"] = ["src/core/tests/untracked_test.py"]
+    profile_path.write_text(json.dumps(payload), encoding="utf-8")
+    profile = load_profile(profile_path)
+
+    with pytest.raises(ValueError, match="tracked by Git"):
+        validate_focused_test_files(repo=repo, profile=profile, runner=CommandRunner())
 
 
 def test_missing_gh_returns_unavailable_metadata(tmp_path: Path) -> None:
