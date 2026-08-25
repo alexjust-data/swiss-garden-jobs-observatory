@@ -17,6 +17,7 @@ from operations.scheduling import (
     SchedulingError,
     _atomic_publish,
     _inside_git_worktree,
+    _publish_file_no_overwrite,
     canonical_datetime,
     canonical_json_bytes,
     sha256_bytes,
@@ -187,10 +188,11 @@ def create_backup(
         dump_sha = sha256_bytes(dump_bytes)
         base_name = started.astimezone(UTC).strftime("observatory-%Y%m%dT%H%M%S%fZ")
         final_dump = config.output_root / f"{base_name}-{dump_sha[:12]}.dump"
-        try:
-            os.link(temporary_dump, final_dump)
-        except FileExistsError as exc:
-            raise SchedulingError("backup target already exists") from exc
+        _publish_file_no_overwrite(
+            temporary_dump,
+            final_dump,
+            collision_message="backup target already exists",
+        )
         finished = now()
         stable = {
             "backup_version": BACKUP_VERSION,

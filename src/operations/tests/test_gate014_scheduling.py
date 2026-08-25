@@ -15,6 +15,7 @@ from operations.scheduling import (
     REQUIRED_ENVIRONMENT,
     ScheduledRunConfig,
     SchedulingError,
+    _publish_file_no_overwrite,
     run_scheduled_cycle,
     scheduled_plan,
 )
@@ -123,6 +124,31 @@ def test_log_root_inside_worktree_is_rejected(tmp_path: Path) -> None:
             log_root=repo / "logs",
             expected_head=HEAD,
         )
+
+
+def test_windows_no_overwrite_publication_does_not_require_hardlinks(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.tmp"
+    target = tmp_path / "target.json"
+    source.write_bytes(b"first")
+
+    _publish_file_no_overwrite(
+        source,
+        target,
+        collision_message="collision",
+        platform_name="nt",
+    )
+    assert target.read_bytes() == b"first"
+    assert not source.exists()
+
+    second = tmp_path / "second.tmp"
+    second.write_bytes(b"second")
+    with pytest.raises(SchedulingError, match="collision"):
+        _publish_file_no_overwrite(
+            second, target, collision_message="collision", platform_name="nt"
+        )
+    assert target.read_bytes() == b"first"
 
 
 def test_cycle_exit_is_propagated_and_envelope_is_bounded(tmp_path: Path) -> None:

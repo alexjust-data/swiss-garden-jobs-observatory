@@ -277,6 +277,23 @@ def _bounded_status_summary(value: dict[str, Any] | None) -> dict[str, object] |
     }
 
 
+def _publish_file_no_overwrite(
+    source: Path,
+    target: Path,
+    *,
+    collision_message: str,
+    platform_name: str | None = None,
+) -> None:
+    platform = os.name if platform_name is None else platform_name
+    try:
+        if platform == "nt":
+            os.rename(source, target)
+        else:
+            os.link(source, target)
+    except FileExistsError as exc:
+        raise SchedulingError(collision_message) from exc
+
+
 def _atomic_publish(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
@@ -288,12 +305,11 @@ def _atomic_publish(path: Path, payload: bytes) -> None:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        try:
-            os.link(temporary, path)
-        except FileExistsError as exc:
-            raise SchedulingError(
-                f"scheduled invocation envelope already exists: {path.name}"
-            ) from exc
+        _publish_file_no_overwrite(
+            temporary,
+            path,
+            collision_message=f"scheduled invocation envelope already exists: {path.name}",
+        )
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
