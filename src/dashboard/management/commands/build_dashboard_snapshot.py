@@ -7,6 +7,7 @@ from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.utils.dateparse import parse_datetime
 
 from dashboard.services import DashboardBuildError, build_dashboard_snapshot
+from observations.geospatial import SUPPORTED_RESOLVER_VERSIONS
 from premium_segments.models import PremiumSegmentRun
 from vacancies.models import DedupRun
 
@@ -18,6 +19,11 @@ class Command(BaseCommand):
         parser.add_argument("--as-of", required=True)
         parser.add_argument("--dedup-run", required=True)
         parser.add_argument("--premium-run", required=True)
+        parser.add_argument(
+            "--geospatial-resolver-version",
+            required=True,
+            choices=sorted(SUPPORTED_RESOLVER_VERSIONS),
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         as_of = parse_datetime(options["as_of"])
@@ -27,7 +33,10 @@ class Command(BaseCommand):
             dedup_run = DedupRun.objects.get(pk=options["dedup_run"])
             premium_run = PremiumSegmentRun.objects.get(pk=options["premium_run"])
             snapshot, reused = build_dashboard_snapshot(
-                as_of=as_of, dedup_run=dedup_run, premium_run=premium_run
+                as_of=as_of,
+                dedup_run=dedup_run,
+                premium_run=premium_run,
+                geospatial_resolver_version=options["geospatial_resolver_version"],
             )
         except (DedupRun.DoesNotExist, PremiumSegmentRun.DoesNotExist, DashboardBuildError):
             raise CommandError(
@@ -39,6 +48,7 @@ class Command(BaseCommand):
             "input_fingerprint": snapshot.input_fingerprint,
             "dedup_run_id": str(snapshot.dedup_run.pk),
             "premium_run_id": str(snapshot.premium_run.pk),
+            "geospatial_resolver_version": snapshot.geospatial_resolver_version,
             "total_vacancy_states": snapshot.total_vacancy_states,
             "public_green_confirmed": snapshot.public_green_eligible_count,
             "mappable": snapshot.mappable_vacancy_count,

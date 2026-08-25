@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from reference_data.models import Municipality
+
 _COUNTRY_ALIASES = frozenset(
     {
         "ch",
@@ -83,3 +85,30 @@ def canonical_canton_code(value: str) -> str:
     if upper in _CANTON_CODES:
         return upper
     return _CANTON_NAMES.get(swiss_place_key(stripped), "")
+
+def resolve_swiss_municipality(
+    locality: str,
+    region: str = "",
+    *,
+    fallback_canton: str = "",
+) -> Municipality | None:
+    locality_key = swiss_place_key(locality)
+    if not locality_key:
+        return None
+    canton_code = canonical_canton_code(region) or canonical_canton_code(fallback_canton)
+    candidates = Municipality.objects.all()
+    if canton_code:
+        candidates = candidates.filter(canton_code=canton_code)
+    exact_matches = list(
+        candidates.filter(municipality_name__iexact=locality.strip()).only(
+            "bfs_code", "municipality_name", "canton_code"
+        )[:2]
+    )
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    matches = [
+        municipality
+        for municipality in candidates.only("bfs_code", "municipality_name", "canton_code")
+        if swiss_place_key(municipality.municipality_name) == locality_key
+    ][:2]
+    return matches[0] if len(matches) == 1 else None

@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 from django.db import connection, transaction
 
-from observations.geospatial import RESOLVER_VERSION
+from observations.geospatial import LEGACY_RESOLVER_VERSION, SUPPORTED_RESOLVER_VERSIONS
 from observations.models import GreenRelevanceAssessment, PostingLocationResolution
 from observations.pit_selection import PIT_SELECTION_VERSION
 from premium_segments.classifier import CLASSIFIER_VERSION as PREMIUM_CLASSIFIER_VERSION
@@ -41,7 +41,7 @@ SCOPE_NOTICE = (
     "the Swiss Garden Jobs Observatory. It is not yet a complete census of the Swiss "
     "gardening labour market."
 )
-CONFIGURATION = {
+BASE_CONFIGURATION = {
     "public_green_result": "GREEN_CONFIRMED",
     "map_coordinates": "public_display_only",
     "day_zero_authorized": False,
@@ -194,12 +194,13 @@ def _location(
     assessment: PremiumSegmentAssessment,
     *,
     as_of: datetime,
+    resolver_version: str,
 ) -> tuple[PostingLocationResolution | None, str, list[str]]:
     context = assessment.privacy_context
     resolution = (
         PostingLocationResolution.objects.filter(
             posting_observation=assessment.posting_observation,
-            resolver_version=RESOLVER_VERSION,
+            resolver_version=resolver_version,
             privacy_context=context,
             created_at__lte=as_of,
         )
@@ -267,7 +268,12 @@ def _source_provenance(state: DedupRunVacancyState) -> list[dict[str, str]]:
     ]
 
 
-def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[RecordPlan]:
+def _record_plans(
+    dedup_run: DedupRun,
+    premium_run: PremiumSegmentRun,
+    *,
+    geospatial_resolver_version: str,
+) -> list[RecordPlan]:
     evidence = {item.posting_id: item for item in select_posting_evidence(dedup_run.as_of)}
     assessments = {
         str(item.posting_observation_id): item
@@ -298,7 +304,11 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
         if observation.posting_id != state.canonical_posting_id:
             raise DashboardBuildError("premium assessment does not belong to canonical posting")
         visibility = _visibility(assessment)
-        resolution, mapping, flags = _location(assessment, as_of=dedup_run.as_of)
+        resolution, mapping, flags = _location(
+            assessment,
+            as_of=dedup_run.as_of,
+            resolver_version=geospatial_resolver_version,
+        )
         if visibility != cast(str, DashboardVacancyRecord.VisibilityStatus.PUBLIC_GREEN_CONFIRMED):
             mapping = cast(str, DashboardVacancyRecord.MappingStatus.LOCATION_UNRESOLVED)
         link_status, selected_url, label, link_method, source_url = source_link(observation)
@@ -409,14 +419,18 @@ def _record_plans(dedup_run: DedupRun, premium_run: PremiumSegmentRun) -> list[R
 
 
 def _fingerprint(
-    dedup_run: DedupRun, premium_run: PremiumSegmentRun, plans: list[RecordPlan]
+    dedup_run: DedupRun,
+    premium_run: PremiumSegmentRun,
+    plans: list[RecordPlan],
+    *,
+    configuration: dict[str, Any],
 ) -> str:
     payload = {
         "dashboard_version": DASHBOARD_VERSION,
         "as_of": dedup_run.as_of.isoformat(),
         "dedup_run": str(dedup_run.pk),
         "premium_run": str(premium_run.pk),
-        "configuration": CONFIGURATION,
+        "configuration": configuration,
         "records": [plan.fingerprint for plan in plans],
     }
     return hashlib.sha256(
@@ -482,11 +496,30 @@ def _validate_runs(dedup_run: DedupRun, premium_run: PremiumSegmentRun, as_of: d
 
 @transaction.atomic
 def build_dashboard_snapshot(
-    *, as_of: datetime, dedup_run: DedupRun, premium_run: PremiumSegmentRun
+    *,
+    as_of: datetime,
+    dedup_run: DedupRun,
+    premium_run: PremiumSegmentRun,
+    geospatial_resolver_version: str = LEGACY_RESOLVER_VERSION,
 ) -> tuple[DashboardSnapshot, bool]:
+    if geospatial_resolver_version not in SUPPORTED_RESOLVER_VERSIONS:
+        raise DashboardBuildError("unsupported geospatial resolver version")
     _validate_runs(dedup_run, premium_run, as_of)
-    plans = _record_plans(dedup_run, premium_run)
-    fingerprint = _fingerprint(dedup_run, premium_run, plans)
+    configuration = {
+        **BASE_CONFIGURATION,
+        "geospatial_resolver_version": geospatial_resolver_version,
+    }
+    plans = _record_plans(
+        dedup_run,
+        premium_run,
+        geospatial_resolver_version=geospatial_resolver_version,
+    )
+    fingerprint = _fingerprint(
+        dedup_run,
+        premium_run,
+        plans,
+        configuration=configuration,
+    )
     _lock(fingerprint)
     existing = DashboardSnapshot.objects.filter(
         dashboard_version=DASHBOARD_VERSION,
@@ -524,9 +557,9 @@ def build_dashboard_snapshot(
         dedup_version=dedup_run.dedup_version,
         premium_classifier_version=premium_run.classifier_version,
         green_classifier_version=GREEN_CLASSIFIER_VERSION,
-        geospatial_resolver_version=RESOLVER_VERSION,
+        geospatial_resolver_version=geospatial_resolver_version,
         source_link_policy_version=SOURCE_LINK_POLICY_VERSION,
-        configuration=CONFIGURATION,
+        configuration=configuration,
         input_fingerprint=fingerprint,
         total_vacancy_states=len(plans),
         public_green_eligible_count=len(public),
