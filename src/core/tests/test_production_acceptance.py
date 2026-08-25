@@ -21,6 +21,8 @@ from core.production_acceptance import (
     canonical_value,
     capture_snapshot,
     compare_snapshots,
+    current_database_identity,
+    governed_model_labels,
     run_geospatial_acceptance,
     sha256,
     write_report,
@@ -38,6 +40,10 @@ from observations.geospatial import (
 from observations.models import GeocoderCacheEntry, PostingLocationResolution
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+
+def _database_identity_sha256() -> str:
+    return current_database_identity()["database_identity_sha256"]
 
 
 def _digest(content: bytes) -> str:
@@ -163,6 +169,42 @@ def test_snapshot_delta_detects_created_modified_and_deleted_rows(tmp_path: Path
         assert deleted_delta["core.RawArtifact"]["deleted"] == [str(artifact.pk)]
 
 
+def test_snapshot_covers_every_governed_project_model_and_detects_old_gap(
+    tmp_path: Path,
+) -> None:
+    upstream = create_dashboard_upstream(suffix="h2-full-model-surface")
+    labels = governed_model_labels()
+    assert "sources.Source" in labels
+    assert "observations.PostingObservation" in labels
+    assert "premium_segments.PremiumSegmentAssessment" in labels
+    assert "observations.PostingLifecycleEvent" in labels
+
+    with _settings(tmp_path / "raw", tmp_path / "operational"):
+        before = capture_snapshot(verify_raw_bytes=False)
+        source = upstream["source"]
+        source_name = source.source_name
+        type(source).objects.filter(pk=source.pk).update(source_name=f"{source_name} changed")
+        after = capture_snapshot(verify_raw_bytes=False)
+
+    delta = compare_snapshots(before, after)
+    assert delta["sources.Source"]["modified"] == [str(source.pk)]
+
+
+def test_expected_database_identity_mismatch_refuses_before_operation(tmp_path: Path) -> None:
+    upstream = create_dashboard_upstream(suffix="h2-db-identity-mismatch")
+    with _settings(tmp_path / "raw", tmp_path / "operational"):
+        with pytest.raises(ProductionAcceptanceError, match="expected-database-identity"):
+            run_geospatial_acceptance(
+                premium_run_id=str(upstream["premium_run"].pk),
+                expected_database=current_database_identity()["database"],
+                expected_database_identity_sha256="f" * 64,
+                execute=True,
+                allow_operational=False,
+                verify_raw_bytes=True,
+            )
+    assert PostingLocationResolution.objects.count() == 0
+
+
 def test_expected_database_mismatch_refuses_before_operation(tmp_path: Path) -> None:
     upstream = create_dashboard_upstream(suffix="h2-db-mismatch")
     with _settings(tmp_path / "raw", tmp_path / "operational"):
@@ -170,6 +212,7 @@ def test_expected_database_mismatch_refuses_before_operation(tmp_path: Path) -> 
             run_geospatial_acceptance(
                 premium_run_id=str(upstream["premium_run"].pk),
                 expected_database="definitely-not-the-connected-database",
+                expected_database_identity_sha256=_database_identity_sha256(),
                 execute=True,
                 allow_operational=False,
                 verify_raw_bytes=True,
@@ -183,6 +226,7 @@ def test_dry_run_is_not_proven_and_mutates_nothing(tmp_path: Path) -> None:
         report = run_geospatial_acceptance(
             premium_run_id=str(upstream["premium_run"].pk),
             expected_database=str(connection.settings_dict["NAME"]),
+            expected_database_identity_sha256=_database_identity_sha256(),
             execute=False,
             allow_operational=False,
             verify_raw_bytes=False,
@@ -199,6 +243,7 @@ def test_raw_preflight_failure_stops_before_geospatial_mutation(tmp_path: Path) 
         report = run_geospatial_acceptance(
             premium_run_id=str(upstream["premium_run"].pk),
             expected_database=str(connection.settings_dict["NAME"]),
+            expected_database_identity_sha256=_database_identity_sha256(),
             execute=True,
             allow_operational=False,
             verify_raw_bytes=True,
@@ -219,6 +264,7 @@ def test_isolated_cached_geospatial_acceptance_and_retry_pass(tmp_path: Path) ->
         report = run_geospatial_acceptance(
             premium_run_id=str(upstream["premium_run"].pk),
             expected_database=str(connection.settings_dict["NAME"]),
+            expected_database_identity_sha256=_database_identity_sha256(),
             execute=True,
             allow_operational=False,
             verify_raw_bytes=True,
@@ -245,14 +291,38 @@ def test_operational_database_requires_explicit_boundary(tmp_path: Path) -> None
         CORE_RAW_OBJECT_STORE_PATH=str(tmp_path / "raw"),
         JOB_OBSERVATORY_OPERATIONAL_RAW_STORE_PATH=str(tmp_path / "raw"),
         JOB_OBSERVATORY_OPERATIONAL_DB_NAME=database,
+        JOB_OBSERVATORY_OPERATIONAL_DB_IDENTITY_SHA256=_database_identity_sha256(),
         JOB_OBSERVATORY_RAW_LINEAGE_MANIFEST_SHA256="a" * 64,
     ):
         with pytest.raises(ProductionAcceptanceError, match="allow-operational"):
             run_geospatial_acceptance(
                 premium_run_id=str(upstream["premium_run"].pk),
                 expected_database=database,
+                expected_database_identity_sha256=_database_identity_sha256(),
                 execute=True,
                 allow_operational=False,
+                verify_raw_bytes=True,
+            )
+    assert PostingLocationResolution.objects.count() == 0
+
+
+def test_operational_database_name_alone_is_not_authority(tmp_path: Path) -> None:
+    upstream = create_dashboard_upstream(suffix="h2-operational-identity")
+    database = current_database_identity()["database"]
+    with override_settings(
+        CORE_RAW_OBJECT_STORE_PATH=str(tmp_path / "raw"),
+        JOB_OBSERVATORY_OPERATIONAL_RAW_STORE_PATH=str(tmp_path / "raw"),
+        JOB_OBSERVATORY_OPERATIONAL_DB_NAME=database,
+        JOB_OBSERVATORY_OPERATIONAL_DB_IDENTITY_SHA256="0" * 64,
+        JOB_OBSERVATORY_RAW_LINEAGE_MANIFEST_SHA256="a" * 64,
+    ):
+        with pytest.raises(ProductionAcceptanceError, match="identity designation mismatch"):
+            run_geospatial_acceptance(
+                premium_run_id=str(upstream["premium_run"].pk),
+                expected_database=database,
+                expected_database_identity_sha256=_database_identity_sha256(),
+                execute=True,
+                allow_operational=True,
                 verify_raw_bytes=True,
             )
     assert PostingLocationResolution.objects.count() == 0
@@ -271,6 +341,7 @@ def test_isolated_database_cannot_share_operational_raw_root(tmp_path: Path) -> 
             run_geospatial_acceptance(
                 premium_run_id=str(upstream["premium_run"].pk),
                 expected_database=str(connection.settings_dict["NAME"]),
+                expected_database_identity_sha256=_database_identity_sha256(),
                 execute=True,
                 allow_operational=False,
                 verify_raw_bytes=True,
@@ -299,6 +370,16 @@ def test_output_path_must_be_disjoint_from_raw(tmp_path: Path) -> None:
             _assert_output_scope(tmp_path)
 
 
+def test_output_path_must_also_be_disjoint_from_operational_raw(tmp_path: Path) -> None:
+    execution = tmp_path / "execution"
+    operational = tmp_path / "operational"
+    with _settings(execution, operational):
+        with pytest.raises(ProductionAcceptanceError, match="disjoint"):
+            _assert_output_scope(operational / "reports")
+        with pytest.raises(ProductionAcceptanceError, match="disjoint"):
+            _assert_output_scope(tmp_path)
+
+
 def test_relative_raw_roots_are_rejected_before_mutation(tmp_path: Path) -> None:
     upstream = create_dashboard_upstream(suffix="h2-relative-root")
     with override_settings(
@@ -311,6 +392,7 @@ def test_relative_raw_roots_are_rejected_before_mutation(tmp_path: Path) -> None
             run_geospatial_acceptance(
                 premium_run_id=str(upstream["premium_run"].pk),
                 expected_database=str(connection.settings_dict["NAME"]),
+                expected_database_identity_sha256=_database_identity_sha256(),
                 execute=True,
                 allow_operational=False,
                 verify_raw_bytes=True,

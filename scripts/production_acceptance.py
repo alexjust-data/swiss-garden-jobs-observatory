@@ -32,6 +32,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--operation", required=True, choices=[OPERATION_GEOSPATIAL])
     result.add_argument("--premium-run", required=True, help="Exact PremiumSegmentRun UUID")
     result.add_argument("--expected-database", required=True)
+    result.add_argument("--expected-database-identity-sha256", required=True)
     result.add_argument("--execute", action="store_true", help="Execute operation and exact retry")
     result.add_argument(
         "--allow-operational",
@@ -59,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         report = run_geospatial_acceptance(
             premium_run_id=arguments.premium_run,
             expected_database=arguments.expected_database,
+            expected_database_identity_sha256=arguments.expected_database_identity_sha256,
             execute=arguments.execute,
             allow_operational=arguments.allow_operational,
             verify_raw_bytes=arguments.verify_raw_bytes,

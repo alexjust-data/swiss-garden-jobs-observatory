@@ -29,17 +29,18 @@ from observations.geospatial_batch import GeospatialBatchResult, resolve_premium
 
 REPORT_VERSION = "production-acceptance-v0.1"
 OPERATION_GEOSPATIAL = "geospatial-recovery"
-MODEL_LABELS = (
-    "core.RawArtifact",
-    "observations.GeocoderCacheEntry",
-    "observations.PostingLocationResolution",
-    "observations.GeocodingReviewItem",
-    "vacancies.DedupRun",
-    "premium_segments.PremiumSegmentRun",
-    "dashboard.DashboardSnapshot",
-    "day0.Day0ReadinessAssessment",
-    "operations.ObservatoryCycle",
-    "operations.ObservatorySourceAttempt",
+GOVERNED_APP_LABELS = frozenset(
+    {
+        "core",
+        "sources",
+        "reference_data",
+        "observations",
+        "vacancies",
+        "premium_segments",
+        "dashboard",
+        "day0",
+        "operations",
+    }
 )
 ARTIFACT_SUMMARY_FIELDS: dict[str, tuple[str, ...]] = {
     "vacancies.DedupRun": ("id", "as_of", "status", "input_fingerprint"),
@@ -193,6 +194,18 @@ def sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json(value)).hexdigest()
 
 
+def governed_model_labels() -> tuple[str, ...]:
+    """Return the complete governed project-model surface in canonical order."""
+
+    return tuple(
+        sorted(
+            model._meta.label
+            for model in apps.get_models()
+            if model._meta.app_label in GOVERNED_APP_LABELS
+        )
+    )
+
+
 def _model_rows(model_label: str) -> dict[str, str]:
     model = apps.get_model(model_label)
     fields = tuple(model._meta.concrete_fields)
@@ -261,6 +274,13 @@ def _database_metadata() -> dict[str, Any]:
             "version": str(version).split(",", 1)[0],
         }
     )
+    database_identity = sha256(
+        {
+            "vendor": connection.vendor,
+            "database": database,
+            "server_identity_sha256": server_identity,
+        }
+    )
     migrations = sorted(
         [app_name, migration_name]
         for app_name, migration_name in MigrationRecorder.Migration.objects.values_list(
@@ -273,6 +293,7 @@ def _database_metadata() -> dict[str, Any]:
         "transaction_snapshot": snapshot_id,
         "transaction_started_at": canonical_value(started_at),
         "server_identity_sha256": server_identity,
+        "database_identity_sha256": database_identity,
         "migration_count": len(migrations),
         "migration_inventory_sha256": sha256(migrations),
     }
@@ -293,6 +314,17 @@ def _artifact_summaries() -> dict[str, list[dict[str, Any]]]:
     return summaries
 
 
+def current_database_identity() -> dict[str, str]:
+    """Return bounded server/database authority without credentials or DSNs."""
+
+    metadata = _database_metadata()
+    return {
+        "database": str(metadata["database"]),
+        "server_identity_sha256": str(metadata["server_identity_sha256"]),
+        "database_identity_sha256": str(metadata["database_identity_sha256"]),
+    }
+
+
 def capture_snapshot(*, verify_raw_bytes: bool) -> dict[str, Any]:
     if connection.in_atomic_block:
         raise ProductionAcceptanceError("H2 snapshots require their own database transaction")
@@ -300,8 +332,9 @@ def capture_snapshot(*, verify_raw_bytes: bool) -> dict[str, Any]:
         with connection.cursor() as cursor:
             cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         metadata = _database_metadata()
+        model_labels = governed_model_labels()
         models: dict[str, Any] = {}
-        for model_label in MODEL_LABELS:
+        for model_label in model_labels:
             rows = _model_rows(model_label)
             models[model_label] = {
                 "count": len(rows),
@@ -312,6 +345,8 @@ def capture_snapshot(*, verify_raw_bytes: bool) -> dict[str, Any]:
         raw = _raw_evidence(verify_bytes=verify_raw_bytes)
     return {
         "database": metadata,
+        "governed_model_labels": list(model_labels),
+        "model_inventory_sha256": sha256(model_labels),
         "models": models,
         "artifacts": artifacts,
         "raw": raw,
@@ -323,7 +358,13 @@ def capture_snapshot(*, verify_raw_bytes: bool) -> dict[str, Any]:
 
 def compare_snapshots(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for model_label in MODEL_LABELS:
+    before_labels = tuple(before["governed_model_labels"])
+    after_labels = tuple(after["governed_model_labels"])
+    if before_labels != after_labels:
+        raise ProductionAcceptanceError("governed model inventory changed during acceptance")
+    if before.get("model_inventory_sha256") != after.get("model_inventory_sha256"):
+        raise ProductionAcceptanceError("governed model inventory fingerprint changed")
+    for model_label in before_labels:
         before_rows = dict(before["models"][model_label]["rows"])
         after_rows = dict(after["models"][model_label]["rows"])
         before_ids = set(before_rows)
@@ -398,10 +439,18 @@ def _delta_checks(
     ]
 
 
-def _operational_root_preflight(*, execute: bool, allow_operational: bool) -> dict[str, Any]:
-    database = str(connection.settings_dict.get("NAME", ""))
+def _operational_root_preflight(
+    *,
+    execute: bool,
+    allow_operational: bool,
+    database_identity: Mapping[str, str],
+) -> dict[str, Any]:
+    database = database_identity["database"]
     operational_database = str(settings.JOB_OBSERVATORY_OPERATIONAL_DB_NAME)
     is_operational = database == operational_database
+    configured_identity = str(settings.JOB_OBSERVATORY_OPERATIONAL_DB_IDENTITY_SHA256).strip()
+    if is_operational and configured_identity != database_identity["database_identity_sha256"]:
+        raise ProductionAcceptanceError("operational database identity designation mismatch")
     execution_path = Path(settings.CORE_RAW_OBJECT_STORE_PATH)
     operational_path = Path(settings.JOB_OBSERVATORY_OPERATIONAL_RAW_STORE_PATH)
     execution_root = os.path.normcase(str(execution_path.resolve()))
@@ -437,16 +486,31 @@ def run_geospatial_acceptance(
     *,
     premium_run_id: str,
     expected_database: str,
+    expected_database_identity_sha256: str,
     execute: bool,
     allow_operational: bool,
     verify_raw_bytes: bool,
 ) -> dict[str, Any]:
-    if not expected_database or expected_database != connection.settings_dict.get("NAME"):
+    database_identity = current_database_identity()
+    if not expected_database or expected_database != database_identity["database"]:
         raise ProductionAcceptanceError("connected database does not match --expected-database")
+    if (
+        len(expected_database_identity_sha256) != 64
+        or expected_database_identity_sha256 != expected_database_identity_sha256.lower()
+        or any(
+            character not in "0123456789abcdef" for character in expected_database_identity_sha256
+        )
+        or expected_database_identity_sha256 != database_identity["database_identity_sha256"]
+    ):
+        raise ProductionAcceptanceError(
+            "connected server/database does not match --expected-database-identity-sha256"
+        )
     if execute and not verify_raw_bytes:
         raise ProductionAcceptanceError("mutable H2 acceptance requires --verify-raw-bytes")
     root_preflight = _operational_root_preflight(
-        execute=execute, allow_operational=allow_operational
+        execute=execute,
+        allow_operational=allow_operational,
+        database_identity=database_identity,
     )
     started = time.monotonic()
     before = capture_snapshot(verify_raw_bytes=verify_raw_bytes)
@@ -455,7 +519,7 @@ def run_geospatial_acceptance(
             "database_identity",
             AcceptanceStatus.PASS,
             "connected database matches the explicit expected identity",
-            details={"database": expected_database, **root_preflight},
+            details={**database_identity, **root_preflight},
         ),
         _check(
             "raw_before",
@@ -643,6 +707,7 @@ def run_geospatial_acceptance(
         "operation": OPERATION_GEOSPATIAL,
         "execution_requested": execute,
         "expected_database": expected_database,
+        "expected_database_identity_sha256": expected_database_identity_sha256,
         "before": before,
         "operation_result": _result_dict(operation),
         "after": after,
@@ -662,9 +727,17 @@ def run_geospatial_acceptance(
 
 def _assert_output_scope(output_dir: Path) -> Path:
     resolved = output_dir.resolve()
-    raw_root = Path(settings.CORE_RAW_OBJECT_STORE_PATH).resolve()
-    if resolved == raw_root or raw_root in resolved.parents or resolved in raw_root.parents:
-        raise ProductionAcceptanceError("report output and RAW root must be disjoint")
+    raw_roots = (
+        Path(settings.CORE_RAW_OBJECT_STORE_PATH).resolve(),
+        Path(settings.JOB_OBSERVATORY_OPERATIONAL_RAW_STORE_PATH).resolve(),
+    )
+    if any(
+        resolved == root or root in resolved.parents or resolved in root.parents
+        for root in raw_roots
+    ):
+        raise ProductionAcceptanceError(
+            "report output and execution/operational RAW roots must be disjoint"
+        )
     resolved.mkdir(parents=True, exist_ok=True)
     probe = resolved / f".h2-write-probe-{uuid.uuid4().hex}"
     try:
