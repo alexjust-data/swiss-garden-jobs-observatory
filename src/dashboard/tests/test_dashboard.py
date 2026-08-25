@@ -82,8 +82,8 @@ def test_v01_and_v02_dashboard_snapshots_coexist_with_explicit_authority() -> No
     assert current_snapshot.geospatial_resolver_version == RESOLVER_VERSION
     assert legacy_snapshot.configuration["geospatial_resolver_version"] == LEGACY_RESOLVER_VERSION
     assert current_snapshot.configuration["geospatial_resolver_version"] == RESOLVER_VERSION
-    assert legacy_snapshot.vacancy_records.get().location_resolution_id == legacy_resolution.pk
-    assert current_snapshot.vacancy_records.get().location_resolution_id == current_resolution.pk
+    assert legacy_snapshot.vacancy_records.get().location_resolution == legacy_resolution
+    assert current_snapshot.vacancy_records.get().location_resolution == current_resolution
 
     assert build_dashboard_snapshot(
         as_of=data["as_of"],
