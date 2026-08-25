@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from io import StringIO
 from types import SimpleNamespace
 from typing import Any
@@ -77,6 +78,39 @@ def test_default_geospatial_runner_pins_promoted_v02_authority() -> None:
     assert DAILY_GEOSPATIAL_BATCH_VERSION == "geospatial-resolution-batch-v0.2"
     assert DAILY_GEOSPATIAL_RESOLVER_VERSION == "geospatial-v0.2"
     assert batch.call_args.kwargs["resolver"].resolver_version == "geospatial-v0.2"
+
+
+def test_v03_rejects_injected_legacy_geospatial_batch_before_dashboard() -> None:
+    data = create_dashboard_upstream(suffix="gate013-legacy-batch")
+    complete_collection(data)
+    source_universe = universe()
+    legacy_result = replace(
+        geospatial_result(data["premium_run"]),
+        batch_version="geospatial-resolution-batch-v0.1",
+    )
+    dashboard_builder = Mock()
+    with (
+        patch(
+            "operations.services.governed_source_cohort",
+            return_value=(source_universe, [data["source"]]),
+        ),
+        patch("operations.services.apply_green_continuity", return_value={}),
+        patch("operations.services.run_deduplication", return_value=(data["dedup"], True)),
+        patch(
+            "operations.services.run_classification",
+            return_value=(data["premium_run"], True),
+        ),
+        patch("operations.services.build_dashboard_snapshot", dashboard_builder),
+        patch("operations.services.timezone.now", return_value=data["as_of"]),
+    ):
+        result = run_cycle(
+            collector=Mock(return_value=data["observation"].collection_run),
+            geospatial_runner=Mock(return_value=legacy_result),
+        )
+    assert result.cycle.status == ObservatoryCycle.Status.FAILED_GEOSPATIAL
+    assert result.cycle.failure_code == "GEOSPATIAL_AUTHORITY_MISMATCH"
+    assert result.cycle.stage_statuses["geospatial"] == "FAILED"
+    dashboard_builder.assert_not_called()
 
 
 def test_geospatial_failure_seals_before_dashboard() -> None:

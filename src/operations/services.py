@@ -524,6 +524,25 @@ def _geospatial_requires_cutoff_advance(result: GeospatialBatchResult, cutoff: d
     ).exists()
 
 
+def _validate_daily_geospatial_result(
+    result: GeospatialBatchResult,
+    *,
+    premium_run_id: uuid.UUID | str,
+    premium_run_fingerprint: str,
+) -> None:
+    valid = (
+        result.batch_version == DAILY_GEOSPATIAL_BATCH_VERSION
+        and result.premium_run_id == str(premium_run_id)
+        and result.premium_run_fingerprint == premium_run_fingerprint
+    )
+    if not valid:
+        raise ObservatoryOperationError(
+            "geospatial",
+            "GEOSPATIAL_AUTHORITY_MISMATCH",
+            "geospatial batch result does not match the daily cycle authority",
+        )
+
+
 def _geospatial_state(
     first: GeospatialBatchResult,
     final: GeospatialBatchResult,
@@ -881,6 +900,11 @@ def run_cycle(
                 invocation_started=invocation_started,
             )
             geospatial_first = geospatial_runner(premium_run.pk)
+            _validate_daily_geospatial_result(
+                geospatial_first,
+                premium_run_id=premium_run.pk,
+                premium_run_fingerprint=premium_run.input_fingerprint,
+            )
             geospatial_final = geospatial_first
             _ensure_within_timeout(
                 cycle,
@@ -901,6 +925,11 @@ def run_cycle(
                     )
                 premium_run, premium_reused = run_classification(cutoff)
                 geospatial_final = geospatial_runner(premium_run.pk)
+                _validate_daily_geospatial_result(
+                    geospatial_final,
+                    premium_run_id=premium_run.pk,
+                    premium_run_fingerprint=premium_run.input_fingerprint,
+                )
                 if _geospatial_requires_cutoff_advance(geospatial_final, cutoff):
                     raise ObservatoryOperationError(
                         "geospatial",

@@ -51,6 +51,11 @@ Replay validates:
 An internally re-hashed but semantically invalid v0.2/v0.2 pairing fails closed.
 Failed v0.1 and v0.2 cycles cannot resume as v0.3.
 
+The active stage independently rejects a returned legacy batch version or a
+result tied to another PremiumRun identity/fingerprint before Dashboard
+construction. Dependency injection cannot make a v0.3 cycle persist a v0.1
+batch while claiming v0.2 authority.
+
 ## Day-0 and production boundary
 
 ```text
@@ -71,12 +76,12 @@ only prevents future daily map snapshots from reverting to geospatial v0.1.
 ## Validation evidence
 
 ```text
-Focused GATE-012/GATE-013:            32 passed
-Expanded operations/C5/Dashboard:   122 passed
-Full pytest:                         660 passed, 2 skipped
+Focused GATE-012/GATE-013:            33 passed
+Expanded operations/C5/Dashboard:   123 passed
+Full pytest:                         661 passed, 2 skipped
 Browser / Playwright:                  4 passed
 Ruff:                               PASS
-mypy:                               PASS — 177 source files
+mypy:                               PASS — 178 H1 targets including manage.py
 Django check:                       PASS
 makemigrations --check --dry-run:   PASS — no changes
 ```

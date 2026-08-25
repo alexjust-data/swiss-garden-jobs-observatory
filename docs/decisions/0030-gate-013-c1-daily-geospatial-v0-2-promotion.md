@@ -36,6 +36,10 @@ consulting the current Source cohort and performs no operational activity.
 Incomplete v0.1/v0.2 cycles still fail configuration comparison and cannot be
 resumed as v0.3.
 
+Every geospatial batch result is also checked against the v0.2 batch authority,
+the exact PremiumRun ID and its immutable input fingerprint before causal
+realignment or Dashboard construction.
+
 ## Consequences
 
 - `daily-observatory-cycle-v0.2` continues to mean geospatial v0.1 forever.
@@ -50,12 +54,12 @@ resumed as v0.3.
 
 ## Validation
 
-- focused GATE-012/GATE-013: 32 passed;
-- expanded operations/C5/Dashboard regression: 122 passed;
-- full pytest: 660 passed, 2 skipped;
+- focused GATE-012/GATE-013: 33 passed;
+- expanded operations/C5/Dashboard regression: 123 passed;
+- full pytest: 661 passed, 2 skipped;
 - Dashboard browser acceptance: 4 passed;
 - Ruff: passed;
-- mypy: passed for 177 source files;
+- mypy: passed for 178 checked source targets including `manage.py` under H1;
 - Django check: no issues;
 - migration drift: none.
 
