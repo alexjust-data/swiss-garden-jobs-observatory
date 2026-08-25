@@ -3,7 +3,7 @@
   "gate": "GATE-PRE-AUDIT-H1",
   "pr": 31,
   "expected_base_ref": "main",
-  "expected_base_sha": "99e39312535f33554a973110cba196c253628945",
+  "expected_base_sha": "a22ae2c5098131151917b68a0e0a6b7cdcf1a31a",
   "expected_head_ref": "codex/gate-pre-audit-harness",
   "contract": "docs/governance/GATE_PRE_AUDIT_CHECKLIST_v1.md",
   "contract_blob": "fba22589f0ed68e141b96aa4abd63dfe3ab75e9b",
