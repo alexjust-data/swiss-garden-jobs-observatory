@@ -1,0 +1,15 @@
+{
+  "schema_version": "gate-pre-audit-profile-v1",
+  "gate": "GATE-011F-C1",
+  "pr": null,
+  "expected_base_ref": "main",
+  "expected_base_sha": "99e39312535f33554a973110cba196c253628945",
+  "expected_head_ref": "codex/gate-011f-c1-required-source-recovery",
+  "contract": "docs/day0/gate_011f_c1_required_source_recovery_contract_v0_1.md",
+  "contract_blob": "8ad0d30e3baeec73aafd8a2f08b75938d5a54c98",
+  "frozen_paths": [
+    "docs/research/v0_4/"
+  ],
+  "focused_tests": [],
+  "expected_migrations": []
+}

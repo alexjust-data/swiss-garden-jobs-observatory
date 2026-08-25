@@ -94,6 +94,7 @@ class ObservatoryCycle(models.Model):
         FAILED_CONTINUITY = "FAILED_CONTINUITY", "Continuity failed"
         FAILED_DEDUP = "FAILED_DEDUP", "Dedup failed"
         FAILED_PREMIUM = "FAILED_PREMIUM", "Premium failed"
+        FAILED_GEOSPATIAL = "FAILED_GEOSPATIAL", "Geospatial resolution failed"
         FAILED_DASHBOARD = "FAILED_DASHBOARD", "Dashboard failed"
         FAILED_READINESS = "FAILED_READINESS", "Readiness failed"
         ABORTED_CONCURRENCY = "ABORTED_CONCURRENCY", "Concurrency refused"
@@ -113,6 +114,7 @@ class ObservatoryCycle(models.Model):
             Status.FAILED_CONTINUITY,
             Status.FAILED_DEDUP,
             Status.FAILED_PREMIUM,
+            Status.FAILED_GEOSPATIAL,
             Status.FAILED_DASHBOARD,
             Status.FAILED_READINESS,
             Status.ABORTED_CONCURRENCY,

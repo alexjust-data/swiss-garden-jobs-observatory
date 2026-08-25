@@ -23,7 +23,12 @@ from operations.services import (
     observatory_status,
     run_cycle,
 )
-from operations.tests.test_gate012_operations import configuration, cycle, source
+from operations.tests.test_gate012_operations import (
+    configuration,
+    cycle,
+    geospatial_result,
+    source,
+)
 from sources.models import Source
 
 pytestmark = pytest.mark.django_db
@@ -191,7 +196,10 @@ def test_downstream_timeout_is_sealed_at_active_stage() -> None:
         patch("operations.services.run_deduplication", return_value=(data["dedup"], True)),
         patch("operations.services.run_classification", return_value=(data["premium_run"], True)),
     ):
-        result = run_cycle(collector=Mock(return_value=data["observation"].collection_run))
+        result = run_cycle(
+            collector=Mock(return_value=data["observation"].collection_run),
+            geospatial_runner=Mock(return_value=geospatial_result(data["premium_run"])),
+        )
     assert result.cycle.status == ObservatoryCycle.Status.FAILED_DASHBOARD
     assert result.cycle.failure_code == "CYCLE_TIMEOUT"
     assert result.cycle.stage_statuses["dashboard"] == "FAILED"
@@ -278,6 +286,7 @@ def test_real_postgresql_advisory_lock_refuses_before_collector_activity() -> No
                 cursor.execute("SELECT pg_advisory_unlock(%s)", [_lock_key()])
     assert result.cycle.status == ObservatoryCycle.Status.ABORTED_CONCURRENCY
     assert result.cycle.failure_evidence["http_requests"] == 0
+    assert result.cycle.failure_evidence["provider_requests"] == 0
     assert result.cycle.source_attempts.count() == 0
     collector.assert_not_called()
 
@@ -348,7 +357,10 @@ def test_authorization_transition_alert_only_on_change(expects_alert: bool) -> N
         patch("operations.services._previous_success", return_value=previous),
         patch("operations.services.timezone.now", return_value=data["as_of"]),
     ):
-        result = run_cycle(collector=Mock(return_value=data["observation"].collection_run))
+        result = run_cycle(
+            collector=Mock(return_value=data["observation"].collection_run),
+            geospatial_runner=Mock(return_value=geospatial_result(data["premium_run"])),
+        )
     events = result.cycle.operational_events.filter(code="AUTHORIZATION_CHANGED")
     assert events.exists() is expects_alert
 
@@ -367,7 +379,10 @@ def test_dashboard_failure_emits_specific_alert() -> None:
         patch("operations.services.run_classification", return_value=(data["premium_run"], True)),
         patch("operations.services.build_dashboard_snapshot", side_effect=RuntimeError("bad")),
     ):
-        result = run_cycle(collector=Mock(return_value=data["observation"].collection_run))
+        result = run_cycle(
+            collector=Mock(return_value=data["observation"].collection_run),
+            geospatial_runner=Mock(return_value=geospatial_result(data["premium_run"])),
+        )
     assert result.cycle.operational_events.filter(code="DASHBOARD_BUILD_FAILED").exists()
 
 
@@ -420,7 +435,10 @@ def test_freshness_loss_emits_bounded_alert() -> None:
         patch("operations.services.assess_day0_readiness", return_value=(readiness, True)),
         patch("operations.services.timezone.now", return_value=data["as_of"]),
     ):
-        result = run_cycle(collector=Mock(return_value=data["observation"].collection_run))
+        result = run_cycle(
+            collector=Mock(return_value=data["observation"].collection_run),
+            geospatial_runner=Mock(return_value=geospatial_result(data["premium_run"])),
+        )
     event = result.cycle.operational_events.get(code="FRESHNESS_EXPIRED")
     assert event.detail == {"fresh": 0, "implemented": 1}
 
@@ -453,6 +471,9 @@ def test_eligible_source_count_change_uses_governed_market_state() -> None:
         patch("operations.services._previous_success", return_value=previous),
         patch("operations.services.timezone.now", return_value=data["as_of"]),
     ):
-        result = run_cycle(collector=Mock(return_value=data["observation"].collection_run))
+        result = run_cycle(
+            collector=Mock(return_value=data["observation"].collection_run),
+            geospatial_runner=Mock(return_value=geospatial_result(data["premium_run"])),
+        )
     event = result.cycle.operational_events.get(code="ELIGIBLE_SOURCE_COUNT_CHANGED")
     assert event.detail == {"from": 0, "to": 1}
