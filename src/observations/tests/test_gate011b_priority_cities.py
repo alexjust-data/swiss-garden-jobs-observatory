@@ -61,6 +61,7 @@ def job_posting_html(
     date_posted: str = "2026-08-10",
     locality: str = "",
     region: str = "",
+    country: str = "CH",
     canonical: str = "",
 ) -> bytes:
     payload = {
@@ -81,7 +82,7 @@ def job_posting_html(
                 "postalCode": "3000" if locality else "",
                 "addressLocality": locality,
                 "addressRegion": region,
-                "addressCountry": "CH",
+                "addressCountry": country,
             }
         },
     }
@@ -138,7 +139,13 @@ class Gate011BTests(TestCase):
                 entry.url,
                 200,
                 "text/html",
-                job_posting_html("Gaertner*in", locality="Bern", region="BE", canonical=entry.url),
+                job_posting_html(
+                    "Gaertner*in",
+                    locality="Bern",
+                    region="BE",
+                    country="Schweiz",
+                    canonical=entry.url,
+                ),
             ),
             entry,
             registered,
@@ -149,6 +156,7 @@ class Gate011BTests(TestCase):
         assert parsed.published_at_precision == "EXACT_DATETIME"
         assert parsed.source_updated_at == datetime(2026, 8, 10, 9, tzinfo=UTC)
         assert parsed.location_locality == "Bern"
+        assert parsed.location_country == "CH"
 
     def test_luzern_post_pagination_and_json_ld_detail(self) -> None:
         adapter = LuzernProspectiveLegacyAdapter()

@@ -182,7 +182,8 @@ class Gate011C1Tests(TestCase):
         )
         assert parsed.source_posting_id == "4050673"
         assert parsed.published_at_parse_method == "MISSING"
-        assert parsed.raw_location == "Zuerich" and parsed.location_locality == ""
+        assert parsed.raw_location == parsed.location_locality == "Zuerich"
+        assert parsed.location_region == "ZH"
 
     def test_appenzell_ar_solique_uses_publication_id_and_json_ld(self) -> None:
         registered = Source(source_id="SRC-OFF-CANTON-AR", platform_family="SOLIQUE_EMBEDDED")

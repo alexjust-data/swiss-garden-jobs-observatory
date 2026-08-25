@@ -8,6 +8,7 @@ from html.parser import HTMLParser
 from typing import cast
 from urllib.parse import urlencode, urlsplit
 
+from collectors.location_normalization import canonical_swiss_country
 from collectors.platforms import (
     FetchedPage,
     FetchRequest,
@@ -215,7 +216,7 @@ def _parsed_from_json_ld(
         location_locality=_text(address.get("addressLocality")),
         location_region=_text(address.get("addressRegion")),
         location_postal_code=_text(address.get("postalCode")),
-        location_country=_text(address.get("addressCountry")) or "CH",
+        location_country=canonical_swiss_country(_text(address.get("addressCountry"))),
         structured_payload=structured,
         source_published_at=source_published_at,
         source_updated_at=source_updated_at,

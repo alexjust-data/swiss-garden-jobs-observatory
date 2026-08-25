@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -13,6 +14,11 @@ from django.utils import timezone
 
 from collectors.adapters import get_adapter
 from collectors.governed_http import GovernedHttpClient, ensure_default_endpoints
+from collectors.location_normalization import (
+    canonical_canton_code,
+    canonical_swiss_country,
+    swiss_place_key,
+)
 from collectors.platforms import (
     FetchedPage,
     FetchRequest,
@@ -69,14 +75,25 @@ def enforce_source_policy(source: Source, *, acknowledge_automation_review: bool
 
 
 def resolve_municipality(parsed: ParsedSourcePosting) -> Municipality | None:
-    locality = parsed.location_locality.strip()
-    region = parsed.location_region.strip().upper()
-    if not locality:
+    locality_key = swiss_place_key(parsed.location_locality)
+    if not locality_key:
         return None
-    candidates = Municipality.objects.filter(municipality_name__iexact=locality)
-    if region:
-        candidates = candidates.filter(canton_code=region)
-    matches = list(candidates[:2])
+    canton_code = canonical_canton_code(parsed.location_region)
+    candidates = Municipality.objects.all()
+    if canton_code:
+        candidates = candidates.filter(canton_code=canton_code)
+    exact_matches = list(
+        candidates.filter(
+            municipality_name__iexact=parsed.location_locality.strip()
+        ).only("bfs_code", "municipality_name", "canton_code")[:2]
+    )
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    matches = [
+        municipality
+        for municipality in candidates.only("bfs_code", "municipality_name", "canton_code")
+        if swiss_place_key(municipality.municipality_name) == locality_key
+    ][:2]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -302,6 +319,10 @@ class SharedCollectionPipeline:
                 parsed = self.adapter.parse_detail(page, entry, self.source)
                 if parsed.source_posting_id != current_id:
                     raise CollectionPipelineError("adapter changed source posting identity")
+                parsed = replace(
+                    parsed,
+                    location_country=canonical_swiss_country(parsed.location_country),
+                )
                 municipality = resolve_municipality(parsed)
                 contract = build_contract_payload(
                     parsed=parsed,
