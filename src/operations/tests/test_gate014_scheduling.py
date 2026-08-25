@@ -325,7 +325,11 @@ def test_windows_registration_creates_without_force(tmp_path: Path) -> None:
         if argv[0] == "tzutil.exe":
             return completed(argv, stdout="W. Europe Standard Time\n")
         if "/Query" in argv:
-            return completed(argv, returncode=1)
+            return completed(
+                argv,
+                returncode=1,
+                stderr="ERROR: The system cannot find the file specified.\n",
+            )
         return completed(argv)
 
     assert (
@@ -334,6 +338,38 @@ def test_windows_registration_creates_without_force(tmp_path: Path) -> None:
     )
     create = next(argv for argv in calls if "/Create" in argv)
     assert "/F" not in create
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr"),
+    [
+        (1, "", "ERROR: Access is denied.\n"),
+        (1, "", "ERROR: The Task Scheduler service is not available.\n"),
+        (2, "", "ERROR: The parameter is incorrect.\n"),
+        (1, "", ""),
+    ],
+)
+def test_windows_registration_query_failure_never_attempts_create(
+    tmp_path: Path,
+    returncode: int,
+    stdout: str,
+    stderr: str,
+) -> None:
+    value = windows_config(tmp_path)
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if argv[0] == "tzutil.exe":
+            return completed(argv, stdout="W. Europe Standard Time\n")
+        if "/Query" in argv:
+            return completed(argv, returncode=returncode, stdout=stdout, stderr=stderr)
+        return completed(argv)
+
+    with pytest.raises(SchedulingError, match="query failed|uncertain"):
+        register_task(value, environment=environment(), git_runner=git_runner(), runner=runner)
+
+    assert not any("/Create" in argv for argv in calls)
 
 
 def test_windows_registration_validates_deployment_before_task_activity(

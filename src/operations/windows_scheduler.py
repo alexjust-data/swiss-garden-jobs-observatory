@@ -24,6 +24,15 @@ WINDOWS_TIME_ZONE_IDS = (
 )
 TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 _TASK_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,79}$")
+_TASK_NOT_FOUND_MESSAGES = frozenset(
+    {
+        "error: the system cannot find the file specified.",
+        "error: no se encuentra el archivo especificado.",
+        "fehler: das system kann die angegebene datei nicht finden.",
+        "erreur : le fichier spécifié est introuvable.",
+        "errore: impossibile trovare il file specificato.",
+    }
+)
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -161,6 +170,18 @@ def validate_windows_time_zone(*, runner: CommandRunner = subprocess.run) -> Non
         raise SchedulingError("Windows host timezone is not governed Europe/Zurich time")
 
 
+def _query_proves_task_absent(result: subprocess.CompletedProcess[str]) -> bool:
+    if result.returncode != 1:
+        return False
+    output = "\n".join(
+        line.strip().casefold()
+        for stream in (result.stdout, result.stderr)
+        for line in stream.splitlines()
+        if line.strip()
+    )
+    return output in _TASK_NOT_FOUND_MESSAGES
+
+
 def register_task(
     config: WindowsTaskConfig,
     *,
@@ -191,6 +212,8 @@ def register_task(
         if _canonical_xml(query.stdout) != _canonical_xml(intended):
             raise SchedulingError("existing Windows task conflicts with governed task plan")
         return "REUSED_IDENTICAL"
+    if not _query_proves_task_absent(query):
+        raise SchedulingError("Windows task query failed or task state is uncertain")
 
     temporary: Path | None = None
     try:
