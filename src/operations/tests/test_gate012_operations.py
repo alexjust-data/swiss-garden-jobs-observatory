@@ -16,6 +16,7 @@ from django.utils import timezone
 from dashboard.services import build_dashboard_snapshot
 from dashboard.tests.factories import create_dashboard_upstream
 from day0.tests.test_day0 import add_entry, assess, complete_collection, universe
+from observations.geospatial_batch import GeospatialBatchResult
 from observations.models import CollectionRun
 from operations.models import (
     ImmutableOperationalEvidenceError,
@@ -32,6 +33,7 @@ from operations.services import (
     observatory_status,
     run_cycle,
 )
+from premium_segments.models import PremiumSegmentRun
 from sources.models import Source
 
 pytestmark = pytest.mark.django_db
@@ -77,6 +79,39 @@ def cycle(*, status: str = "PLANNED", suffix: str = "1") -> ObservatoryCycle:
         configuration=config,
         configuration_fingerprint=fingerprint,
         stage_statuses={},
+    )
+
+
+def geospatial_result(
+    premium_run: PremiumSegmentRun,
+    *,
+    created: int = 0,
+    already_present: int = 1,
+) -> GeospatialBatchResult:
+    return GeospatialBatchResult(
+        batch_version="geospatial-resolution-batch-v0.1",
+        premium_run_id=str(premium_run.pk),
+        premium_run_fingerprint=premium_run.input_fingerprint,
+        premium_run_as_of=premium_run.as_of.isoformat(),
+        dry_run=False,
+        selected=1,
+        already_present=already_present,
+        created=created,
+        resolved=0,
+        review=0,
+        unresolved=1,
+        mappable=0,
+        hidden=0,
+        unique_geocoder_requests=0,
+        cache_hits=already_present,
+        network_requests=0,
+        selected_assessment_ids=(),
+        selected_observation_ids=(),
+        resolution_ids=(),
+        privacy_contexts={"PUBLIC_OR_NON_RESIDENTIAL": 1},
+        resolution_statuses={"UNRESOLVED": 1},
+        location_precisions={"UNRESOLVED": 1},
+        display_levels={"NONE": 1},
     )
 
 
@@ -185,7 +220,10 @@ def test_concurrent_cycle_refuses_before_collector_activity() -> None:
     ):
         result = run_cycle(collector=collector)
     assert result.cycle.status == "ABORTED_CONCURRENCY"
-    assert result.cycle.failure_evidence == {"http_requests": 0}
+    assert result.cycle.failure_evidence == {
+        "http_requests": 0,
+        "provider_requests": 0,
+    }
     collector.assert_not_called()
     assert result.cycle.source_attempts.count() == 0
 
@@ -378,7 +416,10 @@ def test_complete_cycle_orders_stages_and_pins_aligned_artifacts() -> None:
         patch("operations.services.assess_day0_readiness", return_value=(readiness, True)),
         patch("operations.services.timezone.now", return_value=data["as_of"]),
     ):
-        result = run_cycle(collector=Mock(return_value=data["observation"].collection_run))
+        result = run_cycle(
+            collector=Mock(return_value=data["observation"].collection_run),
+            geospatial_runner=Mock(return_value=geospatial_result(data["premium_run"])),
+        )
     item = result.cycle
     assert item.status == "SUCCEEDED_NOT_AUTHORIZED"
     assert item.operational_health == "GREEN"
@@ -390,6 +431,7 @@ def test_complete_cycle_orders_stages_and_pins_aligned_artifacts() -> None:
         "dedup",
         "dedup_continuity",
         "premium",
+        "geospatial",
         "dashboard",
         "readiness",
     ]
@@ -418,7 +460,10 @@ def test_dashboard_failure_has_stage_specific_terminal_state() -> None:
         ),
         patch("operations.services.timezone.now", return_value=data["as_of"]),
     ):
-        result = run_cycle(collector=Mock(return_value=data["observation"].collection_run))
+        result = run_cycle(
+            collector=Mock(return_value=data["observation"].collection_run),
+            geospatial_runner=Mock(return_value=geospatial_result(data["premium_run"])),
+        )
     assert result.cycle.status == "FAILED_DASHBOARD"
     assert result.cycle.failure_code == "DASHBOARD_BUILD_FAILED"
     assert result.cycle.readiness_assessment is None
