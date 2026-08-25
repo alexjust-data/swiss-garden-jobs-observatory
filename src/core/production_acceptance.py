@@ -45,7 +45,7 @@ GOVERNED_APP_LABELS = frozenset(
 ARTIFACT_SUMMARY_FIELDS: dict[str, tuple[str, ...]] = {
     "vacancies.DedupRun": ("id", "as_of", "status", "input_fingerprint"),
     "premium_segments.PremiumSegmentRun": ("id", "as_of", "status", "input_fingerprint"),
-    "dashboard.DashboardSnapshot": ("id", "as_of", "status", "input_fingerprint"),
+    "dashboard.DashboardSnapshot": ("id", "as_of", "input_fingerprint"),
     "day0.Day0ReadinessAssessment": (
         "id",
         "as_of",

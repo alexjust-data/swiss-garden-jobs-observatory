@@ -28,6 +28,7 @@ from core.production_acceptance import (
     write_report,
 )
 from core.storage import RawObjectStore
+from dashboard.services import build_dashboard_snapshot
 from dashboard.tests.factories import create_dashboard_upstream
 from observations.geospatial import (
     PROVIDER,
@@ -351,14 +352,25 @@ def test_isolated_database_cannot_share_operational_raw_root(tmp_path: Path) -> 
 
 def test_snapshot_exposes_bounded_pit_ids_and_fingerprints(tmp_path: Path) -> None:
     upstream = create_dashboard_upstream(suffix="h2-pit-summary")
+    dashboard, reused = build_dashboard_snapshot(
+        as_of=upstream["as_of"],
+        dedup_run=upstream["dedup"],
+        premium_run=upstream["premium_run"],
+    )
+    assert not reused
     with _settings(tmp_path / "raw", tmp_path / "operational"):
         snapshot = capture_snapshot(verify_raw_bytes=False)
     dedup = snapshot["artifacts"]["vacancies.DedupRun"]
     premium = snapshot["artifacts"]["premium_segments.PremiumSegmentRun"]
+    dashboards = snapshot["artifacts"]["dashboard.DashboardSnapshot"]
     assert {item["id"] for item in dedup} == {str(upstream["dedup"].pk)}
     assert dedup[0]["input_fingerprint"] == upstream["dedup"].input_fingerprint
     assert {item["id"] for item in premium} == {str(upstream["premium_run"].pk)}
     assert premium[0]["input_fingerprint"] == upstream["premium_run"].input_fingerprint
+    assert {item["id"] for item in dashboards} == {str(dashboard.pk)}
+    assert dashboards[0]["as_of"] == canonical_value(dashboard.as_of)
+    assert dashboards[0]["input_fingerprint"] == dashboard.input_fingerprint
+    assert "status" not in dashboards[0]
 
 
 def test_output_path_must_be_disjoint_from_raw(tmp_path: Path) -> None:
