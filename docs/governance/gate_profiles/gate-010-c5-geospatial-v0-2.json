@@ -1,0 +1,23 @@
+{
+  "schema_version": "gate-pre-audit-profile-v1",
+  "gate": "GATE-010-C5",
+  "pr": 37,
+  "expected_base_ref": "main",
+  "expected_base_sha": "965ddf0593d1b89568345fe48f7245b48f9e4bab",
+  "expected_head_ref": "codex/gate-010-c5-geospatial-v0-2",
+  "contract": "docs/day0/gate_010_c5_geospatial_v0_2_contract_v0_1.md",
+  "contract_blob": "9de457f6d06c2ade124f9b394c634cd653ecf67d",
+  "frozen_paths": [
+    "docs/research/v0_4/"
+  ],
+  "focused_tests": [
+    "src/observations/tests/test_gate010c5.py",
+    "src/observations/tests/test_gate010c2.py",
+    "src/observations/tests/test_geospatial.py",
+    "src/core/tests/test_raw_storage.py",
+    "src/observations/tests/test_geographic_quality.py",
+    "src/dashboard/tests/test_dashboard.py",
+    "src/operations/tests/test_gate013_operations.py"
+  ],
+  "expected_migrations": []
+}

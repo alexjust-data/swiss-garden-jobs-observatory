@@ -15,6 +15,12 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from django.conf import settings
 from django.db import connection, transaction
 
+from collectors.location_normalization import (
+    canonical_canton_code,
+    canonical_swiss_country,
+    resolve_swiss_municipality,
+    swiss_place_key,
+)
 from core.hashing import sha256_file, sha256_hex
 from core.models import RawArtifact
 from core.storage import RawObjectAlreadyExistsError, RawObjectStore
@@ -26,7 +32,9 @@ from observations.models import (
 )
 from reference_data.models import Municipality
 
-RESOLVER_VERSION = "geospatial-v0.1"
+LEGACY_RESOLVER_VERSION = "geospatial-v0.1"
+RESOLVER_VERSION = "geospatial-v0.2"
+SUPPORTED_RESOLVER_VERSIONS = frozenset({LEGACY_RESOLVER_VERSION, RESOLVER_VERSION})
 PROVIDER = "SWISSTOPO_SEARCHSERVER"
 PROVIDER_VERSION = "geo-admin-searchserver-api-2026-08"
 HOST = "api3.geo.admin.ch"
@@ -51,6 +59,9 @@ MULTIPLE_MARKERS = (
     "remote",
 )
 TAG_RE = re.compile(r"<[^>]+>")
+GG25_MUNICIPALITY_LABEL_RE = re.compile(
+    r"^(?P<municipality>.+?)\s+\((?P<canton>[A-Z]{2})\)$"
+)
 
 
 class GeospatialResolutionError(RuntimeError):
@@ -235,21 +246,44 @@ def candidates(payload: object) -> list[Candidate]:
         if lat is None or lon is None:
             continue
         validate_coordinates(lat, lon)
+        municipality = text(
+            attrs.get("municipality")
+            or attrs.get("commune")
+            or attrs.get("city")
+            or attrs.get("locality")
+        )
+        canton = text(attrs.get("canton") or attrs.get("canton_code")).upper()
+        country = text(attrs.get("country") or attrs.get("country_code")).upper()
+        origin = text(attrs.get("origin"))
+        label = text(attrs.get("label") or attrs.get("detail"))
+        if origin.casefold() == "gg25":
+            label_match = GG25_MUNICIPALITY_LABEL_RE.fullmatch(label)
+            if label_match is not None:
+                label_municipality = label_match.group("municipality").strip()
+                label_canton = canonical_canton_code(label_match.group("canton"))
+                if not label_canton:
+                    continue
+                if municipality and swiss_place_key(municipality) != swiss_place_key(
+                    label_municipality
+                ):
+                    continue
+                if canton and canonical_canton_code(canton) != label_canton:
+                    continue
+                if country and canonical_swiss_country(country) != "CH":
+                    continue
+                municipality = municipality or label_municipality
+                canton = canton or label_canton
+                country = country or "CH"
         result.append(
             Candidate(
-                text(
-                    attrs.get("municipality")
-                    or attrs.get("commune")
-                    or attrs.get("city")
-                    or attrs.get("locality")
-                ),
-                text(attrs.get("canton") or attrs.get("canton_code")).upper(),
-                text(attrs.get("country") or attrs.get("country_code")).upper(),
+                municipality,
+                canton,
+                country,
                 text(attrs.get("postcode") or attrs.get("zip")),
                 lat,
                 lon,
-                text(attrs.get("origin")),
-                text(attrs.get("label") or attrs.get("detail")),
+                origin,
+                label,
                 attrs,
             )
         )
@@ -287,33 +321,104 @@ def multiple(observation: PostingObservation) -> bool:
     return ";" in value or any(marker in value for marker in MULTIPLE_MARKERS)
 
 
+def governed_municipality(
+    observation: PostingObservation,
+    privacy_context: LocationPrivacyContext,
+    *,
+    resolver_version: str,
+) -> tuple[Municipality | None, str]:
+    if observation.municipality is not None:
+        return observation.municipality, "OBSERVATION_FK"
+    if (
+        resolver_version != RESOLVER_VERSION
+        or privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
+    ):
+        return None, "NONE"
+
+    canton_code = canonical_canton_code(observation.location_region)
+    if observation.location_locality.strip() and canton_code:
+        municipality = resolve_swiss_municipality(
+            observation.location_locality,
+            canton_code,
+        )
+        if municipality is not None:
+            return municipality, "EXACT_LOCALITY_CANTON"
+
+    source_format = str(observation.structured_payload.get("source_format", ""))
+    raw_location = str(observation.contract_payload.get("raw_location", "")).strip()
+    bounded_zurich_raw = (
+        str(observation.source.pk) == "SRC-OFF-CANTON-ZH"
+        and source_format == "SOLIQUE_KTZH_API_V1"
+        and not observation.location_locality.strip()
+        and not observation.location_street.strip()
+        and not observation.location_postal_code.strip()
+        and raw_location
+        and not multiple(observation)
+    )
+    if bounded_zurich_raw:
+        municipality = resolve_swiss_municipality(
+            raw_location,
+            fallback_canton="ZH",
+        )
+        if municipality is not None:
+            return municipality, "GOVERNED_STRUCTURED_RAW_LOCATION"
+    return None, "NONE"
+
 def resolution_input_material(
     observation: PostingObservation,
     privacy_context: LocationPrivacyContext,
     *,
     resolver_version: str = RESOLVER_VERSION,
 ) -> dict[str, object]:
-    municipality = observation.municipality
-    municipality_bfs = municipality.pk if municipality else None
-    municipality_name = municipality.municipality_name if municipality else ""
-    municipality_canton = municipality.canton_code if municipality else ""
-    common: dict[str, object] = {
+    if resolver_version == LEGACY_RESOLVER_VERSION:
+        municipality = observation.municipality
+        common: dict[str, object] = {
+            "resolver": resolver_version,
+            "privacy_context": privacy_context.value,
+            "source": str(observation.source.pk),
+            "bfs": municipality.pk if municipality else None,
+            "municipality": municipality.municipality_name if municipality else "",
+            "canton": municipality.canton_code if municipality else "",
+        }
+        if privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL:
+            return {**common, "country": observation.location_country}
+        return {
+            **common,
+            "street": observation.location_street,
+            "locality": observation.location_locality,
+            "region": observation.location_region,
+            "postcode": observation.location_postal_code,
+            "country": observation.location_country,
+            "jobLocation": observation.structured_payload.get("jobLocation"),
+        }
+
+    municipality, derivation = governed_municipality(
+        observation,
+        privacy_context,
+        resolver_version=resolver_version,
+    )
+    common = {
         "resolver": resolver_version,
+        "privacy_policy": PRIVACY_POLICY_VERSION,
         "privacy_context": privacy_context.value,
         "source": str(observation.source.pk),
-        "bfs": municipality_bfs,
-        "municipality": municipality_name,
-        "canton": municipality_canton,
+        "bfs": municipality.pk if municipality else None,
+        "municipality": municipality.municipality_name if municipality else "",
+        "canton": municipality.canton_code if municipality else "",
+        "municipality_derivation": derivation,
+        "country": canonical_swiss_country(observation.location_country),
     }
     if privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL:
-        return {**common, "country": observation.location_country}
+        return common
     return {
         **common,
         "street": observation.location_street,
         "locality": observation.location_locality,
         "region": observation.location_region,
         "postcode": observation.location_postal_code,
-        "country": observation.location_country,
+        "country_original": observation.location_country,
+        "raw_location": observation.contract_payload.get("raw_location"),
+        "source_format": observation.structured_payload.get("source_format"),
         "jobLocation": observation.structured_payload.get("jobLocation"),
     }
 
@@ -336,8 +441,14 @@ def resolution_input_fingerprint(
 def normalized_request(
     observation: PostingObservation,
     privacy_context: LocationPrivacyContext,
+    *,
+    resolver_version: str = RESOLVER_VERSION,
 ) -> dict[str, object] | None:
-    municipality = observation.municipality
+    municipality, _ = governed_municipality(
+        observation,
+        privacy_context,
+        resolver_version=resolver_version,
+    )
     protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
     if protected:
         if municipality is None:
@@ -362,7 +473,18 @@ def normalized_request(
     region = observation.location_region.strip() or (
         municipality.canton_code if municipality else ""
     )
-    if street and not multiple(observation):
+    municipality_only = (
+        resolver_version == RESOLVER_VERSION
+        and municipality is not None
+        and not street
+        and not postcode
+        and not multiple(observation)
+    )
+    if municipality_only:
+        if municipality is None:
+            raise GeospatialResolutionError("municipality-only request lost governed identity")
+        query = f"{municipality.municipality_name} {municipality.canton_code}".strip()
+    elif street and not multiple(observation):
         query = " ".join(x for x in (street, postcode, locality) if x)
     elif postcode and locality:
         query = f"{postcode} {locality}"
@@ -380,8 +502,9 @@ def normalized_request(
         "sr": 4326,
         "type": "locations",
     }
+    if municipality_only:
+        request["origins"] = "gg25"
     return request
-
 
 def review_candidate_evidence(
     items: list[Candidate],
@@ -410,6 +533,8 @@ class GeospatialResolver:
         raw_store: RawObjectStore | None = None,
         resolver_version: str = RESOLVER_VERSION,
     ) -> None:
+        if resolver_version not in SUPPORTED_RESOLVER_VERSIONS:
+            raise ValueError(f"unsupported geospatial resolver version: {resolver_version}")
         self.client = client or GeoAdminSearchServerClient()
         self.raw_store = raw_store or RawObjectStore(settings.CORE_RAW_OBJECT_STORE_PATH)
         self.resolver_version = resolver_version
@@ -438,7 +563,11 @@ class GeospatialResolver:
         privacy_context: LocationPrivacyContext,
     ) -> PostingLocationResolution:
         protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
-        municipality = observation.municipality
+        municipality, municipality_derivation = governed_municipality(
+            observation,
+            privacy_context,
+            resolver_version=self.resolver_version,
+        )
         municipality_name = municipality.municipality_name if municipality else ""
         municipality_canton = municipality.canton_code if municipality else ""
         input_value = resolution_input_material(
@@ -468,7 +597,13 @@ class GeospatialResolver:
             "input_fingerprint": input_fingerprint,
             "_privacy_context": privacy_context.value,
         }
-        country = observation.location_country.strip().upper()
+        if self.resolver_version == RESOLVER_VERSION:
+            evidence["municipality_derivation"] = municipality_derivation
+            if municipality is not None and observation.municipality is None:
+                evidence["_resolved_bfs"] = municipality.pk
+            country = canonical_swiss_country(observation.location_country)
+        else:
+            country = observation.location_country.strip().upper()
         if country and country != "CH":
             return self.persist(
                 observation,
@@ -516,7 +651,11 @@ class GeospatialResolver:
                 coordinates[1],
                 evidence,
             )
-        request = normalized_request(observation, privacy_context)
+        request = normalized_request(
+            observation,
+            privacy_context,
+            resolver_version=self.resolver_version,
+        )
         if not request:
             return self.persist(
                 observation,
@@ -538,24 +677,48 @@ class GeospatialResolver:
             "raw_sha256": cache.raw_artifact.sha256_digest,
             "final_url": cache.final_url,
         }
-        name = normalize(
-            municipality_name if protected else (municipality_name or observation.location_locality)
-        )
-        canton = (
-            municipality_canton
-            if protected
-            else (municipality_canton or observation.location_region)
-        ).upper()
         postcode = "" if protected else observation.location_postal_code.strip()
-        matches = [
-            item
-            for item in found
-            if name
-            and name in normalize(f"{item.municipality} {item.label}")
-            and (not item.canton or item.canton == canton)
-            and (not item.country or item.country == "CH")
-            and not (postcode and item.postcode and postcode != item.postcode)
-        ]
+        municipality_only_request = (
+            self.resolver_version == RESOLVER_VERSION
+            and request.get("origins") == "gg25"
+        )
+        if municipality_only_request:
+            name = swiss_place_key(municipality_name)
+            matches = [
+                item
+                for item in found
+                if name
+                and item.origin.casefold() == "gg25"
+                and swiss_place_key(item.municipality) == name
+                and (
+                    not item.canton
+                    or canonical_canton_code(item.canton) == municipality_canton
+                )
+                and (
+                    not item.country
+                    or canonical_swiss_country(item.country) == "CH"
+                )
+            ]
+        else:
+            name = normalize(
+                municipality_name
+                if protected
+                else (municipality_name or observation.location_locality)
+            )
+            canton = (
+                municipality_canton
+                if protected
+                else (municipality_canton or observation.location_region)
+            ).upper()
+            matches = [
+                item
+                for item in found
+                if name
+                and name in normalize(f"{item.municipality} {item.label}")
+                and (not item.canton or item.canton == canton)
+                and (not item.country or item.country == "CH")
+                and not (postcode and item.postcode and postcode != item.postcode)
+            ]
         if not matches:
             status, reason = (
                 ("REVIEW", "GEOCODER_CONTRADICTS_BFS")
@@ -589,14 +752,21 @@ class GeospatialResolver:
             )
         selected = matches[0]
         if municipality is None:
-            candidate_municipalities = Municipality.objects.filter(
-                municipality_name__iexact=selected.municipality
-            )
-            if selected.canton:
-                candidate_municipalities = candidate_municipalities.filter(
-                    canton_code=selected.canton
+            if self.resolver_version == RESOLVER_VERSION:
+                selected_municipality = resolve_swiss_municipality(
+                    selected.municipality,
+                    selected.canton,
                 )
-            municipality_matches = list(candidate_municipalities[:2])
+                municipality_matches = [selected_municipality] if selected_municipality else []
+            else:
+                candidate_municipalities = Municipality.objects.filter(
+                    municipality_name__iexact=selected.municipality
+                )
+                if selected.canton:
+                    candidate_municipalities = candidate_municipalities.filter(
+                        canton_code=selected.canton
+                    )
+                municipality_matches = list(candidate_municipalities[:2])
             if len(municipality_matches) != 1:
                 return self.persist(
                     observation,
@@ -774,10 +944,15 @@ class GeospatialResolver:
         protected = privacy_context != LocationPrivacyContext.PUBLIC_OR_NON_RESIDENTIAL
         hidden = protected
         privacy = "HIDDEN" if hidden else "EXACT_ALLOWED"
+        if self.resolver_version == RESOLVER_VERSION and not protected:
+            if precision == "POSTCODE":
+                privacy = "POSTCODE_CENTROID"
+            elif precision == "MUNICIPALITY":
+                privacy = "MUNICIPALITY_CENTROID"
         evidence["privacy"] = {
             "context": privacy_context.value,
             "policy_version": PRIVACY_POLICY_VERSION,
-            "generalized": hidden,
+            "generalized": privacy != "EXACT_ALLOWED",
             "display_level": privacy,
         }
         with transaction.atomic():

@@ -13,6 +13,7 @@ from django.db import connection, transaction
 from core.raw_lineage import RawLineageError, validate_designated_operational_root
 from core.storage import RawObjectStore
 from observations.geospatial import (
+    LEGACY_RESOLVER_VERSION,
     RESOLVER_VERSION,
     GeospatialResolver,
     LocationPrivacyContext,
@@ -22,7 +23,12 @@ from observations.geospatial import (
 from observations.models import PostingLocationResolution, PostingObservation
 from premium_segments.models import PremiumSegmentAssessment, PremiumSegmentRun
 
-BATCH_VERSION = "geospatial-resolution-batch-v0.1"
+LEGACY_BATCH_VERSION = "geospatial-resolution-batch-v0.1"
+BATCH_VERSION = "geospatial-resolution-batch-v0.2"
+BATCH_VERSION_BY_RESOLVER = {
+    LEGACY_RESOLVER_VERSION: LEGACY_BATCH_VERSION,
+    RESOLVER_VERSION: BATCH_VERSION,
+}
 
 
 class GeospatialBatchError(RuntimeError):
@@ -166,8 +172,10 @@ def resolve_premium_run_locations(
     active_resolver = resolver
     _validate_raw_store_scope(active_resolver, dry_run=dry_run)
     resolver_version = active_resolver.resolver_version if active_resolver else RESOLVER_VERSION
-    if resolver_version != RESOLVER_VERSION:
-        raise GeospatialBatchError("resolver version does not match the frozen C2 contract")
+    try:
+        batch_version = BATCH_VERSION_BY_RESOLVER[resolver_version]
+    except KeyError as exc:
+        raise GeospatialBatchError("unsupported governed geospatial resolver version") from exc
     target_fingerprints = {
         (item.posting_observation.pk, item.privacy_context): resolution_input_fingerprint(
             item.posting_observation,
@@ -241,7 +249,7 @@ def resolve_premium_run_locations(
         for item in resolutions
     )
     return GeospatialBatchResult(
-        batch_version=BATCH_VERSION,
+        batch_version=batch_version,
         premium_run_id=str(run.pk),
         premium_run_fingerprint=run.input_fingerprint,
         premium_run_as_of=run.as_of.isoformat(),

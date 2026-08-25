@@ -29,6 +29,7 @@ from dashboard.services import (
     source_link,
     visible_text,
 )
+from observations.geospatial import LEGACY_RESOLVER_VERSION, RESOLVER_VERSION
 from observations.models import PostingLocationResolution
 from vacancies.models import DedupRun
 
@@ -36,6 +37,69 @@ from .factories import create_dashboard_upstream
 
 
 @pytest.mark.django_db(transaction=True)
+def test_v01_and_v02_dashboard_snapshots_coexist_with_explicit_authority() -> None:
+    data = create_dashboard_upstream(
+        suffix="dashboard-resolver-coexistence",
+        location_status="RESOLVED",
+        public_coordinates=(47.501, 8.701),
+    )
+    legacy_resolution = data["location"]
+    current_resolution = PostingLocationResolution.objects.create(
+        posting_observation=data["observation"],
+        resolver_version=RESOLVER_VERSION,
+        privacy_context="PUBLIC_OR_NON_RESIDENTIAL",
+        resolution_status="RESOLVED",
+        latitude=47.502,
+        longitude=8.702,
+        location_precision="MUNICIPALITY",
+        coordinate_source="SOURCE_STRUCTURED",
+        privacy_display_level="MUNICIPALITY_CENTROID",
+        public_display_latitude=47.502,
+        public_display_longitude=8.702,
+        input_fingerprint="b" * 64,
+        evidence={"fixture": "explicit geospatial-v0.2"},
+        created_at=data["as_of"] - timedelta(minutes=30),
+    )
+
+    legacy_snapshot, legacy_reused = build_dashboard_snapshot(
+        as_of=data["as_of"],
+        dedup_run=data["dedup"],
+        premium_run=data["premium_run"],
+        geospatial_resolver_version=LEGACY_RESOLVER_VERSION,
+    )
+    current_snapshot, current_reused = build_dashboard_snapshot(
+        as_of=data["as_of"],
+        dedup_run=data["dedup"],
+        premium_run=data["premium_run"],
+        geospatial_resolver_version=RESOLVER_VERSION,
+    )
+
+    assert not legacy_reused
+    assert not current_reused
+    assert legacy_snapshot.pk != current_snapshot.pk
+    assert legacy_snapshot.input_fingerprint != current_snapshot.input_fingerprint
+    assert legacy_snapshot.geospatial_resolver_version == LEGACY_RESOLVER_VERSION
+    assert current_snapshot.geospatial_resolver_version == RESOLVER_VERSION
+    assert legacy_snapshot.configuration["geospatial_resolver_version"] == LEGACY_RESOLVER_VERSION
+    assert current_snapshot.configuration["geospatial_resolver_version"] == RESOLVER_VERSION
+    assert legacy_snapshot.vacancy_records.get().location_resolution == legacy_resolution
+    assert current_snapshot.vacancy_records.get().location_resolution == current_resolution
+
+    assert build_dashboard_snapshot(
+        as_of=data["as_of"],
+        dedup_run=data["dedup"],
+        premium_run=data["premium_run"],
+        geospatial_resolver_version=LEGACY_RESOLVER_VERSION,
+    )[1]
+    assert build_dashboard_snapshot(
+        as_of=data["as_of"],
+        dedup_run=data["dedup"],
+        premium_run=data["premium_run"],
+        geospatial_resolver_version=RESOLVER_VERSION,
+    )[1]
+
+
+@pytest.mark.django_db
 def test_aligned_snapshot_is_complete_immutable_and_idempotent() -> None:
     data = create_dashboard_upstream(location_status="UNRESOLVED")
     snapshot, reused = build_dashboard_snapshot(
@@ -173,7 +237,7 @@ def test_private_segment_requires_protected_resolution_and_redacts_address(clien
     )
     PostingLocationResolution.objects.create(
         posting_observation=data["observation"],
-        resolver_version="geospatial-v0.1",
+        resolver_version=LEGACY_RESOLVER_VERSION,
         privacy_context="PUBLIC_OR_NON_RESIDENTIAL",
         resolution_status="RESOLVED",
         latitude=47.9,
@@ -394,6 +458,7 @@ def test_command_is_idempotent_and_privacy_safe() -> None:
         as_of=data["as_of"].isoformat(),
         dedup_run=str(data["dedup"].pk),
         premium_run=str(data["premium_run"].pk),
+        geospatial_resolver_version=LEGACY_RESOLVER_VERSION,
         stdout=output,
     )
     first = json.loads(output.getvalue())
@@ -403,6 +468,7 @@ def test_command_is_idempotent_and_privacy_safe() -> None:
         as_of=data["as_of"].isoformat(),
         dedup_run=str(data["dedup"].pk),
         premium_run=str(data["premium_run"].pk),
+        geospatial_resolver_version=LEGACY_RESOLVER_VERSION,
         stdout=output,
     )
     second = json.loads(output.getvalue())

@@ -70,9 +70,7 @@ def test_v02_configuration_binds_geospatial_order_and_versions() -> None:
 
 def test_default_geospatial_runner_pins_frozen_v01_authority() -> None:
     expected = Mock()
-    with patch(
-        "operations.services.resolve_premium_run_locations", return_value=expected
-    ) as batch:
+    with patch("operations.services.resolve_premium_run_locations", return_value=expected) as batch:
         result = _default_geospatial_runner("00000000-0000-0000-0000-000000000001")
 
     assert result is expected
@@ -122,6 +120,7 @@ def test_new_geospatial_evidence_advances_and_realigns_once() -> None:
     geospatial_runner = Mock(side_effect=[first, final])
     dedup_runner = Mock(return_value=(data["dedup"], True))
     premium_runner = Mock(return_value=(data["premium_run"], True))
+    dashboard_builder = Mock(return_value=(snapshot, True))
     with (
         patch(
             "operations.services.governed_source_cohort",
@@ -130,7 +129,7 @@ def test_new_geospatial_evidence_advances_and_realigns_once() -> None:
         patch("operations.services.apply_green_continuity", return_value={}),
         patch("operations.services.run_deduplication", dedup_runner),
         patch("operations.services.run_classification", premium_runner),
-        patch("operations.services.build_dashboard_snapshot", return_value=(snapshot, True)),
+        patch("operations.services.build_dashboard_snapshot", dashboard_builder),
         patch("operations.services.assess_day0_readiness", return_value=(readiness, True)),
         patch("operations.services.timezone.now", return_value=data["as_of"]),
     ):
@@ -143,6 +142,10 @@ def test_new_geospatial_evidence_advances_and_realigns_once() -> None:
     assert dedup_runner.call_count == 2
     assert premium_runner.call_count == 2
     assert geospatial_runner.call_count == 2
+    assert (
+        dashboard_builder.call_args.kwargs["geospatial_resolver_version"]
+        == DAILY_GEOSPATIAL_RESOLVER_VERSION
+    )
     assert result.cycle.quality_state["geospatial"]["cutoff_advanced"] is True
     assert result.cycle.quality_state["geospatial"]["created"] == 1
     assert result.cycle.quality_state["geospatial"]["provider_requests"] == 0

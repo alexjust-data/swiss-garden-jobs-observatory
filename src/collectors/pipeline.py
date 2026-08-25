@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -13,6 +14,10 @@ from django.utils import timezone
 
 from collectors.adapters import get_adapter
 from collectors.governed_http import GovernedHttpClient, ensure_default_endpoints
+from collectors.location_normalization import (
+    canonical_swiss_country,
+    resolve_swiss_municipality,
+)
 from collectors.platforms import (
     FetchedPage,
     FetchRequest,
@@ -69,15 +74,7 @@ def enforce_source_policy(source: Source, *, acknowledge_automation_review: bool
 
 
 def resolve_municipality(parsed: ParsedSourcePosting) -> Municipality | None:
-    locality = parsed.location_locality.strip()
-    region = parsed.location_region.strip().upper()
-    if not locality:
-        return None
-    candidates = Municipality.objects.filter(municipality_name__iexact=locality)
-    if region:
-        candidates = candidates.filter(canton_code=region)
-    matches = list(candidates[:2])
-    return matches[0] if len(matches) == 1 else None
+    return resolve_swiss_municipality(parsed.location_locality, parsed.location_region)
 
 
 def publication_confidence(parsed: ParsedSourcePosting) -> float | None:
@@ -302,6 +299,10 @@ class SharedCollectionPipeline:
                 parsed = self.adapter.parse_detail(page, entry, self.source)
                 if parsed.source_posting_id != current_id:
                     raise CollectionPipelineError("adapter changed source posting identity")
+                parsed = replace(
+                    parsed,
+                    location_country=canonical_swiss_country(parsed.location_country),
+                )
                 municipality = resolve_municipality(parsed)
                 contract = build_contract_payload(
                     parsed=parsed,

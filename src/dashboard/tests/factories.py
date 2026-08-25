@@ -7,6 +7,7 @@ from typing import Any
 from django.utils import timezone
 
 from core.models import RawArtifact
+from observations.geospatial import LEGACY_RESOLVER_VERSION
 from observations.models import (
     CollectionRun,
     GreenRelevanceAssessment,
@@ -239,7 +240,7 @@ def create_dashboard_upstream(
         public_lon = public_coordinates[1] if public_coordinates else None
         location = PostingLocationResolution.objects.create(
             posting_observation=observation,
-            resolver_version="geospatial-v0.1",
+            resolver_version=LEGACY_RESOLVER_VERSION,
             privacy_context=privacy_context,
             resolution_status=location_status,
             latitude=internal_lat if location_status == "RESOLVED" else None,

@@ -1,0 +1,18 @@
+{
+  "schema_version": "gate-pre-audit-profile-v1",
+  "gate": "GATE-010-C4",
+  "pr": 30,
+  "expected_base_ref": "main",
+  "expected_base_sha": "0a6dc823b4716cbaea1cf5f3418881ed79410d33",
+  "expected_head_ref": "gate-010-c4-operational-raw-lineage",
+  "contract": "docs/day0/gate_010_c4_operational_raw_lineage_contract_v0_1.md",
+  "contract_blob": "951a045aea3aeafc6f20219f3e9994a111b8c0bf",
+  "frozen_paths": [
+    "docs/research/v0_4/"
+  ],
+  "focused_tests": [
+    "src/core/tests/test_raw_lineage.py",
+    "src/core/tests/test_raw_lineage_sealed.py"
+  ],
+  "expected_migrations": []
+}
