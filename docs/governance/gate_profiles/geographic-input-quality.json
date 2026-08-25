@@ -1,0 +1,19 @@
+{
+  "schema_version": "gate-pre-audit-profile-v1",
+  "gate": "GEOGRAPHIC-INPUT-QUALITY",
+  "pr": 36,
+  "expected_base_ref": "main",
+  "expected_base_sha": "99e39312535f33554a973110cba196c253628945",
+  "expected_head_ref": "codex/geographic-quality-improvement",
+  "contract": "docs/research/v0_4/10_DATES_AND_GEOSPATIAL_CONTRACT.md",
+  "contract_blob": "8962dbdb1eb565080b70ad15b30b42578bc6f18f",
+  "frozen_paths": [
+    "docs/research/v0_4/"
+  ],
+  "focused_tests": [
+    "src/observations/tests/test_geographic_quality.py",
+    "src/observations/tests/test_gate011b_priority_cities.py",
+    "src/observations/tests/test_gate011c1_required_cantons.py"
+  ],
+  "expected_migrations": []
+}
