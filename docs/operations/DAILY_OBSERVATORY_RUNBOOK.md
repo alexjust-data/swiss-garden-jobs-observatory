@@ -60,16 +60,18 @@ To verify replay, rerun the successful cycle ID and compare IDs/fingerprints. Th
 ## Backup and restore
 
 Backups are external to the cycle. Never put credentials in a command, repository, logs, or cycle
-evidence. With environment-based PostgreSQL credentials:
+evidence. After GATE-014, use the governed wrapper with absolute audited paths. Always execute its
+`--dry-run` first:
 
-```bash
-pg_dump --format=custom --file=<controlled-target>/observatory.dump "$POSTGRES_DB"
-pg_restore --list <controlled-target>/observatory.dump
+```powershell
+python scripts/backup_observatory.py --repo-root <AUDITED_CHECKOUT> --output-root <EXTERNAL_BACKUP_ROOT> --expected-head <AUDITED_SHA> --pg-dump <PG_DUMP_EXE> --pg-restore <PG_RESTORE_EXE> --dry-run
 ```
 
-Restore only into an isolated database. Apply `pg_restore`, run `python manage.py check`, run the
-reference import twice, then read the latest `ObservatoryCycle` and its four pinned artifacts. Never
-restore over the operational database during a smoke test.
+The authorized non-dry execution publishes a custom dump plus verified no-overwrite manifest. It
+does not perform retention deletion or restore. Restore only into an isolated database. Apply
+`pg_restore`, run `python manage.py check`, run the reference import twice, then read the latest
+`ObservatoryCycle` and its pinned artifacts. Never restore over the operational database during a
+smoke test.
 
 Escalate to a new scientific gate if operation exposes a meaning/identity/classification/policy
 defect. Scheduler, timeout, deployment, or backup infrastructure changes that preserve meaning stay
