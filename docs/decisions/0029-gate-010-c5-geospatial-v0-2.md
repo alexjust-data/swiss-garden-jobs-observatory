@@ -51,3 +51,9 @@ than being promoted for presentation purposes.
 - Production remains unchanged until independent audit and merge.
 - More markers require better governed structured inputs or human geospatial adjudication; they
   cannot be obtained by weakening candidate selection.
+## Independent-audit clarification
+
+Dashboard resolver authority is an explicit build input, not a module-level moving default.
+The selected resolver version is validated, fingerprinted and persisted. GATE-013 remains pinned
+to `geospatial-v0.1`; only the separately governed C5 path requests `geospatial-v0.2`. Both
+immutable snapshot identities may coexist for the same upstream PIT evidence.

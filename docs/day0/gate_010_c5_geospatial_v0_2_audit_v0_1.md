@@ -175,3 +175,16 @@ migrations introduced              0
 
 Exact-head CI, GitGuardian, H1, and review-thread results are recorded after the implementation
 head is frozen and pushed for independent audit.
+## Independent-audit resolver-authority correction
+
+The independent audit of prior head `dabc55cc06d5d107e81a69fa2fc136cb6135f24d`
+found that Dashboard imported the moving `RESOLVER_VERSION` constant. That could make the
+frozen GATE-013 v0.1 cycle select v0.2 location rows and label its Dashboard v0.2 without an
+explicit authority decision.
+
+The corrected Dashboard builder accepts a validated resolver version as an input, binds it into
+configuration and input fingerprint, and persists that exact value. The daily GATE-013 caller
+passes its frozen `geospatial-v0.1`; the C5 acceptance path passes `geospatial-v0.2`. A
+coexistence test proves both snapshots can be created and exactly replayed against the same
+Dedup/Premium evidence with different location rows, IDs and fingerprints. Default test fixtures
+remain pinned to v0.1. The C5 contract remains byte-identical.

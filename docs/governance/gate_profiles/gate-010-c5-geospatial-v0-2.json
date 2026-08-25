@@ -3,7 +3,7 @@
   "gate": "GATE-010-C5",
   "pr": 37,
   "expected_base_ref": "codex/geographic-quality-improvement",
-  "expected_base_sha": "2c92cf6dc03c0cb49914319b045b51856d0cd3e6",
+  "expected_base_sha": "d408e6637da5981fe4143ede237d18dfb6df6d4b",
   "expected_head_ref": "codex/gate-010-c5-geospatial-v0-2",
   "contract": "docs/day0/gate_010_c5_geospatial_v0_2_contract_v0_1.md",
   "contract_blob": "9de457f6d06c2ade124f9b394c634cd653ecf67d",
@@ -15,7 +15,9 @@
     "src/observations/tests/test_gate010c2.py",
     "src/observations/tests/test_geospatial.py",
     "src/core/tests/test_raw_storage.py",
-    "src/observations/tests/test_geographic_quality.py"
+    "src/observations/tests/test_geographic_quality.py",
+    "src/dashboard/tests/test_dashboard.py",
+    "src/operations/tests/test_gate013_operations.py"
   ],
   "expected_migrations": []
 }

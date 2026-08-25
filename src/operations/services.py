@@ -871,7 +871,10 @@ def run_cycle(
                 invocation_started=invocation_started,
             )
             dashboard, dashboard_reused = build_dashboard_snapshot(
-                as_of=cutoff, dedup_run=dedup_run, premium_run=premium_run
+                as_of=cutoff,
+                dedup_run=dedup_run,
+                premium_run=premium_run,
+                geospatial_resolver_version=DAILY_GEOSPATIAL_RESOLVER_VERSION,
             )
             _save_stage(cycle, "dashboard", "SUCCEEDED")
         except CycleTimeoutError as exc:
