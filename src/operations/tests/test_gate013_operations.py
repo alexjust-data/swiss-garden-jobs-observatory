@@ -19,9 +19,12 @@ from operations.management.commands.run_daily_observatory import EXIT_BY_STATUS
 from operations.models import ObservatoryCycle
 from operations.services import (
     CYCLE_VERSION,
+    DAILY_GEOSPATIAL_BATCH_VERSION,
+    DAILY_GEOSPATIAL_RESOLVER_VERSION,
     STAGE_ORDER,
     CycleTimeoutError,
     ObservatoryOperationError,
+    _default_geospatial_runner,
     _sha256,
     cycle_configuration,
     run_cycle,
@@ -63,6 +66,19 @@ def test_v02_configuration_binds_geospatial_order_and_versions() -> None:
     assert versions["location_privacy"] == "location-privacy-v0.1"
     assert versions["geospatial_provider"] == "geo-admin-searchserver-api-2026-08"
     assert versions["raw_lineage"] == "operational-raw-lineage-v0.1"
+
+
+def test_default_geospatial_runner_pins_frozen_v01_authority() -> None:
+    expected = Mock()
+    with patch(
+        "operations.services.resolve_premium_run_locations", return_value=expected
+    ) as batch:
+        result = _default_geospatial_runner("00000000-0000-0000-0000-000000000001")
+
+    assert result is expected
+    assert DAILY_GEOSPATIAL_BATCH_VERSION == "geospatial-resolution-batch-v0.1"
+    assert DAILY_GEOSPATIAL_RESOLVER_VERSION == "geospatial-v0.1"
+    assert batch.call_args.kwargs["resolver"].resolver_version == "geospatial-v0.1"
 
 
 def test_geospatial_failure_seals_before_dashboard() -> None:

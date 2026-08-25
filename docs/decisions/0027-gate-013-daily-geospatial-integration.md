@@ -45,6 +45,10 @@ Historical v0.1 cycles and PIT artifacts remain unchanged. A v0.1 cycle configur
 resumed as v0.2. A completed v0.2 exact retry returns its stored result before collection or
 geospatial activity.
 
+The cycle pins geospatial-resolution-batch-v0.1 and geospatial-v0.1 as contract identities; it
+does not import a mutable module-level current version. Later append-only resolver versions may
+coexist but cannot silently change an existing cycle configuration.
+
 Migration `operations/0002_add_failed_geospatial_status.py` changes only the Django status choices;
 it does not rewrite cycle rows.
 

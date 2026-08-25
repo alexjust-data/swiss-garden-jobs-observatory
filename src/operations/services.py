@@ -31,10 +31,7 @@ from day0.services import assess_day0_readiness, ensure_source_universe, readine
 from observations.geospatial import (
     PRIVACY_POLICY_VERSION,
     PROVIDER_VERSION,
-    RESOLVER_VERSION,
-)
-from observations.geospatial_batch import (
-    BATCH_VERSION as GEOSPATIAL_BATCH_VERSION,
+    GeospatialResolver,
 )
 from observations.geospatial_batch import (
     GeospatialBatchResult,
@@ -204,6 +201,17 @@ def _default_collector(source_id: str, **kwargs: Any) -> CollectionRun:
     )
 
 
+DAILY_GEOSPATIAL_BATCH_VERSION = "geospatial-resolution-batch-v0.1"
+DAILY_GEOSPATIAL_RESOLVER_VERSION = "geospatial-v0.1"
+
+
+def _default_geospatial_runner(premium_run_id: uuid.UUID | str) -> GeospatialBatchResult:
+    return resolve_premium_run_locations(
+        premium_run_id,
+        resolver=GeospatialResolver(resolver_version=DAILY_GEOSPATIAL_RESOLVER_VERSION),
+    )
+
+
 def cycle_configuration(
     trigger: str,
     source_ids: list[str],
@@ -229,8 +237,8 @@ def cycle_configuration(
             "normalizer": NORMALIZER_VERSION,
             "dedup_material": "dedup-review-material-v0.1",
             "premium": PREMIUM_VERSION,
-            "geospatial_batch": GEOSPATIAL_BATCH_VERSION,
-            "geospatial_resolver": RESOLVER_VERSION,
+            "geospatial_batch": DAILY_GEOSPATIAL_BATCH_VERSION,
+            "geospatial_resolver": DAILY_GEOSPATIAL_RESOLVER_VERSION,
             "location_privacy": PRIVACY_POLICY_VERSION,
             "geospatial_provider": PROVIDER_VERSION,
             "raw_lineage": RAW_LINEAGE_VERSION,
@@ -493,7 +501,7 @@ def run_cycle(
     delay_seconds: float = 1.0,
     timeout_seconds: int = DEFAULT_CYCLE_TIMEOUT_SECONDS,
     collector: Callable[..., CollectionRun] = _default_collector,
-    geospatial_runner: Callable[..., GeospatialBatchResult] = (resolve_premium_run_locations),
+    geospatial_runner: Callable[..., GeospatialBatchResult] = _default_geospatial_runner,
 ) -> CycleResult:
     if timeout_seconds < 60:
         raise ObservatoryOperationError(
