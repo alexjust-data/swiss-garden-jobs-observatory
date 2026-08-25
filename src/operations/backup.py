@@ -140,41 +140,47 @@ def create_backup(
             delete=False,
         ) as handle:
             temporary_dump = Path(handle.name)
-        dump = runner(
-            [
-                str(config.pg_dump),
-                "--format=custom",
-                f"--file={temporary_dump}",
-                child_environment["POSTGRES_DB"],
-            ],
-            cwd=config.repo_root,
-            env=child_environment,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=7_200,
-            check=False,
-            shell=False,
-        )
+        try:
+            dump = runner(
+                [
+                    str(config.pg_dump),
+                    "--format=custom",
+                    f"--file={temporary_dump}",
+                    child_environment["POSTGRES_DB"],
+                ],
+                cwd=config.repo_root,
+                env=child_environment,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=7_200,
+                check=False,
+                shell=False,
+            )
+        except OSError as exc:
+            raise SchedulingError("pg_dump execution failed") from exc
         if dump.returncode != 0:
             raise SchedulingError("pg_dump failed")
         if not temporary_dump.is_file() or temporary_dump.stat().st_size == 0:
             raise SchedulingError("pg_dump did not create a non-empty custom dump")
-        with temporary_dump.open("rb") as handle:
+        with temporary_dump.open("rb+") as handle:
             os.fsync(handle.fileno())
-        inventory = runner(
-            [str(config.pg_restore), "--list", str(temporary_dump)],
-            cwd=config.repo_root,
-            env=child_environment,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=600,
-            check=False,
-            shell=False,
-        )
+        try:
+            inventory = runner(
+                [str(config.pg_restore), "--list", str(temporary_dump)],
+                cwd=config.repo_root,
+                env=child_environment,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=600,
+                check=False,
+                shell=False,
+            )
+        except OSError as exc:
+            raise SchedulingError("pg_restore execution failed") from exc
         if inventory.returncode != 0 or not inventory.stdout.strip():
             raise SchedulingError("pg_restore --list did not validate the custom dump")
         dump_bytes = temporary_dump.read_bytes()
@@ -207,7 +213,11 @@ def create_backup(
             "dump_file": final_dump.name,
         }
         manifest_path = final_dump.with_suffix(".json")
-        _atomic_publish(manifest_path, canonical_json_bytes(manifest) + b"\n")
+        try:
+            _atomic_publish(manifest_path, canonical_json_bytes(manifest) + b"\n")
+        except Exception:
+            final_dump.unlink(missing_ok=True)
+            raise
         return final_dump, manifest_path, manifest
     finally:
         if temporary_dump is not None:

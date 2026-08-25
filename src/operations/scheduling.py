@@ -17,6 +17,7 @@ from typing import Any
 
 WRAPPER_VERSION = "observatory-scheduler-wrapper-v0.1"
 PROCESS_TIMEOUT_EXIT = 124
+PROCESS_EXECUTION_ERROR_EXIT = 125
 REQUIRED_ENVIRONMENT = (
     "DJANGO_SECRET_KEY",
     "POSTGRES_DB",
@@ -311,6 +312,7 @@ def run_scheduled_cycle(
     cycle_stdout = ""
     cycle_stderr = ""
     timed_out = False
+    process_error = False
     try:
         cycle = _run_text(
             cycle_argv(config),
@@ -327,7 +329,14 @@ def run_scheduled_cycle(
         cycle_exit = PROCESS_TIMEOUT_EXIT
         cycle_stdout = exc.stdout if isinstance(exc.stdout, str) else ""
         cycle_stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+    except OSError:
+        process_error = True
+        cycle_exit = PROCESS_EXECUTION_ERROR_EXIT
+        cycle_stdout = ""
+        cycle_stderr = ""
 
+    status_timed_out = False
+    status_process_error = False
     try:
         status = _run_text(
             status_argv(config),
@@ -340,9 +349,15 @@ def run_scheduled_cycle(
         status_stdout = status.stdout
         status_stderr = status.stderr
     except subprocess.TimeoutExpired as exc:
+        status_timed_out = True
         status_exit = PROCESS_TIMEOUT_EXIT
         status_stdout = exc.stdout if isinstance(exc.stdout, str) else ""
         status_stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+    except OSError:
+        status_process_error = True
+        status_exit = PROCESS_EXECUTION_ERROR_EXIT
+        status_stdout = ""
+        status_stderr = ""
 
     finished = now()
     stable_evidence: dict[str, object] = {
@@ -351,10 +366,13 @@ def run_scheduled_cycle(
         "cycle_argv": plan["cycle_argv"],
         "cycle_exit_code": cycle_exit,
         "cycle_process_timed_out": timed_out,
+        "cycle_process_error": process_error,
         "cycle_stdout_sha256": sha256_bytes(cycle_stdout.encode("utf-8")),
         "cycle_stderr_sha256": sha256_bytes(cycle_stderr.encode("utf-8")),
         "cycle_summary": _bounded_cycle_summary(_parse_json_line(cycle_stdout)),
         "status_exit_code": status_exit,
+        "status_process_timed_out": status_timed_out,
+        "status_process_error": status_process_error,
         "status_stdout_sha256": sha256_bytes(status_stdout.encode("utf-8")),
         "status_stderr_sha256": sha256_bytes(status_stderr.encode("utf-8")),
         "status_summary": _bounded_status_summary(_parse_json_line(status_stdout)),

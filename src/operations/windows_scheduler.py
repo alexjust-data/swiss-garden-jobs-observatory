@@ -6,14 +6,22 @@ import re
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from operations.scheduling import ScheduledRunConfig, SchedulingError
+from operations.scheduling import (
+    ScheduledRunConfig,
+    SchedulingError,
+    scheduled_plan,
+)
 
 TASK_PLAN_VERSION = "windows-observatory-task-v0.1"
+WINDOWS_TIME_ZONE_IDS = (
+    "W. Europe Standard Time",
+    "Romance Standard Time",
+)
 TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 _TASK_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,79}$")
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
@@ -119,6 +127,7 @@ def task_plan(config: WindowsTaskConfig) -> dict[str, object]:
         "task_name": config.task_name,
         "start_boundary_local": config.start_boundary,
         "timezone": "Europe/Zurich",
+        "accepted_windows_time_zone_ids": list(WINDOWS_TIME_ZONE_IDS),
         "program": str(config.scheduled_run.python_executable),
         "arguments": list(task_arguments(config)),
         "working_directory": str(config.scheduled_run.repo_root),
@@ -137,13 +146,36 @@ def _canonical_xml(value: str) -> str:
         raise SchedulingError("existing Windows task XML is malformed") from exc
 
 
+def validate_windows_time_zone(*, runner: CommandRunner = subprocess.run) -> None:
+    result = runner(
+        ["tzutil.exe", "/g"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+        shell=False,
+    )
+    if result.returncode != 0 or result.stdout.strip() not in WINDOWS_TIME_ZONE_IDS:
+        raise SchedulingError("Windows host timezone is not governed Europe/Zurich time")
+
+
 def register_task(
     config: WindowsTaskConfig,
     *,
+    environment: Mapping[str, str],
+    git_runner: CommandRunner = subprocess.run,
     runner: CommandRunner = subprocess.run,
 ) -> str:
     if not (config.scheduled_run.repo_root / "scripts" / "run_scheduled_observatory.py").is_file():
         raise SchedulingError("scheduled wrapper is missing from deployment repository")
+    scheduled_plan(
+        config.scheduled_run,
+        environment=environment,
+        runner=git_runner,
+    )
+    validate_windows_time_zone(runner=runner)
     intended = build_task_xml(config)
     query = runner(
         ["schtasks.exe", "/Query", "/TN", config.task_name, "/XML", "ONE"],
@@ -163,7 +195,7 @@ def register_task(
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".xml", encoding="utf-16", delete=False
+            mode="w", suffix=".xml", encoding="utf-8", delete=False
         ) as handle:
             temporary = Path(handle.name)
             handle.write(intended)

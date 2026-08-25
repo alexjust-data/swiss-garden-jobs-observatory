@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,12 +16,17 @@ def _project_root() -> Path:
 
 sys.path.insert(0, str(_project_root() / "src"))
 
-from operations.scheduling import ScheduledRunConfig, SchedulingError  # noqa: E402
+from operations.scheduling import (  # noqa: E402
+    ScheduledRunConfig,
+    SchedulingError,
+    scheduled_plan,
+)
 from operations.windows_scheduler import (  # noqa: E402
     WindowsTaskConfig,
     build_task_xml,
     register_task,
     task_plan,
+    validate_windows_time_zone,
 )
 
 
@@ -55,11 +61,13 @@ def main() -> int:
             start_boundary=args.start_boundary,
             scheduled_run=scheduled,
         )
+        validate_windows_time_zone()
+        scheduled_plan(scheduled, environment=os.environ)
         plan = task_plan(config)
         if args.show_xml:
             plan["task_xml"] = build_task_xml(config)
         if args.apply:
-            plan["registration_result"] = register_task(config)
+            plan["registration_result"] = register_task(config, environment=os.environ)
             plan["registration_performed"] = True
     except SchedulingError as exc:
         print(f"SCHEDULER_CONFIGURATION_ERROR: {exc}", file=sys.stderr)
