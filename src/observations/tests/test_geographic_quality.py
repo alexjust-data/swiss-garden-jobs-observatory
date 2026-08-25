@@ -23,6 +23,11 @@ def test_canonical_swiss_country_aliases(value: str) -> None:
     assert canonical_swiss_country(value) == "CH"
 
 
+@pytest.mark.parametrize("value", ["", " ", "\t", "\n"])
+def test_blank_country_remains_unknown(value: str) -> None:
+    assert canonical_swiss_country(value) == ""
+
+
 def test_unknown_country_is_not_silently_reclassified() -> None:
     assert canonical_swiss_country("Deutschland") == "DEUTSCHLAND"
 
@@ -107,9 +112,7 @@ class MunicipalityResolutionTests(TestCase):
         assert resolve_municipality(self.parsed("St.Gallen", "St. Gallen")) == st_gallen
 
     def test_canton_name_and_unique_locality_are_supported(self) -> None:
-        bern = self.municipality(
-            bfs_code=351, name="Bern", canton_code="BE", canton_name="Bern"
-        )
+        bern = self.municipality(bfs_code=351, name="Bern", canton_code="BE", canton_name="Bern")
         solothurn = self.municipality(
             bfs_code=2601,
             name="Solothurn",
@@ -117,10 +120,7 @@ class MunicipalityResolutionTests(TestCase):
             canton_name="Solothurn",
         )
         assert resolve_municipality(self.parsed("Bern", "Bern")) == bern
-        assert (
-            resolve_municipality(self.parsed("Solothurn", "Bern / Solothurn"))
-            == solothurn
-        )
+        assert resolve_municipality(self.parsed("Solothurn", "Bern / Solothurn")) == solothurn
 
     def test_ambiguous_locality_requires_a_governed_canton(self) -> None:
         bern_rüti = self.municipality(

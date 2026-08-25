@@ -62,10 +62,7 @@ def swiss_place_key(value: str) -> str:
 
     normalized = unicodedata.normalize("NFKC", value).casefold()
     normalized = (
-        normalized.replace("ä", "ae")
-        .replace("ö", "oe")
-        .replace("ü", "ue")
-        .replace("ß", "ss")
+        normalized.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
     )
     normalized = "".join(
         character
@@ -78,7 +75,7 @@ def swiss_place_key(value: str) -> str:
 def canonical_swiss_country(value: str) -> str:
     stripped = " ".join(value.split())
     if not stripped:
-        return "CH"
+        return ""
     return "CH" if swiss_place_key(stripped) in _COUNTRY_ALIASES else stripped.upper()
 
 

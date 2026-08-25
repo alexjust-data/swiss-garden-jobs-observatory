@@ -3,7 +3,7 @@
   "gate": "GEOGRAPHIC-INPUT-QUALITY",
   "pr": 36,
   "expected_base_ref": "main",
-  "expected_base_sha": "99e39312535f33554a973110cba196c253628945",
+  "expected_base_sha": "a22ae2c5098131151917b68a0e0a6b7cdcf1a31a",
   "expected_head_ref": "codex/geographic-quality-improvement",
   "contract": "docs/research/v0_4/10_DATES_AND_GEOSPATIAL_CONTRACT.md",
   "contract_blob": "8962dbdb1eb565080b70ad15b30b42578bc6f18f",
