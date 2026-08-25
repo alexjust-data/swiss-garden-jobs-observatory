@@ -316,7 +316,17 @@ def test_windows_registration_reuses_identical_and_rejects_conflict(tmp_path: Pa
         register_task(value, environment=environment(), git_runner=git_runner(), runner=conflicting)
 
 
-def test_windows_registration_creates_without_force(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "not_found_message",
+    (
+        "ERROR: The system cannot find the file specified.\n",
+        "Error: El sistema no puede encontrar el archivo especificado.\n",
+    ),
+)
+def test_windows_registration_creates_without_force(
+    tmp_path: Path,
+    not_found_message: str,
+) -> None:
     value = windows_config(tmp_path)
     calls: list[list[str]] = []
 
@@ -328,7 +338,7 @@ def test_windows_registration_creates_without_force(tmp_path: Path) -> None:
             return completed(
                 argv,
                 returncode=1,
-                stderr="ERROR: The system cannot find the file specified.\n",
+                stderr=not_found_message,
             )
         return completed(argv)
 

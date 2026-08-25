@@ -27,7 +27,7 @@ _TASK_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,79}$")
 _TASK_NOT_FOUND_MESSAGES = frozenset(
     {
         "error: the system cannot find the file specified.",
-        "error: no se encuentra el archivo especificado.",
+        "error: el sistema no puede encontrar el archivo especificado.",
         "fehler: das system kann die angegebene datei nicht finden.",
         "erreur : le fichier spécifié est introuvable.",
         "errore: impossibile trovare il file specificato.",
