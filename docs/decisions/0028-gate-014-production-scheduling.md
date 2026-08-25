@@ -46,6 +46,11 @@ A manifest-publication failure removes the dump created by that same invocation.
 collision fails closed. A process crash between filesystem operations can leave only unsealed orphan
 bytes, never an accepted manifest.
 
+Windows publication uses same-directory `os.rename`, which raises `FileExistsError` rather than
+replacing an existing destination on Windows. POSIX publication retains hardlink-plus-unlink. This
+avoids assuming NTFS hardlink support on the actual external volume while preserving atomic
+no-overwrite behavior.
+
 ## Boundaries
 
 GATE-014 changes no Source, lifecycle, review, Dedup, Premium, geography, Dashboard, freshness or

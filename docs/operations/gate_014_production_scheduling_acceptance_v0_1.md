@@ -7,7 +7,8 @@
 - Branch: `codex/gate-014-production-scheduling`.
 - Contract-only commit: `7be211a50efbbd835bcc1818c01f07b7d65dd7ca`.
 - Contract blob: `6619ac84e4776d7de6056dacef0b8986d5142014`.
-- Final implementation head: pinned after validation.
+- Validated code head: `98653a623775b775c91efd34142f019a4a2778d5`.
+- Final documentation/H1 head: pinned in the draft PR.
 - State: isolated acceptance; production activation not authorized.
 
 The frozen contract was committed alone. GATE-014 adds deployment tooling only and changes no
@@ -58,15 +59,55 @@ The isolated suite proves:
 Focused result before repository-wide validation:
 
 ```text
-GATE-014 scheduling/backup tests    22 passed
+GATE-014 scheduling/backup tests    23 passed
 Ruff focused                       PASS
 mypy new domain modules            PASS
 ```
 
 ## Validation
 
-Final repository-wide, PostgreSQL backup and H1 evidence are recorded after the implementation head
-is frozen. No validation result is inferred before it is run.
+The first full run used an extra operational-RAW environment override not present in CI and caused
+one expected C2 scope test to fail (`561 passed, 1 failed`). It was rejected as an invalid validation
+environment. The exact official-CI RAW environment then passed, and the final run after the portable
+publication correction passed:
+
+```text
+full pytest                         563 passed
+focused GATE-014                     23 passed
+Playwright                            4 passed
+Ruff                               PASS
+mypy                               PASS — 172 source files
+Django check                        PASS
+makemigrations drift                NONE
+```
+
+### Real isolated PostgreSQL backup
+
+A dedicated PostgreSQL 16 container on port 55435 contained only one acceptance table/row. The
+governed backup wrapper ran from the exact clean code head. Its first real attempt exposed that the
+external `G:` filesystem does not support hardlinks; no accepted dump or manifest was published.
+The implementation was corrected to use Windows atomic no-replace rename (and POSIX hardlink
+publication), with explicit collision tests.
+
+The corrected execution produced:
+
+```text
+dump SHA-256
+f85c1361c7f3566dcf70695ca8b7a3e6d521601dbd67cb510b794b55439f032b
+dump bytes                           1770
+inventory SHA-256
+cae37a09fc465e563516cd370ec5e1607f0a3eabaa539dc03dad92ea8469bf66
+stable evidence SHA-256
+a282e8a93d9096354ba16f2b9f7d23596edb2f1391c77af39e2adc20d1d0001a
+restore into second isolated DB      PASS
+restored probe                       1|gate014
+```
+
+The real dry-run wrapper and Windows task plan both validated the exact clean SHA. The host reported
+`Romance Standard Time`, an accepted Europe/Zurich civil-time equivalent. The dry runs created no
+log directory and registered no task.
+
+H1 evidence is added only after a draft PR has an exact GitHub head; it is not inferred here.
 
 ## Production boundary
 
