@@ -1,7 +1,7 @@
 {
   "schema_version": "gate-pre-audit-profile-v1",
   "gate": "GATE-013-C1",
-  "pr": null,
+  "pr": 38,
   "expected_base_ref": "main",
   "expected_base_sha": "01a28328161fedc77d7c7f6bec4039d9a75925e0",
   "expected_head_ref": "codex/gate-013-c1-daily-geospatial-v0-2",
