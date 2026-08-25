@@ -1,4 +1,4 @@
-﻿# Python artifacts
+# Python artifacts
 *.pyc
 __pycache__/
 *.pyo
@@ -29,3 +29,4 @@ staticfiles/
 .env
 node_modules/
 .production-acceptance/
+.gate-audit/
