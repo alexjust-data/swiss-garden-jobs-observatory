@@ -19,6 +19,7 @@ from core.models import RawArtifact
 from core.storage import RawObjectStore
 from dashboard.tests.factories import create_dashboard_upstream
 from observations.geospatial import (
+    LEGACY_RESOLVER_VERSION,
     PROVIDER,
     PROVIDER_VERSION,
     RESOLVER_VERSION,
@@ -31,7 +32,11 @@ from observations.geospatial import (
     normalized_request,
     resolution_input_fingerprint,
 )
-from observations.geospatial_batch import GeospatialBatchError, resolve_premium_run_locations
+from observations.geospatial_batch import (
+    LEGACY_BATCH_VERSION,
+    GeospatialBatchError,
+    resolve_premium_run_locations,
+)
 from observations.models import (
     GeocoderCacheEntry,
     GeocodingReviewItem,
@@ -154,6 +159,26 @@ class Gate010C2BatchTests(TestCase):
         assert result.created == 0 and result.resolution_ids == ()
         assert client.calls == 0
         assert PostingLocationResolution.objects.count() == 0
+
+    def test_legacy_v01_batch_remains_explicitly_available(self) -> None:
+        upstream = create_dashboard_upstream(suffix="c5-legacy-batch")
+        client = FakeClient()
+        resolver = GeospatialResolver(
+            client=client,
+            raw_store=RawObjectStore(self.raw.name),
+            resolver_version=LEGACY_RESOLVER_VERSION,
+        )
+
+        result = resolve_premium_run_locations(
+            upstream["premium_run"].pk,
+            dry_run=True,
+            resolver=resolver,
+        )
+
+        assert result.batch_version == LEGACY_BATCH_VERSION
+        assert result.selected == 1
+        assert result.created == 0
+        assert client.calls == 0
 
     def test_non_green_assessment_is_not_selected(self) -> None:
         upstream = create_dashboard_upstream(green_result="NOT_GREEN", suffix="c2-not-green")

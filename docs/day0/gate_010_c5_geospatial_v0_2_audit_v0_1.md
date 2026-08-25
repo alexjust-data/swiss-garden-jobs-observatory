@@ -137,6 +137,21 @@ Day-0 has zero fresh eligible sources at this later cutoff because the acceptanc
 August 14 collection evidence. This is a causal freshness consequence, not a regression in the
 geospatial result. Exact replay reused all four artifacts with identical IDs and fingerprints.
 
+## Stacked integration reconciliation
+
+A clean rehearsal stacked C5 with GATE-013 and proved that GATE-013's prior module-level imports
+would have changed its frozen daily configuration from batch/resolver v0.1 to v0.2. C5 now exposes
+a closed batch-version mapping for the two governed resolver identities: v0.1 returns
+`geospatial-resolution-batch-v0.1`, while the explicit/default C5 resolver v0.2 returns
+`geospatial-resolution-batch-v0.2`. Unknown versions fail closed.
+
+This is compatibility, not promotion. C5 remains an isolated v0.2 authority; GATE-013 separately
+pins daily orchestration to v0.1. The combined corrected rehearsal passed 77 focused and 641 full
+tests, four browser tests, Ruff, mypy over 177 files, Django check, migration drift, clean migration,
+and reference import twice. Production and the frozen contracts remained unchanged.
+
+The C5 ADR was renumbered mechanically from 0027 to 0029 because the stacked repository already
+uses ADR 0027 for GATE-013 and ADR 0028 for GATE-014. No decision content changed as a result.
 ## Validation
 
 ```text

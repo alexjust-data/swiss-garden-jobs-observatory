@@ -1,4 +1,4 @@
-# ADR 0027 — GATE-010-C5 governed geospatial resolution v0.2
+# ADR 0029 — GATE-010-C5 governed geospatial resolution v0.2
 
 ## Status
 
@@ -44,6 +44,8 @@ than being promoted for presentation purposes.
 ## Consequences
 
 - Historical v0.1 rows, API interpretation, and C3 artifacts remain unchanged.
+- The batch retains an explicit v0.1 compatibility identity for already-governed consumers; C5
+  does not silently promote those consumers to v0.2.
 - New markers become visible only through a DashboardSnapshot after v0.2 evidence is causally
   available.
 - Production remains unchanged until independent audit and merge.
