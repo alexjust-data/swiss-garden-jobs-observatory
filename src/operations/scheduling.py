@@ -287,6 +287,11 @@ def _publish_file_no_overwrite(
     platform = os.name if platform_name is None else platform_name
     try:
         if platform == "nt":
+            # Windows os.rename() is the atomic no-overwrite primitive used here.
+            # Keep an explicit preflight as defense in depth and so the branch's
+            # sequential collision semantics remain testable on non-Windows CI.
+            if target.exists():
+                raise SchedulingError(collision_message)
             os.rename(source, target)
         else:
             os.link(source, target)
