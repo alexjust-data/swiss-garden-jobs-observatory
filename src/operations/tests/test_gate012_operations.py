@@ -89,7 +89,7 @@ def geospatial_result(
     already_present: int = 1,
 ) -> GeospatialBatchResult:
     return GeospatialBatchResult(
-        batch_version="geospatial-resolution-batch-v0.1",
+        batch_version="geospatial-resolution-batch-v0.2",
         premium_run_id=str(premium_run.pk),
         premium_run_fingerprint=premium_run.input_fingerprint,
         premium_run_as_of=premium_run.as_of.isoformat(),

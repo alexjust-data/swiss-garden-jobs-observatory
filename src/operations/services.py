@@ -64,7 +64,21 @@ from vacancies.review_continuity import DedupContinuityValidationError
 
 from .models import ObservatoryCycle, ObservatorySourceAttempt, OperationalEvent
 
-CYCLE_VERSION = "daily-observatory-cycle-v0.2"
+CYCLE_VERSION = "daily-observatory-cycle-v0.3"
+DAILY_GEOSPATIAL_BATCH_VERSION = "geospatial-resolution-batch-v0.2"
+DAILY_GEOSPATIAL_RESOLVER_VERSION = "geospatial-v0.2"
+CYCLE_GEOSPATIAL_AUTHORITY: dict[str, tuple[str, str] | None] = {
+    "daily-observatory-cycle-v0.1": None,
+    "daily-observatory-cycle-v0.2": (
+        "geospatial-resolution-batch-v0.1",
+        "geospatial-v0.1",
+    ),
+    CYCLE_VERSION: (
+        DAILY_GEOSPATIAL_BATCH_VERSION,
+        DAILY_GEOSPATIAL_RESOLVER_VERSION,
+    ),
+}
+COMPLETED_REPLAY_CYCLE_VERSIONS = frozenset(CYCLE_GEOSPATIAL_AUTHORITY)
 STAGE_ORDER = (
     "cohort",
     "collection",
@@ -201,10 +215,6 @@ def _default_collector(source_id: str, **kwargs: Any) -> CollectionRun:
     )
 
 
-DAILY_GEOSPATIAL_BATCH_VERSION = "geospatial-resolution-batch-v0.1"
-DAILY_GEOSPATIAL_RESOLVER_VERSION = "geospatial-v0.1"
-
-
 def _default_geospatial_runner(premium_run_id: uuid.UUID | str) -> GeospatialBatchResult:
     return resolve_premium_run_locations(
         premium_run_id,
@@ -248,6 +258,54 @@ def cycle_configuration(
         },
         "code_git_sha": _git_sha(),
     }
+
+
+def _completed_cycle_semantics_match(
+    cycle_version: str,
+    configuration: dict[str, Any],
+) -> bool:
+    versions = configuration.get("versions")
+    stage_order = configuration.get("stage_order")
+    if not isinstance(versions, dict) or not isinstance(stage_order, list):
+        return False
+    if cycle_version not in CYCLE_GEOSPATIAL_AUTHORITY:
+        return False
+    authority = CYCLE_GEOSPATIAL_AUTHORITY[cycle_version]
+    if authority is None:
+        return (
+            "geospatial" not in stage_order
+            and "geospatial_batch" not in versions
+            and "geospatial_resolver" not in versions
+        )
+    batch_version, resolver_version = authority
+    return (
+        "geospatial" in stage_order
+        and versions.get("geospatial_batch") == batch_version
+        and versions.get("geospatial_resolver") == resolver_version
+    )
+
+
+def _validate_completed_cycle_replay(cycle: ObservatoryCycle) -> None:
+    """Validate immutable stored identity without applying current-cycle semantics."""
+
+    configuration = cycle.configuration
+    selected_source_ids = sorted(str(source_id) for source_id in cycle.selected_source_ids)
+    valid = (
+        cycle.cycle_version in COMPLETED_REPLAY_CYCLE_VERSIONS
+        and isinstance(configuration, dict)
+        and configuration.get("cycle_version") == cycle.cycle_version
+        and configuration.get("trigger") == cycle.trigger
+        and configuration.get("target_cohort_version") == cycle.target_cohort_version
+        and configuration.get("source_ids") == selected_source_ids
+        and _sha256(configuration) == cycle.configuration_fingerprint
+        and _completed_cycle_semantics_match(cycle.cycle_version, configuration)
+    )
+    if not valid:
+        raise ObservatoryOperationError(
+            "cohort",
+            "HISTORICAL_REPLAY_IDENTITY_INVALID",
+            "completed cycle stored identity is inconsistent",
+        )
 
 
 def _lock_key() -> int:
@@ -464,6 +522,25 @@ def _geospatial_requires_cutoff_advance(result: GeospatialBatchResult, cutoff: d
     ).exists()
 
 
+def _validate_daily_geospatial_result(
+    result: GeospatialBatchResult,
+    *,
+    premium_run_id: uuid.UUID | str,
+    premium_run_fingerprint: str,
+) -> None:
+    valid = (
+        result.batch_version == DAILY_GEOSPATIAL_BATCH_VERSION
+        and result.premium_run_id == str(premium_run_id)
+        and result.premium_run_fingerprint == premium_run_fingerprint
+    )
+    if not valid:
+        raise ObservatoryOperationError(
+            "geospatial",
+            "GEOSPATIAL_AUTHORITY_MISMATCH",
+            "geospatial batch result does not match the daily cycle authority",
+        )
+
+
 def _geospatial_state(
     first: GeospatialBatchResult,
     final: GeospatialBatchResult,
@@ -511,9 +588,15 @@ def run_cycle(
         raise ObservatoryOperationError(
             "cohort", "RECOVERY_REQUIRES_CYCLE_ID", "RECOVERY requires --cycle-id"
         )
+    cycle = ObservatoryCycle.objects.filter(pk=cycle_id).first() if cycle_id else None
+    if cycle and cycle.status in {
+        ObservatoryCycle.Status.SUCCEEDED,
+        ObservatoryCycle.Status.SUCCEEDED_NOT_AUTHORIZED,
+    }:
+        _validate_completed_cycle_replay(cycle)
+        return CycleResult(cycle, True)
     universe, sources = governed_source_cohort()
     source_ids = [str(source.pk) for source in sources]
-    cycle = ObservatoryCycle.objects.filter(pk=cycle_id).first() if cycle_id else None
     if cycle:
         configuration = cycle_configuration(
             cycle.trigger, source_ids, timeout_seconds=timeout_seconds
@@ -523,11 +606,6 @@ def run_cycle(
             raise ObservatoryOperationError(
                 "cohort", "RETRY_CONFIGURATION_MISMATCH", "cycle configuration differs"
             )
-        if cycle.status in {
-            ObservatoryCycle.Status.SUCCEEDED,
-            ObservatoryCycle.Status.SUCCEEDED_NOT_AUTHORIZED,
-        }:
-            return CycleResult(cycle, True)
         if not resume:
             raise ObservatoryOperationError(
                 "cohort", "RESUME_REQUIRED", "non-success cycle requires --resume"
@@ -820,6 +898,11 @@ def run_cycle(
                 invocation_started=invocation_started,
             )
             geospatial_first = geospatial_runner(premium_run.pk)
+            _validate_daily_geospatial_result(
+                geospatial_first,
+                premium_run_id=premium_run.pk,
+                premium_run_fingerprint=premium_run.input_fingerprint,
+            )
             geospatial_final = geospatial_first
             _ensure_within_timeout(
                 cycle,
@@ -840,6 +923,11 @@ def run_cycle(
                     )
                 premium_run, premium_reused = run_classification(cutoff)
                 geospatial_final = geospatial_runner(premium_run.pk)
+                _validate_daily_geospatial_result(
+                    geospatial_final,
+                    premium_run_id=premium_run.pk,
+                    premium_run_fingerprint=premium_run.input_fingerprint,
+                )
                 if _geospatial_requires_cutoff_advance(geospatial_final, cutoff):
                     raise ObservatoryOperationError(
                         "geospatial",
