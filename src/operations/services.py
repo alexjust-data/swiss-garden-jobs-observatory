@@ -58,13 +58,19 @@ from premium_segments.classifier import CLASSIFIER_VERSION as PREMIUM_VERSION
 from premium_segments.classifier import run_classification
 from sources.models import Source
 from vacancies.engine import run_deduplication
-from vacancies.models import DedupReviewDecisionApplication
+from vacancies.models import DedupReviewDecisionApplication, DedupRun
 from vacancies.normalizer import DEDUP_VERSION, NORMALIZER_VERSION
-from vacancies.review_continuity import DedupContinuityValidationError
+from vacancies.review_continuity import (
+    FROZEN_CONFIGURATION as DEDUP_CONTINUITY_CONFIGURATION,
+)
+from vacancies.review_continuity import (
+    DedupContinuityValidationError,
+    validate_dedup_review_application,
+)
 
 from .models import ObservatoryCycle, ObservatorySourceAttempt, OperationalEvent
 
-CYCLE_VERSION = "daily-observatory-cycle-v0.3"
+CYCLE_VERSION = "daily-observatory-cycle-v0.4"
 DAILY_GEOSPATIAL_BATCH_VERSION = "geospatial-resolution-batch-v0.2"
 DAILY_GEOSPATIAL_RESOLVER_VERSION = "geospatial-v0.2"
 CYCLE_GEOSPATIAL_AUTHORITY: dict[str, tuple[str, str] | None] = {
@@ -73,10 +79,20 @@ CYCLE_GEOSPATIAL_AUTHORITY: dict[str, tuple[str, str] | None] = {
         "geospatial-resolution-batch-v0.1",
         "geospatial-v0.1",
     ),
+    "daily-observatory-cycle-v0.3": (
+        DAILY_GEOSPATIAL_BATCH_VERSION,
+        DAILY_GEOSPATIAL_RESOLVER_VERSION,
+    ),
     CYCLE_VERSION: (
         DAILY_GEOSPATIAL_BATCH_VERSION,
         DAILY_GEOSPATIAL_RESOLVER_VERSION,
     ),
+}
+CYCLE_CUTOFF_POLICY = {
+    "daily-observatory-cycle-v0.1": "continuity-available-aligned-pit-v0.1",
+    "daily-observatory-cycle-v0.2": "continuity-and-geospatial-available-aligned-pit-v0.2",
+    "daily-observatory-cycle-v0.3": "continuity-and-geospatial-available-aligned-pit-v0.2",
+    CYCLE_VERSION: "causal-inputs-and-derived-outputs-aligned-pit-v0.3",
 }
 COMPLETED_REPLAY_CYCLE_VERSIONS = frozenset(CYCLE_GEOSPATIAL_AUTHORITY)
 STAGE_ORDER = (
@@ -234,7 +250,7 @@ def cycle_configuration(
         "target_cohort_version": SOURCE_UNIVERSE_VERSION,
         "source_ids": sorted(source_ids),
         "stage_order": list(STAGE_ORDER),
-        "cutoff_policy": "continuity-and-geospatial-available-aligned-pit-v0.2",
+        "cutoff_policy": CYCLE_CUTOFF_POLICY[CYCLE_VERSION],
         "whole_cycle_timeout_seconds": timeout_seconds,
         "versions": {
             "coverage": COVERAGE_POLICY_VERSION,
@@ -270,6 +286,8 @@ def _completed_cycle_semantics_match(
         return False
     if cycle_version not in CYCLE_GEOSPATIAL_AUTHORITY:
         return False
+    if configuration.get("cutoff_policy") != CYCLE_CUTOFF_POLICY[cycle_version]:
+        return False
     authority = CYCLE_GEOSPATIAL_AUTHORITY[cycle_version]
     if authority is None:
         return (
@@ -283,6 +301,29 @@ def _completed_cycle_semantics_match(
         and versions.get("geospatial_batch") == batch_version
         and versions.get("geospatial_resolver") == resolver_version
     )
+
+
+def _validate_run_scoped_dedup_outputs(dedup_run: DedupRun, cutoff: datetime) -> None:
+    """Validate derived continuity provenance without treating it as a PIT input."""
+
+    applications = list(
+        DedupReviewDecisionApplication.objects.filter(
+            target_algorithm_decision__dedup_run=dedup_run
+        ).select_related("source_human_decision", "target_algorithm_decision__dedup_run")
+    )
+    if not applications:
+        return
+    if dedup_run.as_of != cutoff:
+        raise DedupContinuityValidationError("DedupRun cutoff is not aligned")
+    for application in applications:
+        if application.source_human_decision.created_at > cutoff:
+            raise DedupContinuityValidationError(
+                "source human authority is not causally available at the Dedup cutoff"
+            )
+        validate_dedup_review_application(
+            application,
+            DEDUP_CONTINUITY_CONFIGURATION,
+        )
 
 
 def _validate_completed_cycle_replay(cycle: ObservatoryCycle) -> None:
@@ -830,13 +871,9 @@ def run_cycle(
             )
             provisional_cutoff = timezone.now()
             provisional_run, provisional_reused = run_deduplication(provisional_cutoff)
-            provisional_created = DedupReviewDecisionApplication.objects.count() - dedup_before
-            cutoff = timezone.now()
-            if provisional_created:
-                dedup_run, dedup_reused = run_deduplication(cutoff)
-            else:
-                dedup_run, dedup_reused = provisional_run, provisional_reused
-                cutoff = provisional_cutoff
+            _validate_run_scoped_dedup_outputs(provisional_run, provisional_cutoff)
+            dedup_run, dedup_reused = provisional_run, provisional_reused
+            cutoff = provisional_cutoff
             _save_stage(cycle, "dedup", "SUCCEEDED")
             _save_stage(cycle, "dedup_continuity", "SUCCEEDED")
         except CycleTimeoutError as exc:
@@ -913,14 +950,8 @@ def run_cycle(
             if _geospatial_requires_cutoff_advance(geospatial_first, cutoff):
                 geospatial_cutoff_advanced = True
                 cutoff = timezone.now()
-                continuity_before_rebuild = DedupReviewDecisionApplication.objects.count()
                 dedup_run, dedup_reused = run_deduplication(cutoff)
-                if DedupReviewDecisionApplication.objects.count() != continuity_before_rebuild:
-                    raise ObservatoryOperationError(
-                        "geospatial",
-                        "GEOSPATIAL_REALIGNMENT_REQUIRES_SECOND_CUTOFF",
-                        "aligned Dedup created later continuity evidence",
-                    )
+                _validate_run_scoped_dedup_outputs(dedup_run, cutoff)
                 premium_run, premium_reused = run_classification(cutoff)
                 geospatial_final = geospatial_runner(premium_run.pk)
                 _validate_daily_geospatial_result(
