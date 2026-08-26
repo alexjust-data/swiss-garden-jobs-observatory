@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import timedelta
 from io import StringIO
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock, patch
 from urllib.error import URLError
 
@@ -19,6 +20,7 @@ from day0.tests.test_day0 import add_entry, assess, complete_collection, univers
 from operations.management.commands.run_daily_observatory import EXIT_BY_STATUS
 from operations.models import ObservatoryCycle
 from operations.services import (
+    CYCLE_CUTOFF_POLICY,
     CYCLE_GEOSPATIAL_AUTHORITY,
     CYCLE_VERSION,
     DAILY_GEOSPATIAL_BATCH_VERSION,
@@ -28,6 +30,7 @@ from operations.services import (
     ObservatoryOperationError,
     _default_geospatial_runner,
     _sha256,
+    _validate_run_scoped_dedup_outputs,
     cycle_configuration,
     run_cycle,
 )
@@ -36,6 +39,8 @@ from operations.tests.test_gate012_operations import (
     geospatial_result,
     source,
 )
+from vacancies.models import DedupRun
+from vacancies.review_continuity import DedupContinuityValidationError
 
 pytestmark = pytest.mark.django_db
 
@@ -56,12 +61,12 @@ def _successful_upstream(
     return data, snapshot, readiness
 
 
-def test_v03_configuration_binds_geospatial_v02_order_and_versions() -> None:
+def test_v04_configuration_binds_geospatial_v02_order_and_versions() -> None:
     config = cycle_configuration("SCHEDULED", ["B", "A"])
-    assert CYCLE_VERSION == "daily-observatory-cycle-v0.3"
+    assert CYCLE_VERSION == "daily-observatory-cycle-v0.4"
     assert config["cycle_version"] == CYCLE_VERSION
     assert list(STAGE_ORDER)[-4:] == ["premium", "geospatial", "dashboard", "readiness"]
-    assert config["cutoff_policy"] == "continuity-and-geospatial-available-aligned-pit-v0.2"
+    assert config["cutoff_policy"] == "causal-inputs-and-derived-outputs-aligned-pit-v0.3"
     versions = config["versions"]
     assert versions["geospatial_batch"] == "geospatial-resolution-batch-v0.2"
     assert versions["geospatial_resolver"] == "geospatial-v0.2"
@@ -69,6 +74,47 @@ def test_v03_configuration_binds_geospatial_v02_order_and_versions() -> None:
     assert versions["geospatial_provider"] == "geo-admin-searchserver-api-2026-08"
     assert versions["raw_lineage"] == "operational-raw-lineage-v0.1"
 
+
+def test_run_scoped_output_accepts_later_materialization_from_causal_human_authority() -> None:
+    cutoff = timezone.now()
+    dedup_run = cast(DedupRun, SimpleNamespace(as_of=cutoff))
+    application = SimpleNamespace(
+        created_at=cutoff + timedelta(seconds=1),
+        source_human_decision=SimpleNamespace(created_at=cutoff - timedelta(seconds=1)),
+    )
+    queryset = Mock()
+    queryset.select_related.return_value = [application]
+    with (
+        patch(
+            "operations.services.DedupReviewDecisionApplication.objects.filter",
+            return_value=queryset,
+        ),
+        patch("operations.services.validate_dedup_review_application") as validate,
+    ):
+        _validate_run_scoped_dedup_outputs(dedup_run, cutoff)
+    validate.assert_called_once()
+
+
+def test_run_scoped_output_rejects_future_human_authority() -> None:
+    cutoff = timezone.now()
+    dedup_run = cast(DedupRun, SimpleNamespace(as_of=cutoff))
+    application = SimpleNamespace(
+        created_at=cutoff + timedelta(seconds=2),
+        source_human_decision=SimpleNamespace(created_at=cutoff + timedelta(seconds=1)),
+    )
+    queryset = Mock()
+    queryset.select_related.return_value = [application]
+    with (
+        patch(
+            "operations.services.DedupReviewDecisionApplication.objects.filter",
+            return_value=queryset,
+        ),
+        pytest.raises(
+            DedupContinuityValidationError,
+            match="source human authority is not causally available",
+        ),
+    ):
+        _validate_run_scoped_dedup_outputs(dedup_run, cutoff)
 
 def test_default_geospatial_runner_pins_promoted_v02_authority() -> None:
     expected = Mock()
@@ -81,7 +127,7 @@ def test_default_geospatial_runner_pins_promoted_v02_authority() -> None:
     assert batch.call_args.kwargs["resolver"].resolver_version == "geospatial-v0.2"
 
 
-def test_v03_authority_and_replay_ignore_future_current_module_versions() -> None:
+def test_v04_authority_and_replay_ignore_future_current_module_versions() -> None:
     src = source("gate013-v03-future-current")
     with (
         patch("observations.geospatial.RESOLVER_VERSION", "geospatial-v9.9"),
@@ -119,7 +165,7 @@ def test_v03_authority_and_replay_ignore_future_current_module_versions() -> Non
     )
 
 
-def test_completed_v03_rejects_future_geospatial_authority_pair() -> None:
+def test_completed_v04_rejects_future_geospatial_authority_pair() -> None:
     src = source("gate013-v03-future-pair")
     configuration = cycle_configuration("MANUAL", [str(src.pk)])
     configuration["versions"]["geospatial_batch"] = (
@@ -144,7 +190,7 @@ def test_completed_v03_rejects_future_geospatial_authority_pair() -> None:
         run_cycle(cycle_id=item.pk, collector=Mock(), geospatial_runner=Mock())
 
 
-def test_v03_rejects_injected_legacy_geospatial_batch_before_dashboard() -> None:
+def test_v04_rejects_injected_legacy_geospatial_batch_before_dashboard() -> None:
     data = create_dashboard_upstream(suffix="gate013-legacy-batch")
     complete_collection(data)
     source_universe = universe()
@@ -209,6 +255,38 @@ def test_geospatial_failure_seals_before_dashboard() -> None:
     assert result.cycle.operational_events.filter(code="GEOSPATIAL_PROVIDER_DEGRADED").count() == 0
     dashboard_builder.assert_not_called()
 
+
+def test_initial_dedup_application_is_output_and_does_not_advance_cutoff() -> None:
+    data, snapshot, readiness = _successful_upstream("gate013-derived-output")
+    source_universe = readiness.source_universe
+    geospatial = geospatial_result(data["premium_run"], created=0, already_present=1)
+    dedup_runner = Mock(return_value=(data["dedup"], True))
+    with (
+        patch(
+            "operations.services.governed_source_cohort",
+            return_value=(source_universe, [data["source"]]),
+        ),
+        patch("operations.services.apply_green_continuity", return_value={}),
+        patch("operations.services.run_deduplication", dedup_runner),
+        patch(
+            "operations.services.run_classification",
+            return_value=(data["premium_run"], True),
+        ),
+        patch(
+            "operations.services.DedupReviewDecisionApplication.objects.count",
+            side_effect=[0, 1],
+        ),
+        patch("operations.services.build_dashboard_snapshot", return_value=(snapshot, True)),
+        patch("operations.services.assess_day0_readiness", return_value=(readiness, True)),
+        patch("operations.services.timezone.now", return_value=data["as_of"]),
+    ):
+        result = run_cycle(
+            collector=Mock(return_value=data["observation"].collection_run),
+            geospatial_runner=Mock(return_value=geospatial),
+        )
+    assert result.cycle.status == ObservatoryCycle.Status.SUCCEEDED_NOT_AUTHORIZED
+    assert dedup_runner.call_count == 1
+    assert result.cycle.continuity_counts["dedup"]["created"] == 1
 
 def test_new_geospatial_evidence_advances_and_realigns_once() -> None:
     data, snapshot, readiness = _successful_upstream("gate013-realign")
@@ -306,6 +384,12 @@ def test_exact_completed_retry_performs_no_geospatial_activity() -> None:
             "geospatial-resolution-batch-v0.1",
             True,
         ),
+        (
+            "daily-observatory-cycle-v0.3",
+            "geospatial-v0.2",
+            "geospatial-resolution-batch-v0.2",
+            True,
+        ),
     ],
 )
 def test_completed_historical_cycle_replays_without_current_cohort_or_activity(
@@ -317,6 +401,7 @@ def test_completed_historical_cycle_replays_without_current_cohort_or_activity(
     src = source(historical_cycle_version[-4:].replace(".", ""))
     configuration = cycle_configuration("MANUAL", [str(src.pk)])
     configuration["cycle_version"] = historical_cycle_version
+    configuration["cutoff_policy"] = CYCLE_CUTOFF_POLICY[historical_cycle_version]
     if not has_geospatial:
         configuration["stage_order"] = [
             stage for stage in configuration["stage_order"] if stage != "geospatial"
@@ -420,6 +505,7 @@ def test_geospatial_timeout_is_sealed_and_skips_provider_and_dashboard() -> None
             return_value=(data["premium_run"], True),
         ),
         patch("operations.services.build_dashboard_snapshot", dashboard_builder),
+        patch("operations.services.timezone.now", return_value=data["as_of"]),
     ):
         result = run_cycle(
             collector=Mock(return_value=data["observation"].collection_run),
@@ -447,6 +533,7 @@ def test_provider_transport_failure_emits_degraded_alert() -> None:
             "operations.services.run_classification",
             return_value=(data["premium_run"], True),
         ),
+        patch("operations.services.timezone.now", return_value=data["as_of"]),
     ):
         result = run_cycle(
             collector=Mock(return_value=data["observation"].collection_run),
